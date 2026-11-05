@@ -6,7 +6,7 @@
  * Ledger (chronological vouchers with running balance).
  */
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import {
   ArrowDownCircle,
@@ -43,27 +43,56 @@ import {
   type SalesInvoice,
 } from './api'
 import { EmptyState, Money, SectionHeading, StatusBadge, TableSkeleton } from './bits'
+import { onPreset, takeCreatePreset } from './nav'
 import { dateStr, money, PAYMENT_MODES } from '@/lib/erp'
 
 type AnyInvoice = SalesInvoice | PurchaseInvoice
 
 export function AccountingView() {
+  const [tab, setTab] = useState<'payments' | 'ledger'>('payments')
+  const [paymentPreset, setPaymentPreset] = useState<PaymentPreset | null>(null)
+  const [ledgerPartyId, setLedgerPartyId] = useState('')
+
+  // Cross-module presets: "Receive Payment" from an invoice detail opens the
+  // payment dialog prefilled; "Party ledger" jumps straight to the ledger tab.
+  useEffect(() => {
+    const apply = (p: CreatePreset) => {
+      if (p.type === 'payment') {
+        setTab('payments')
+        setPaymentPreset({
+          partyId: p.partyId,
+          paymentType: p.paymentType,
+          amount: p.amount,
+          allocations: p.allocations,
+          stamp: Date.now(),
+        })
+      } else if (p.type === 'party-ledger') {
+        setTab('ledger')
+        setLedgerPartyId(p.partyId ?? '')
+      }
+    }
+    const pending = takeCreatePreset()
+    if (pending) apply(pending)
+    return onPreset(apply)
+  }, [])
+
   return (
     <div className="space-y-4">
       <SectionHeading
         title="Accounting"
         description="Double-entry payments with invoice allocation, and per-party ledgers with running balances."
       />
-      <Tabs defaultValue="payments">
+      <Tabs value={tab} onValueChange={(v) => setTab(v as 'payments' | 'ledger')}>
         <TabsList className="h-11 w-full justify-start overflow-x-auto sm:w-auto">
           <TabsTrigger value="payments" className="h-9">Payments</TabsTrigger>
           <TabsTrigger value="ledger" className="h-9">Party Ledger</TabsTrigger>
         </TabsList>
         <TabsContent value="payments" className="mt-4">
-          <PaymentsTab />
+          <PaymentsTab preset={paymentPreset} onPresetConsumed={() => setPaymentPreset(null)} />
         </TabsContent>
         <TabsContent value="ledger" className="mt-4">
-          <PartyLedgerTab />
+          {/* keyed remount: a preset partyId arrives as fresh initial state */}
+          <PartyLedgerTab key={ledgerPartyId} presetPartyId={ledgerPartyId} />
         </TabsContent>
       </Tabs>
     </div>
@@ -84,10 +113,20 @@ function TypeBadge({ type }: { type: string }) {
   )
 }
 
-function PaymentsTab() {
+export interface PaymentPreset {
+  partyId?: string
+  paymentType?: 'RECEIPT' | 'PAYMENT'
+  amount?: number
+  allocations?: { invoiceNo: string; amount: number }[]
+  stamp: number
+}
+
+function PaymentsTab({ preset, onPresetConsumed }: { preset: PaymentPreset | null; onPresetConsumed: () => void }) {
   const list = useApi<Payment[]>('/api/payments')
-  const [open, setOpen] = useState(false)
+  const [manualOpen, setManualOpen] = useState(false)
   const payments = list.data ?? []
+  // A cross-module preset forces the dialog open (derived, not synced).
+  const open = manualOpen || !!preset
 
   const cancelPayment = async (p: Payment) => {
     try {
@@ -107,7 +146,7 @@ function PaymentsTab() {
         <p className="text-sm text-muted-foreground">
           {payments.length} voucher{payments.length === 1 ? '' : 's'} — receipts & payments with allocation.
         </p>
-        <Button onClick={() => setOpen(true)} className="h-11 gap-2">
+        <Button onClick={() => setManualOpen(true)} className="h-11 gap-2">
           <Plus className="size-4" aria-hidden /> New Payment
         </Button>
       </div>
@@ -122,7 +161,7 @@ function PaymentsTab() {
                 title="No payments yet"
                 hint="Record receipts from customers or payments to suppliers, allocated against open invoices."
                 action={
-                  <Button variant="outline" onClick={() => setOpen(true)} className="mt-2 h-11 gap-2">
+                  <Button variant="outline" onClick={() => setManualOpen(true)} className="mt-2 h-11 gap-2">
                     <Plus className="size-4" aria-hidden /> New Payment
                   </Button>
                 }
@@ -215,7 +254,18 @@ function PaymentsTab() {
         </CardContent>
       </Card>
 
-      <NewPaymentDialog open={open} onOpenChange={setOpen} onCreated={() => list.reload()} />
+      <NewPaymentDialog
+        open={open}
+        onOpenChange={(o) => {
+          setManualOpen(o)
+          if (!o) onPresetConsumed()
+        }}
+        onCreated={() => {
+          list.reload()
+          onPresetConsumed()
+        }}
+        preset={preset}
+      />
     </div>
   )
 }
@@ -226,10 +276,12 @@ function NewPaymentDialog({
   open,
   onOpenChange,
   onCreated,
+  preset,
 }: {
   open: boolean
   onOpenChange: (o: boolean) => void
   onCreated: () => void
+  preset?: PaymentPreset | null
 }) {
   const { parties } = useMasters()
   const [type, setType] = useState<'RECEIPT' | 'PAYMENT'>('RECEIPT')
@@ -271,6 +323,26 @@ function NewPaymentDialog({
     setPartyId('')
     setAllocs({})
   }
+
+  // Preset from an invoice's "Receive/Make Payment" button: party + type +
+  // amount + allocation pre-ticked for that invoice.
+  useEffect(() => {
+    if (!open || !preset) return
+    if (preset.paymentType) {
+      setType(preset.paymentType)
+    }
+    if (preset.partyId) {
+      setPartyId(preset.partyId)
+    }
+    if (preset.amount !== undefined) {
+      setAmount(String(preset.amount))
+    }
+    if (preset.allocations?.length) {
+      const a: Record<string, string> = {}
+      for (const alloc of preset.allocations) a[alloc.invoiceNo] = String(alloc.amount)
+      setAllocs(a)
+    }
+  }, [open, preset])
 
   const submit = async () => {
     if (!partyId) {
@@ -491,9 +563,9 @@ function NewPaymentDialog({
 
 // ---------- party ledger ----------
 
-function PartyLedgerTab() {
+function PartyLedgerTab({ presetPartyId }: { presetPartyId?: string }) {
   const { parties } = useMasters()
-  const [partyId, setPartyId] = useState('')
+  const [partyId, setPartyId] = useState(presetPartyId ?? '')
   const ledger = useApi<PartyLedger | null>(partyId ? `/api/reports?type=party-ledger&partyId=${partyId}` : null)
 
   const sorted = useMemo(() => [...parties].sort((a, b) => a.name.localeCompare(b.name)), [parties])

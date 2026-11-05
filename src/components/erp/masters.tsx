@@ -9,14 +9,19 @@
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import {
-  CheckCircle2,
+  BookOpen,
   Building2,
+  CheckCircle2,
   Database,
+  Eye,
+  HandCoins,
   ListChecks,
   Package,
   Pencil,
   Plus,
+  ReceiptText,
   Search,
+  ShoppingCart,
   Store,
   Wrench,
   XCircle,
@@ -32,6 +37,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   apiDelete,
   apiPost,
@@ -48,6 +54,8 @@ import {
   type Warehouse,
 } from './api'
 import { EmptyState, Money, SectionHeading, TableSkeleton } from './bits'
+import { useErpUi } from './store'
+import { setCreatePreset } from './nav'
 import { INDIAN_STATES, stateName, gstinChecksumValid, money, PARTY_TYPES, UOMS } from '@/lib/erp'
 
 const GST_RATES = [0, 5, 12, 18, 28]
@@ -120,9 +128,11 @@ function ActiveToggle({
 
 function PartiesTab() {
   const list = useApi<Party[]>('/api/masters/parties')
+  const setView = useErpUi((s) => s.setView)
   const [search, setSearch] = useState('')
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<Party | null>(null)
+  const [viewing, setViewing] = useState<Party | null>(null)
 
   const parties = (list.data ?? []).filter((p) => {
     const q = search.trim().toLowerCase()
@@ -190,7 +200,7 @@ function PartiesTab() {
                 </TableHeader>
                 <TableBody>
                   {parties.map((p) => (
-                    <TableRow key={p.id}>
+                    <TableRow key={p.id} className="cursor-pointer" onClick={() => setViewing(p)}>
                       <TableCell className="font-mono text-xs font-medium">{p.code}</TableCell>
                       <TableCell className="max-w-44 truncate font-medium">{p.name}</TableCell>
                       <TableCell>
@@ -214,7 +224,17 @@ function PartiesTab() {
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-11 md:size-9"
+                            onClick={() => setViewing(p)}
+                            aria-label={`View ${p.code}`}
+                            title="View profile & activity"
+                          >
+                            <Eye className="size-4" aria-hidden />
+                          </Button>
                           <Button
                             variant="ghost"
                             size="icon"
@@ -245,7 +265,255 @@ function PartiesTab() {
         onOpenChange={setDialogOpen}
         onSaved={() => list.reload()}
       />
+
+      <PartyViewDialog party={viewing} onOpenChange={(o) => !o && setViewing(null)} onNavigate={setView} />
     </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Party detail: profile + activity tabs + one-click next actions.
+// ---------------------------------------------------------------------------
+
+function PartyViewDialog({
+  party,
+  onOpenChange,
+  onNavigate,
+}: {
+  party: Party | null
+  onOpenChange: (o: boolean) => void
+  onNavigate: (view: import('./store').ErpView) => void
+}) {
+  const open = !!party
+  const types = party?.types.split(',').filter(Boolean) ?? []
+  const isCustomer = types.includes('CUSTOMER')
+  const isSupplier = types.includes('SUPPLIER')
+
+  const sales = useApi<{ id: string; invoiceNo: string; date: string; grandTotal: number; paidAmount: number; status: string }[] | null>(
+    party && isCustomer ? `/api/sales-invoices?partyId=${party.id}` : null
+  )
+  const purchases = useApi<{ id: string; invoiceNo: string; date: string; grandTotal: number; paidAmount: number; status: string }[] | null>(
+    party && isSupplier ? `/api/purchase-invoices?partyId=${party.id}` : null
+  )
+  const payments = useApi<{ id: string; paymentNo: string; date: string; type: string; amount: number; mode: string | null; status: string }[] | null>(
+    party ? `/api/payments?partyId=${party.id}` : null
+  )
+
+  if (!party) return null
+
+  const close = () => onOpenChange(false)
+
+  const newInvoice = () => {
+    setCreatePreset({ type: 'sales-invoice', partyId: party.id })
+    close()
+    onNavigate('sales')
+  }
+  const newPurchase = () => {
+    setCreatePreset({ type: 'purchase-invoice', partyId: party.id })
+    close()
+    onNavigate('purchase')
+  }
+  const receivePayment = () => {
+    setCreatePreset({ type: 'payment', partyId: party.id, paymentType: 'RECEIPT' })
+    close()
+    onNavigate('accounting')
+  }
+  const makePayment = () => {
+    setCreatePreset({ type: 'payment', partyId: party.id, paymentType: 'PAYMENT' })
+    close()
+    onNavigate('accounting')
+  }
+  const openLedger = () => {
+    setCreatePreset({ type: 'party-ledger', partyId: party.id })
+    close()
+    onNavigate('accounting')
+  }
+
+  const salesRows = sales.data ?? []
+  const purchaseRows = purchases.data ?? []
+  const paymentRows = payments.data ?? []
+  const receivable = salesRows
+    .filter((i) => i.status === 'POSTED')
+    .reduce((s, i) => s + i.grandTotal - i.paidAmount, 0)
+  const payable = purchaseRows
+    .filter((i) => i.status === 'POSTED')
+    .reduce((s, i) => s + i.grandTotal - i.paidAmount, 0)
+
+  const invLine = (i: { id: string; invoiceNo: string; date: string; grandTotal: number; paidAmount: number; status: string }) => (
+    <TableRow key={i.id}>
+      <TableCell className="font-medium tabular-nums">{i.invoiceNo}</TableCell>
+      <TableCell className="whitespace-nowrap text-xs">{new Date(i.date).toLocaleDateString()}</TableCell>
+      <TableCell className="text-right tabular-nums">₹ {money(i.grandTotal)}</TableCell>
+      <TableCell className="text-right tabular-nums text-muted-foreground">₹ {money(i.paidAmount)}</TableCell>
+      <TableCell className="text-right font-medium tabular-nums">₹ {money(i.grandTotal - i.paidAmount)}</TableCell>
+      <TableCell>
+        <Badge variant={i.status === 'POSTED' ? 'default' : 'destructive'} className="text-[10px]">
+          {i.status}
+        </Badge>
+      </TableCell>
+    </TableRow>
+  )
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle className="flex flex-wrap items-center gap-2">
+            {party.name}
+            <span className="font-mono text-xs font-normal text-muted-foreground">{party.code}</span>
+            {types.map((t) => (
+              <Badge key={t} variant={t === 'CUSTOMER' ? 'default' : t === 'SUPPLIER' ? 'secondary' : 'outline'} className="text-[10px]">
+                {t}
+              </Badge>
+            ))}
+          </DialogTitle>
+          <DialogDescription>
+            {party.gstin ? `${party.gstin} · ` : 'Unregistered · '}
+            {stateName(party.stateCode)}
+            {party.city ? ` · ${party.city}` : ''}
+            {party.phone ? ` · ${party.phone}` : ''}
+          </DialogDescription>
+        </DialogHeader>
+
+        {/* One-click next actions — the Mapsoft-style flow buttons */}
+        <div className="flex flex-wrap gap-2">
+          {isCustomer ? (
+            <Button size="sm" className="h-10 gap-2" onClick={newInvoice}>
+              <ReceiptText className="size-4" aria-hidden /> New Invoice
+            </Button>
+          ) : null}
+          {isSupplier ? (
+            <Button size="sm" variant="outline" className="h-10 gap-2" onClick={newPurchase}>
+              <ShoppingCart className="size-4" aria-hidden /> New Purchase
+            </Button>
+          ) : null}
+          {isCustomer ? (
+            <Button size="sm" variant="outline" className="h-10 gap-2" onClick={receivePayment}>
+              <HandCoins className="size-4" aria-hidden /> Receive Payment
+            </Button>
+          ) : null}
+          {isSupplier ? (
+            <Button size="sm" variant="outline" className="h-10 gap-2" onClick={makePayment}>
+              <HandCoins className="size-4" aria-hidden /> Pay Supplier
+            </Button>
+          ) : null}
+          <Button size="sm" variant="ghost" className="h-10 gap-2" onClick={openLedger}>
+            <BookOpen className="size-4" aria-hidden /> Party Ledger
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2">
+          <div className="rounded-md border bg-muted/30 p-2.5 text-center">
+            <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Receivable</p>
+            <p className="text-sm font-semibold tabular-nums text-primary">₹ {money(Math.max(0, receivable))}</p>
+          </div>
+          <div className="rounded-md border bg-muted/30 p-2.5 text-center">
+            <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Payable</p>
+            <p className="text-sm font-semibold tabular-nums text-destructive">₹ {money(Math.max(0, payable))}</p>
+          </div>
+          <div className="rounded-md border bg-muted/30 p-2.5 text-center">
+            <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Vouchers</p>
+            <p className="text-sm font-semibold tabular-nums">{salesRows.length + purchaseRows.length + paymentRows.length}</p>
+          </div>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-hidden">
+          <Tabs defaultValue={isCustomer ? 'sales' : 'purchases'}>
+            <TabsList className="h-9">
+              {isCustomer ? <TabsTrigger value="sales" className="h-7 text-xs">Sales ({salesRows.length})</TabsTrigger> : null}
+              {isSupplier ? <TabsTrigger value="purchases" className="h-7 text-xs">Purchases ({purchaseRows.length})</TabsTrigger> : null}
+              <TabsTrigger value="payments" className="h-7 text-xs">Payments ({paymentRows.length})</TabsTrigger>
+            </TabsList>
+            {isCustomer ? (
+              <TabsContent value="sales" className="mt-2">
+                {salesRows.length === 0 ? (
+                  <EmptyState title="No invoices yet" hint="Create the first invoice with the button above." />
+                ) : (
+                  <div className="max-h-64 overflow-auto rounded-md border erp-scroll">
+                    <Table>
+                      <TableHeader className="sticky top-0 bg-card">
+                        <TableRow>
+                          <TableHead>Invoice</TableHead>
+                          <TableHead>Date</TableHead>
+                          <TableHead className="text-right">Total</TableHead>
+                          <TableHead className="text-right">Paid</TableHead>
+                          <TableHead className="text-right">Balance</TableHead>
+                          <TableHead>Status</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>{salesRows.map((i) => invLine(i))}</TableBody>
+                    </Table>
+                  </div>
+                )}
+              </TabsContent>
+            ) : null}
+            {isSupplier ? (
+              <TabsContent value="purchases" className="mt-2">
+                {purchaseRows.length === 0 ? (
+                  <EmptyState title="No purchases yet" hint="Record the first purchase invoice with the button above." />
+                ) : (
+                  <div className="max-h-64 overflow-auto rounded-md border erp-scroll">
+                    <Table>
+                      <TableHeader className="sticky top-0 bg-card">
+                        <TableRow>
+                          <TableHead>Invoice</TableHead>
+                          <TableHead>Date</TableHead>
+                          <TableHead className="text-right">Total</TableHead>
+                          <TableHead className="text-right">Paid</TableHead>
+                          <TableHead className="text-right">Balance</TableHead>
+                          <TableHead>Status</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>{purchaseRows.map((i) => invLine(i))}</TableBody>
+                    </Table>
+                  </div>
+                )}
+              </TabsContent>
+            ) : null}
+            <TabsContent value="payments" className="mt-2">
+              {paymentRows.length === 0 ? (
+                <EmptyState title="No payments yet" hint="Receipts and payments for this party appear here." />
+              ) : (
+                <div className="max-h-64 overflow-auto rounded-md border erp-scroll">
+                  <Table>
+                    <TableHeader className="sticky top-0 bg-card">
+                      <TableRow>
+                        <TableHead>Voucher</TableHead>
+                        <TableHead>Date</TableHead>
+                        <TableHead>Type</TableHead>
+                        <TableHead className="text-right">Amount</TableHead>
+                        <TableHead>Mode</TableHead>
+                        <TableHead>Status</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {paymentRows.map((p) => (
+                        <TableRow key={p.id}>
+                          <TableCell className="font-medium tabular-nums">{p.paymentNo}</TableCell>
+                          <TableCell className="whitespace-nowrap text-xs">{new Date(p.date).toLocaleDateString()}</TableCell>
+                          <TableCell>
+                            <Badge variant={p.type === 'RECEIPT' ? 'default' : 'secondary'} className="text-[10px]">
+                              {p.type}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">₹ {money(p.amount)}</TableCell>
+                          <TableCell className="text-xs">{p.mode ?? '—'}</TableCell>
+                          <TableCell>
+                            <Badge variant={p.status === 'POSTED' ? 'default' : 'destructive'} className="text-[10px]">
+                              {p.status}
+                            </Badge>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </TabsContent>
+          </Tabs>
+        </div>
+      </DialogContent>
+    </Dialog>
   )
 }
 

@@ -95,3 +95,28 @@ User directive: audit erpnashilk's Tally integration (.bat + connector), SaaS pl
 - Connector + .bat untested against real TallyPrime (no Tally in sandbox) — XML follows the audited spec; flagged PoC in UI.
 - Organizations beyond the first are real Company rows but the ERP runtime stays single-tenant (first company) — per-request tenant scoping remains roadmap.
 - Backup restore verified structurally; full round-trip not exercised this session.
+
+## 11. Navigation session (2026-11, same day) — Mapsoft-style page-to-page flows
+
+User directive: make navigation as easy as demo.mapsofterp.in (KPI cards drill into lists, rows open details, detail pages carry the next-step buttons). Patterns observed live on the demo (KPI → listInvoice, row → detail, detail tabs + action buttons) and re-implemented:
+
+### 11.1 Cross-module preset mechanism (`src/components/erp/nav.ts`)
+- `setCreatePreset()` — sessionStorage preset (60 s TTL) + CustomEvent; types: `sales-invoice | purchase-invoice | payment | party-ledger`.
+- Consumers: InvoiceModule (opens create dialog with party prefilled), AccountingView (payment dialog with type/party/amount/**invoice allocations** prefilled; ledger tab + party selected).
+- Recent views (top 6) feed the palette; `GOTO_KEYS` map + `isTypingTarget()` guard shared.
+
+### 11.2 Command palette (`src/components/erp/palette.tsx` + `GET /api/search`)
+- Ctrl/⌘+K or `/` — Create group (5 actions), Recent group, Go-to group (11 modules with g-key hints), live search (debounced 300 ms, ≥2 chars) across parties/items/sales/purchase/jobwork inwards → direct detail navigation.
+- Header search box ("Search or jump to… ⌘K") on desktop.
+- `?` opens the Keyboard Shortcuts help dialog.
+
+### 11.3 Global keyboard (erp-app.tsx)
+- g+key navigation (d s p j i a r m t u o, 1.5 s window), Alt+S new sales invoice, Alt+P new purchase, `?` help, `/`+Ctrl+K palette — all guarded when typing in inputs.
+
+### 11.4 Screen-level navigation upgrades
+- **Dashboard**: all 6 KPI cards clickable → module; low-stock rows clickable → Inventory; quick-action cards (previous session).
+- **Invoice lists/detail**: breadcrumb (Sales / INV-xxx); detail "Receive Payment / Make Payment" button (shows balance chip) → accounting payment dialog prefilled with the party + balance allocated to THIS invoice; posted toast carries a **View** action.
+- **Masters parties**: row click / Eye button → **Party view dialog** — profile header, one-click actions (New Invoice, New Purchase, Receive Payment, Pay Supplier, Party Ledger — all preset-driven), Receivable/Payable/Vouchers stat chips, Sales/Purchases/Payments activity tabs.
+
+### 11.5 Verification (executed, browser)
+Palette open+search("Mahindra") → party + 2 invoices + 1 inward found → click lands on invoice detail; g s/g t/g d/g m shortcuts; ? help dialog; Alt+S opens prefilled create; breadcrumb text "Sales/INV-2627-004"; Receive Payment → dialog with RECEIPT + CUST-001 + ₹38,374 + allocation "Allocated ₹ 38,374.00 / ₹ 38,374.00"; party view → New Invoice (party prefilled) and Party Ledger (tab + party selected); low-stock click → Inventory; mobile drawer intact; zero console/page errors. `bun run lint` clean.

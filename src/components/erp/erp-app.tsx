@@ -6,7 +6,7 @@
  * view switch via zustand, sticky footer, first-boot setup screen.
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   BarChart3,
   BookOpenText,
@@ -30,6 +30,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { apiPost, toastError, useApi, useMounted, type Company } from './api'
 import { CompanyProvider } from './company'
 import { useErpUi, type ErpView } from './store'
+import { GOTO_KEYS, isTypingTarget, pushRecent, setCreatePreset } from './nav'
+import { CommandPalette, ShortcutsHelpDialog } from './palette'
 import { cn } from '@/lib/utils'
 import { fyCode, dateStr } from '@/lib/erp'
 
@@ -182,6 +184,73 @@ export function ErpApp() {
 
   useEffect(() => {
     window.scrollTo({ top: 0 })
+  }, [view])
+
+  // ---------- global keyboard: palette (Ctrl/⌘+K, /), g+key goto, ? help, Alt+S/Alt+P ----------
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const [helpOpen, setHelpOpen] = useState(false)
+  const gotoArmed = useRef(0)
+
+  const openSalesCreate = useCallback(() => {
+    setCreatePreset({ type: 'sales-invoice' })
+    setView('sales')
+  }, [setView])
+  const openPurchaseCreate = useCallback(() => {
+    setCreatePreset({ type: 'purchase-invoice' })
+    setView('purchase')
+  }, [setView])
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // Ctrl/⌘ + K → palette (always)
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        setPaletteOpen(true)
+        return
+      }
+      if (isTypingTarget(e)) return
+      // Alt+S / Alt+P → new documents from anywhere
+      if (e.altKey && e.key.toLowerCase() === 's') {
+        e.preventDefault()
+        openSalesCreate()
+        return
+      }
+      if (e.altKey && e.key.toLowerCase() === 'p') {
+        e.preventDefault()
+        openPurchaseCreate()
+        return
+      }
+      // "?" → shortcuts help
+      if (e.key === '?') {
+        e.preventDefault()
+        setHelpOpen(true)
+        return
+      }
+      // "/" → palette
+      if (e.key === '/') {
+        e.preventDefault()
+        setPaletteOpen(true)
+        return
+      }
+      // g + key → module (Gmail style, 1.5 s window)
+      if (e.key.toLowerCase() === 'g' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        gotoArmed.current = Date.now()
+        return
+      }
+      const goto = GOTO_KEYS[e.key.toLowerCase()]
+      if (goto && Date.now() - gotoArmed.current < 1500 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault()
+        gotoArmed.current = 0
+        setView(goto.view)
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [setView, openSalesCreate, openPurchaseCreate])
+
+  // Track recent views for the palette
+  useEffect(() => {
+    pushRecent(view)
   }, [view])
 
   if (company.loading) {
@@ -344,6 +413,20 @@ export function ErpApp() {
             </button>
 
             <div className="ml-auto flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPaletteOpen(true)}
+                className="hidden h-9 w-56 items-center gap-2 rounded-md border bg-muted/40 px-3 text-left text-xs text-muted-foreground transition-colors hover:bg-accent md:flex"
+                aria-label="Open command palette (Ctrl+K)"
+              >
+                <span className="sr-only">Open command palette</span>
+                <svg viewBox="0 0 24 24" className="size-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+                  <circle cx="11" cy="11" r="7" />
+                  <path d="m21 21-4.3-4.3" />
+                </svg>
+                <span className="flex-1 truncate">Search or jump to…</span>
+                <kbd className="rounded border bg-background px-1 font-mono text-[10px]">Ctrl K</kbd>
+              </button>
               {company.data ? (
                 <>
                   {chip(
@@ -401,6 +484,9 @@ export function ErpApp() {
             Append-only ledgers · FY-aware gapless numbering · one shared GST engine (report ≡ print ≡ invoice)
           </div>
         </footer>
+
+        <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+        <ShortcutsHelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
       </div>
     </CompanyProvider>
   )

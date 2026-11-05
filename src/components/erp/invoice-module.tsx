@@ -14,6 +14,7 @@ import {
   Copy,
   Eye,
   FileDown,
+  HandCoins,
   Loader2,
   Plus,
   Printer,
@@ -52,7 +53,8 @@ import {
 import { useCompany } from './company'
 import { EmptyState, Money, SectionHeading, SourceBadge, StatusBadge, TableSkeleton } from './bits'
 import { useErpUi } from './store'
-import { computeInvoiceTotals, dateStr, INDIAN_STATES, money, stateName } from '@/lib/erp'
+import { onPreset, setCreatePreset, takeCreatePreset } from './nav'
+import { computeInvoiceTotals, dateStr, INDIAN_STATES, money, r2, stateName } from '@/lib/erp'
 import { InvoicePrint } from './invoice-print'
 import { exportTallyVoucher, markTallySent, queueForConnector } from './tally'
 
@@ -86,8 +88,24 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'POSTED' | 'CANCELLED'>('ALL')
   const [createOpen, setCreateOpen] = useState(false)
+  const [presetPartyId, setPresetPartyId] = useState('')
   const [prefill, setPrefill] = useState<AnyInvoice | null>(null)
   const [reloadTick, setReloadTick] = useState(0)
+
+  // Cross-module create preset (dashboard / palette / party view / Alt+S) —
+  // opens the create dialog prefilled with the party.
+  useEffect(() => {
+    const apply = (p: { type?: string; partyId?: string }) => {
+      if (p.type !== (isSales ? 'sales-invoice' : 'purchase-invoice')) return
+      setPrefill(null)
+      setPresetPartyId(p.partyId ?? '')
+      setCreateOpen(true)
+    }
+    // Preset may have been written a moment before mount (sessionStorage).
+    const pending = takeCreatePreset()
+    if (pending) apply(pending)
+    return onPreset(apply)
+  }, [])
 
   const invoices = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -332,10 +350,12 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
         kind={kind}
         open={createOpen}
         prefill={prefill}
+        presetPartyId={presetPartyId}
         onOpenChange={(o) => {
           setCreateOpen(o)
           if (!o) {
             setPrefill(null)
+            setPresetPartyId('')
             setReloadTick((t) => t + 1)
           }
         }}
@@ -356,16 +376,19 @@ function CreateInvoiceDialog({
   kind,
   open,
   prefill,
+  presetPartyId,
   onOpenChange,
   onCreated,
 }: {
   kind: InvoiceKind
   open: boolean
   prefill: AnyInvoice | null
+  presetPartyId?: string
   onOpenChange: (o: boolean) => void
   onCreated: () => void
 }) {
   const isSales = kind === 'SALES'
+  const setView = useErpUi((s) => s.setView)
   const { parties, items, warehouses } = useMasters()
   const company = useCompany()
   const itemMap = useMemo(() => new Map<string, Item>(items.map((i) => [i.id, i])), [items])
@@ -407,6 +430,16 @@ function CreateInvoiceDialog({
       )
     }
   }, [open, prefill, isSales])
+
+  // Cross-module preset: just the party (e.g. "New invoice for this customer").
+  useEffect(() => {
+    if (!open) return
+    if (presetPartyId) {
+      setPartyId(presetPartyId)
+      const p = parties.find((x) => x.id === presetPartyId)
+      if (isSales && p) setPos(p.stateCode)
+    }
+  }, [open, presetPartyId, parties, isSales])
 
   const party: Party | undefined = parties.find((p) => p.id === partyId)
   const companyState = company?.stateCode ?? '27'
@@ -487,6 +520,10 @@ function CreateInvoiceDialog({
       const res = await apiPost<AnyInvoice>(isSales ? '/api/sales-invoices' : '/api/purchase-invoices', payload)
       toast.success(`${res.invoiceNo} posted`, {
         description: `Grand total ₹ ${money(res.grandTotal)} — stock ledger + GL entries committed atomically.`,
+        action: {
+          label: 'View',
+          onClick: () => setView(isSales ? 'sales-detail' : 'purchase-detail', { id: res.id }),
+        },
       })
       onCreated()
       onOpenChange(false)
@@ -841,6 +878,24 @@ export function InvoiceDetail({ kind, id }: { kind: InvoiceKind; id: string }) {
     }
   }
 
+  // One button, the whole next step: open the payment dialog on the Accounting
+  // module, prefilled with this party and the balance allocated to THIS invoice.
+  const payNow = () => {
+    const balance = Math.max(0, r2(invoice.grandTotal - invoice.paidAmount))
+    if (balance <= 0) {
+      toast.info('This invoice is fully paid')
+      return
+    }
+    setCreatePreset({
+      type: 'payment',
+      partyId: invoice.partyId,
+      paymentType: isSales ? 'RECEIPT' : 'PAYMENT',
+      amount: balance,
+      allocations: [{ invoiceNo: invoice.invoiceNo, amount: balance }],
+    })
+    setView('accounting')
+  }
+
   return (
     <div className="space-y-4">
       <div className="print-hide flex flex-wrap items-center justify-between gap-2">
@@ -849,6 +904,13 @@ export function InvoiceDetail({ kind, id }: { kind: InvoiceKind; id: string }) {
             <ArrowLeft className="size-5" aria-hidden />
           </Button>
           <div>
+            <p className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground" aria-label="Breadcrumb">
+              <button type="button" className="underline-offset-2 hover:text-foreground hover:underline" onClick={() => setView(isSales ? 'sales' : 'purchase')}>
+                {isSales ? 'Sales' : 'Purchase'}
+              </button>
+              <span aria-hidden>/</span>
+              <span className="tabular-nums">{invoice.invoiceNo}</span>
+            </p>
             <h2 className="text-lg font-semibold tabular-nums">{invoice.invoiceNo}</h2>
             <div className="mt-0.5 flex flex-wrap items-center gap-2">
               <StatusBadge status={invoice.status} />
@@ -865,6 +927,19 @@ export function InvoiceDetail({ kind, id }: { kind: InvoiceKind; id: string }) {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <Button
+            onClick={payNow}
+            disabled={cancelled || invoice.paidAmount >= invoice.grandTotal - 0.004}
+            className="h-11 gap-2"
+          >
+            <HandCoins className="size-4" aria-hidden />
+            {isSales ? 'Receive Payment' : 'Make Payment'}
+            {!cancelled && invoice.grandTotal - invoice.paidAmount > 0.004 ? (
+              <span className="rounded bg-primary-foreground/15 px-1.5 py-0.5 text-xs tabular-nums">
+                ₹ {money(invoice.grandTotal - invoice.paidAmount)}
+              </span>
+            ) : null}
+          </Button>
           <Button variant="outline" onClick={() => { setPrefill(invoice); setDupOpen(true) }} disabled={cancelled} className="h-11 gap-2">
             <Copy className="size-4" aria-hidden /> Duplicate
           </Button>

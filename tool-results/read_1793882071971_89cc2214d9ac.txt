@@ -1,0 +1,611 @@
+     1→'use client'
+     2→
+     3→/**
+     4→ * ForgeERP — Accounting view.
+     5→ * Tabs: Payments (list + create with open-invoice allocation) and Party
+     6→ * Ledger (chronological vouchers with running balance).
+     7→ */
+     8→
+     9→import { useMemo, useState } from 'react'
+    10→import { toast } from 'sonner'
+    11→import {
+    12→  ArrowDownCircle,
+    13→  ArrowUpCircle,
+    14→  BookOpen,
+    15→  Loader2,
+    16→  Plus,
+    17→  Scale,
+    18→  XCircle,
+    19→} from 'lucide-react'
+    20→import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
+    21→import { Badge } from '@/components/ui/badge'
+    22→import { Button } from '@/components/ui/button'
+    23→import { Card, CardContent } from '@/components/ui/card'
+    24→import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+    25→import { Input } from '@/components/ui/input'
+    26→import { Label } from '@/components/ui/label'
+    27→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+    28→import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+    29→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+    30→import {
+    31→  apiDelete,
+    32→  apiPost,
+    33→  num,
+    34→  partyTypes,
+    35→  toastError,
+    36→  todayISO,
+    37→  useApi,
+    38→  useMasters,
+    39→  type Party,
+    40→  type PartyLedger,
+    41→  type Payment,
+    42→  type PurchaseInvoice,
+    43→  type SalesInvoice,
+    44→} from './api'
+    45→import { EmptyState, Money, SectionHeading, StatusBadge, TableSkeleton } from './bits'
+    46→import { dateStr, money, PAYMENT_MODES } from '@/lib/erp'
+    47→
+    48→type AnyInvoice = SalesInvoice | PurchaseInvoice
+    49→
+    50→export function AccountingView() {
+    51→  return (
+    52→    <div className="space-y-4">
+    53→      <SectionHeading
+    54→        title="Accounting"
+    55→        description="Double-entry payments with invoice allocation, and per-party ledgers with running balances."
+    56→      />
+    57→      <Tabs defaultValue="payments">
+    58→        <TabsList className="h-11 w-full justify-start overflow-x-auto sm:w-auto">
+    59→          <TabsTrigger value="payments" className="h-9">Payments</TabsTrigger>
+    60→          <TabsTrigger value="ledger" className="h-9">Party Ledger</TabsTrigger>
+    61→        </TabsList>
+    62→        <TabsContent value="payments" className="mt-4">
+    63→          <PaymentsTab />
+    64→        </TabsContent>
+    65→        <TabsContent value="ledger" className="mt-4">
+    66→          <PartyLedgerTab />
+    67→        </TabsContent>
+    68→      </Tabs>
+    69→    </div>
+    70→  )
+    71→}
+    72→
+    73→// ---------- payments ----------
+    74→
+    75→function TypeBadge({ type }: { type: string }) {
+    76→  return type === 'RECEIPT' ? (
+    77→    <Badge className="gap-1">
+    78→      <ArrowDownCircle className="size-3" aria-hidden /> RECEIPT
+    79→    </Badge>
+    80→  ) : (
+    81→    <Badge variant="secondary" className="gap-1">
+    82→      <ArrowUpCircle className="size-3" aria-hidden /> PAYMENT
+    83→    </Badge>
+    84→  )
+    85→}
+    86→
+    87→function PaymentsTab() {
+    88→  const list = useApi<Payment[]>('/api/payments')
+    89→  const [open, setOpen] = useState(false)
+    90→  const payments = list.data ?? []
+    91→
+    92→  const cancelPayment = async (p: Payment) => {
+    93→    try {
+    94→      await apiDelete(`/api/payments/${p.id}`)
+    95→      toast.success(`${p.paymentNo} cancelled`, {
+    96→        description: 'Allocations reversed and invoice paid amounts rolled back.',
+    97→      })
+    98→      list.reload()
+    99→    } catch (e) {
+   100→      toastError(e)
+   101→    }
+   102→  }
+   103→
+   104→  return (
+   105→    <div className="space-y-4">
+   106→      <div className="flex items-center justify-between gap-2">
+   107→        <p className="text-sm text-muted-foreground">
+   108→          {payments.length} voucher{payments.length === 1 ? '' : 's'} — receipts & payments with allocation.
+   109→        </p>
+   110→        <Button onClick={() => setOpen(true)} className="h-11 gap-2">
+   111→          <Plus className="size-4" aria-hidden /> New Payment
+   112→        </Button>
+   113→      </div>
+   114→
+   115→      <Card className="p-0">
+   116→        <CardContent className="p-0">
+   117→          {list.loading ? (
+   118→            <TableSkeleton rows={6} cols={6} />
+   119→          ) : payments.length === 0 ? (
+   120→            <div className="p-6">
+   121→              <EmptyState
+   122→                title="No payments yet"
+   123→                hint="Record receipts from customers or payments to suppliers, allocated against open invoices."
+   124→                action={
+   125→                  <Button variant="outline" onClick={() => setOpen(true)} className="mt-2 h-11 gap-2">
+   126→                    <Plus className="size-4" aria-hidden /> New Payment
+   127→                  </Button>
+   128→                }
+   129→              />
+   130→            </div>
+   131→          ) : (
+   132→            <div className="max-h-[62vh] overflow-auto erp-scroll">
+   133→              <Table>
+   134→                <TableHeader className="sticky top-0 z-10 bg-card">
+   135→                  <TableRow>
+   136→                    <TableHead>Voucher No</TableHead>
+   137→                    <TableHead>Date</TableHead>
+   138→                    <TableHead>Type</TableHead>
+   139→                    <TableHead>Party</TableHead>
+   140→                    <TableHead className="text-right">Amount</TableHead>
+   141→                    <TableHead>Mode / Ref</TableHead>
+   142→                    <TableHead className="text-right">Allocated</TableHead>
+   143→                    <TableHead>Status</TableHead>
+   144→                    <TableHead className="w-12" />
+   145→                  </TableRow>
+   146→                </TableHeader>
+   147→                <TableBody>
+   148→                  {payments.map((p) => {
+   149→                    const alloc = (p.allocations ?? []).reduce((s, a) => s + a.amount, 0)
+   150→                    return (
+   151→                      <TableRow key={p.id}>
+   152→                        <TableCell className="font-medium tabular-nums">{p.paymentNo}</TableCell>
+   153→                        <TableCell className="whitespace-nowrap">{dateStr(p.date)}</TableCell>
+   154→                        <TableCell>
+   155→                          <TypeBadge type={p.type} />
+   156→                        </TableCell>
+   157→                        <TableCell>
+   158→                          <span className="block max-w-40 truncate">{p.party?.name ?? '—'}</span>
+   159→                          <span className="block text-xs text-muted-foreground">{p.party?.code}</span>
+   160→                        </TableCell>
+   161→                        <TableCell className="text-right font-semibold tabular-nums">
+   162→                          <Money value={p.amount} plain />
+   163→                        </TableCell>
+   164→                        <TableCell className="text-xs">
+   165→                          {p.mode ?? '—'}
+   166→                          {p.refNo ? <span className="block text-muted-foreground">{p.refNo}</span> : null}
+   167→                        </TableCell>
+   168→                        <TableCell className="text-right text-xs tabular-nums text-muted-foreground">
+   169→                          {alloc > 0 ? money(alloc) : '—'}
+   170→                          {p.allocations && p.allocations.length > 0 ? (
+   171→                            <span className="block text-[10px]">{p.allocations.length} inv.</span>
+   172→                          ) : null}
+   173→                        </TableCell>
+   174→                        <TableCell>
+   175→                          <StatusBadge status={p.status} />
+   176→                        </TableCell>
+   177→                        <TableCell>
+   178→                          {p.status === 'POSTED' ? (
+   179→                            <AlertDialog>
+   180→                              <AlertDialogTrigger asChild>
+   181→                                <Button
+   182→                                  variant="ghost"
+   183→                                  size="icon"
+   184→                                  className="size-11 text-muted-foreground hover:text-destructive md:size-9"
+   185→                                  aria-label={`Cancel ${p.paymentNo}`}
+   186→                                >
+   187→                                  <XCircle className="size-4" aria-hidden />
+   188→                                </Button>
+   189→                              </AlertDialogTrigger>
+   190→                              <AlertDialogContent>
+   191→                                <AlertDialogHeader>
+   192→                                  <AlertDialogTitle>Cancel {p.paymentNo}?</AlertDialogTitle>
+   193→                                  <AlertDialogDescription>
+   194→                                    Allocations are reversed and invoice paid amounts rolled back. GL reversal
+   195→                                    entries keep the ledgers append-only.
+   196→                                  </AlertDialogDescription>
+   197→                                </AlertDialogHeader>
+   198→                                <AlertDialogFooter>
+   199→                                  <AlertDialogCancel className="h-11">Keep payment</AlertDialogCancel>
+   200→                                  <AlertDialogAction onClick={() => cancelPayment(p)} className="h-11">
+   201→                                    Cancel payment
+   202→                                  </AlertDialogAction>
+   203→                                </AlertDialogFooter>
+   204→                              </AlertDialogContent>
+   205→                            </AlertDialog>
+   206→                          ) : null}
+   207→                        </TableCell>
+   208→                      </TableRow>
+   209→                    )
+   210→                  })}
+   211→                </TableBody>
+   212→              </Table>
+   213→            </div>
+   214→          )}
+   215→        </CardContent>
+   216→      </Card>
+   217→
+   218→      <NewPaymentDialog open={open} onOpenChange={setOpen} onCreated={() => list.reload()} />
+   219→    </div>
+   220→  )
+   221→}
+   222→
+   223→// ---------- new payment dialog ----------
+   224→
+   225→function NewPaymentDialog({
+   226→  open,
+   227→  onOpenChange,
+   228→  onCreated,
+   229→}: {
+   230→  open: boolean
+   231→  onOpenChange: (o: boolean) => void
+   232→  onCreated: () => void
+   233→}) {
+   234→  const { parties } = useMasters()
+   235→  const [type, setType] = useState<'RECEIPT' | 'PAYMENT'>('RECEIPT')
+   236→  const [partyId, setPartyId] = useState('')
+   237→  const [date, setDate] = useState(todayISO())
+   238→  const [amount, setAmount] = useState('')
+   239→  const [mode, setMode] = useState('BANK')
+   240→  const [refNo, setRefNo] = useState('')
+   241→  const [notes, setNotes] = useState('')
+   242→  const [allocs, setAllocs] = useState<Record<string, string>>({})
+   243→  const [saving, setSaving] = useState(false)
+   244→
+   245→  const eligible = parties.filter((p) =>
+   246→    p.active && partyTypes(p).includes(type === 'RECEIPT' ? 'CUSTOMER' : 'SUPPLIER')
+   247→  )
+   248→
+   249→  const invPath = partyId
+   250→    ? type === 'RECEIPT'
+   251→      ? `/api/sales-invoices?partyId=${partyId}&status=POSTED`
+   252→      : `/api/purchase-invoices?partyId=${partyId}&status=POSTED`
+   253→    : null
+   254→  const invoices = useApi<AnyInvoice[]>(invPath)
+   255→
+   256→  const openInvoices = useMemo(
+   257→    () => (invoices.data ?? []).filter((i) => i.grandTotal - i.paidAmount > 0.004),
+   258→    [invoices.data]
+   259→  )
+   260→
+   261→  const amountN = num(amount)
+   262→  const allocated = openInvoices.reduce((s, inv) => s + num(allocs[inv.invoiceNo] ?? ''), 0)
+   263→  const over = allocated > amountN + 0.004
+   264→  const perInvoiceOver = openInvoices.some((inv) => {
+   265→    const a = num(allocs[inv.invoiceNo] ?? '')
+   266→    return a > inv.grandTotal - inv.paidAmount + 0.004
+   267→  })
+   268→
+   269→  const onTypeChange = (t: 'RECEIPT' | 'PAYMENT') => {
+   270→    setType(t)
+   271→    setPartyId('')
+   272→    setAllocs({})
+   273→  }
+   274→
+   275→  const submit = async () => {
+   276→    if (!partyId) {
+   277→      toast.error('Select a party')
+   278→      return
+   279→    }
+   280→    if (amountN <= 0) {
+   281→      toast.error('Amount must be greater than zero')
+   282→      return
+   283→    }
+   284→    if (over || perInvoiceOver) {
+   285→      toast.error('Fix allocations first — total cannot exceed the payment amount, single lines cannot exceed outstanding')
+   286→      return
+   287→    }
+   288→    setSaving(true)
+   289→    try {
+   290→      const res = await apiPost<Payment>('/api/payments', {
+   291→        type,
+   292→        partyId,
+   293→        date,
+   294→        amount: amountN,
+   295→        mode,
+   296→        refNo: refNo.trim() || undefined,
+   297→        notes: notes.trim() || undefined,
+   298→        allocations: openInvoices
+   299→          .filter((inv) => num(allocs[inv.invoiceNo] ?? '') > 0)
+   300→          .map((inv) => ({
+   301→            invoiceType: type === 'RECEIPT' ? 'SALES' : 'PURCHASE',
+   302→            invoiceNo: inv.invoiceNo,
+   303→            amount: num(allocs[inv.invoiceNo]),
+   304→          })),
+   305→      })
+   306→      toast.success(`${res.paymentNo} posted`, {
+   307→        description: `${type === 'RECEIPT' ? 'Receipt' : 'Payment'} of ₹ ${money(res.amount)} — GL double-entry committed.`,
+   308→      })
+   309→      onCreated()
+   310→      onOpenChange(false)
+   311→      setPartyId('')
+   312→      setAmount('')
+   313→      setRefNo('')
+   314→      setNotes('')
+   315→      setAllocs({})
+   316→    } catch (e) {
+   317→      toastError(e)
+   318→    } finally {
+   319→      setSaving(false)
+   320→    }
+   321→  }
+   322→
+   323→  return (
+   324→    <Dialog open={open} onOpenChange={onOpenChange}>
+   325→      <DialogContent className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden">
+   326→        <DialogHeader>
+   327→          <DialogTitle>New Payment</DialogTitle>
+   328→          <DialogDescription>
+   329→            Receipts (money in from customers) or payments (money out to suppliers), optionally allocated against
+   330→            open invoices.
+   331→          </DialogDescription>
+   332→        </DialogHeader>
+   333→
+   334→        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto erp-scroll-y pr-1">
+   335→          <div className="grid grid-cols-2 gap-2" role="group" aria-label="Payment type">
+   336→            <Button
+   337→              type="button"
+   338→              variant={type === 'RECEIPT' ? 'default' : 'outline'}
+   339→              onClick={() => onTypeChange('RECEIPT')}
+   340→              className="h-11 gap-2"
+   341→            >
+   342→              <ArrowDownCircle className="size-4" aria-hidden /> RECEIPT
+   343→            </Button>
+   344→            <Button
+   345→              type="button"
+   346→              variant={type === 'PAYMENT' ? 'default' : 'outline'}
+   347→              onClick={() => onTypeChange('PAYMENT')}
+   348→              className="h-11 gap-2"
+   349→            >
+   350→              <ArrowUpCircle className="size-4" aria-hidden /> PAYMENT
+   351→            </Button>
+   352→          </div>
+   353→
+   354→          <div className="grid gap-4 sm:grid-cols-2">
+   355→            <div className="space-y-1.5">
+   356→              <Label>{type === 'RECEIPT' ? 'Customer' : 'Supplier'}</Label>
+   357→              <Select value={partyId || undefined} onValueChange={(v) => { setPartyId(v); setAllocs({}) }}>
+   358→                <SelectTrigger className="h-11 w-full">
+   359→                  <SelectValue placeholder="Select party…" />
+   360→                </SelectTrigger>
+   361→                <SelectContent>
+   362→                  {eligible.map((p) => (
+   363→                    <SelectItem key={p.id} value={p.id}>
+   364→                      {p.code} — {p.name}
+   365→                    </SelectItem>
+   366→                  ))}
+   367→                </SelectContent>
+   368→              </Select>
+   369→            </div>
+   370→            <div className="space-y-1.5">
+   371→              <Label htmlFor="pay-date">Date</Label>
+   372→              <Input id="pay-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-11" />
+   373→            </div>
+   374→            <div className="space-y-1.5">
+   375→              <Label htmlFor="pay-amount">Amount ₹</Label>
+   376→              <Input
+   377→                id="pay-amount"
+   378→                type="number"
+   379→                min="0"
+   380→                step="any"
+   381→                value={amount}
+   382→                onChange={(e) => setAmount(e.target.value)}
+   383→                placeholder="0"
+   384→                className="h-11 text-right tabular-nums"
+   385→              />
+   386→            </div>
+   387→            <div className="space-y-1.5">
+   388→              <Label>Mode</Label>
+   389→              <Select value={mode} onValueChange={setMode}>
+   390→                <SelectTrigger className="h-11 w-full">
+   391→                  <SelectValue />
+   392→                </SelectTrigger>
+   393→                <SelectContent>
+   394→                  {PAYMENT_MODES.map((m) => (
+   395→                    <SelectItem key={m} value={m}>
+   396→                      {m}
+   397→                    </SelectItem>
+   398→                  ))}
+   399→                </SelectContent>
+   400→              </Select>
+   401→            </div>
+   402→            <div className="space-y-1.5">
+   403→              <Label htmlFor="pay-ref">Reference No</Label>
+   404→              <Input id="pay-ref" value={refNo} onChange={(e) => setRefNo(e.target.value)} placeholder="Cheque / UTR — optional" className="h-11" />
+   405→            </div>
+   406→            <div className="space-y-1.5">
+   407→              <Label htmlFor="pay-notes">Notes</Label>
+   408→              <Input id="pay-notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional" className="h-11" />
+   409→            </div>
+   410→          </div>
+   411→
+   412→          {partyId ? (
+   413→            <div className="space-y-2 rounded-md border p-3">
+   414→              <div className="flex items-center justify-between">
+   415→                <p className="text-sm font-medium">Allocate against open invoices</p>
+   416→                <p className={`text-xs tabular-nums ${over ? 'font-semibold text-destructive' : 'text-muted-foreground'}`}>
+   417→                  Allocated ₹ {money(allocated)} / ₹ {money(amountN)}
+   418→                </p>
+   419→              </div>
+   420→              {invoices.loading ? (
+   421→                <p className="text-xs text-muted-foreground">Loading open invoices…</p>
+   422→              ) : openInvoices.length === 0 ? (
+   423→                <p className="text-xs text-muted-foreground">No open invoices for this party.</p>
+   424→              ) : (
+   425→                <div className="max-h-56 overflow-y-auto erp-scroll-y">
+   426→                  <Table>
+   427→                    <TableHeader>
+   428→                      <TableRow>
+   429→                        <TableHead>Invoice</TableHead>
+   430→                        <TableHead>Date</TableHead>
+   431→                        <TableHead className="text-right">Outstanding</TableHead>
+   432→                        <TableHead className="w-32 text-right">Allocate ₹</TableHead>
+   433→                      </TableRow>
+   434→                    </TableHeader>
+   435→                    <TableBody>
+   436→                      {openInvoices.map((inv) => {
+   437→                        const outstanding = inv.grandTotal - inv.paidAmount
+   438→                        const a = num(allocs[inv.invoiceNo] ?? '')
+   439→                        const bad = a > outstanding + 0.004
+   440→                        return (
+   441→                          <TableRow key={inv.id}>
+   442→                            <TableCell className="font-medium tabular-nums">{inv.invoiceNo}</TableCell>
+   443→                            <TableCell className="whitespace-nowrap text-xs">{dateStr(inv.date)}</TableCell>
+   444→                            <TableCell className="text-right tabular-nums">
+   445→                              <Money value={outstanding} plain />
+   446→                            </TableCell>
+   447→                            <TableCell>
+   448→                              <Input
+   449→                                type="number"
+   450→                                min="0"
+   451→                                max={outstanding}
+   452→                                step="any"
+   453→                                value={allocs[inv.invoiceNo] ?? ''}
+   454→                                onChange={(e) => setAllocs((s) => ({ ...s, [inv.invoiceNo]: e.target.value }))}
+   455→                                placeholder="0"
+   456→                                className={`h-11 text-right tabular-nums ${bad ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+   457→                                aria-label={`Allocate to ${inv.invoiceNo}`}
+   458→                              />
+   459→                            </TableCell>
+   460→                          </TableRow>
+   461→                        )
+   462→                      })}
+   463→                    </TableBody>
+   464→                  </Table>
+   465→                </div>
+   466→              )}
+   467→              {(over || perInvoiceOver) ? (
+   468→                <p className="text-xs font-medium text-destructive">
+   469→                  Σ allocations cannot exceed the payment amount, and each line cannot exceed its outstanding.
+   470→                </p>
+   471→              ) : null}
+   472→            </div>
+   473→          ) : (
+   474→            <p className="text-xs text-muted-foreground">Select a party to see open invoices for allocation.</p>
+   475→          )}
+   476→        </div>
+   477→
+   478→        <DialogFooter className="gap-2 border-t pt-3">
+   479→          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving} className="h-11">
+   480→            Cancel
+   481→          </Button>
+   482→          <Button onClick={submit} disabled={saving || over || perInvoiceOver} className="h-11 gap-2">
+   483→            {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+   484→            {saving ? 'Posting…' : 'Post Payment'}
+   485→          </Button>
+   486→        </DialogFooter>
+   487→      </DialogContent>
+   488→    </Dialog>
+   489→  )
+   490→}
+   491→
+   492→// ---------- party ledger ----------
+   493→
+   494→function PartyLedgerTab() {
+   495→  const { parties } = useMasters()
+   496→  const [partyId, setPartyId] = useState('')
+   497→  const ledger = useApi<PartyLedger | null>(partyId ? `/api/reports?type=party-ledger&partyId=${partyId}` : null)
+   498→
+   499→  const sorted = useMemo(() => [...parties].sort((a, b) => a.name.localeCompare(b.name)), [parties])
+   500→  const party: Party | undefined = parties.find((p) => p.id === partyId)
+   501→  const data = ledger.data
+   502→
+   503→  const totalDr = data ? data.rows.reduce((s, r) => s + r.debit, 0) : 0
+   504→  const totalCr = data ? data.rows.reduce((s, r) => s + r.credit, 0) : 0
+   505→
+   506→  return (
+   507→    <div className="space-y-4">
+   508→      <div className="grid gap-2 sm:max-w-md">
+   509→        <Label>Party</Label>
+   510→        <Select value={partyId || undefined} onValueChange={setPartyId}>
+   511→          <SelectTrigger className="h-11 w-full">
+   512→            <SelectValue placeholder="Select party…" />
+   513→          </SelectTrigger>
+   514→          <SelectContent className="max-h-64">
+   515→            {sorted.map((p) => (
+   516→              <SelectItem key={p.id} value={p.id}>
+   517→                {p.code} — {p.name}
+   518→              </SelectItem>
+   519→            ))}
+   520→          </SelectContent>
+   521→        </Select>
+   522→      </div>
+   523→
+   524→      {!partyId ? (
+   525→        <EmptyState title="Pick a party" hint="The ledger shows every voucher with a running balance." icon={BookOpen} />
+   526→      ) : ledger.loading ? (
+   527→        <Card className="p-0"><CardContent className="p-0"><TableSkeleton rows={8} cols={5} /></CardContent></Card>
+   528→      ) : !data ? (
+   529→        <EmptyState title="No ledger data" hint={ledger.error ?? 'Nothing to show.'} icon={BookOpen} />
+   530→      ) : (
+   531→        <>
+   532→          <div className="grid gap-4 sm:grid-cols-4">
+   533→            <Card className="p-4">
+   534→              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Opening</p>
+   535→              <p className="mt-1 text-lg font-semibold tabular-nums">₹ {money(data.openingBal)}</p>
+   536→              <p className="mt-0.5 text-xs text-muted-foreground">+ = receivable, − = payable</p>
+   537→            </Card>
+   538→            <Card className="p-4">
+   539→              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Total Debit</p>
+   540→              <p className="mt-1 text-lg font-semibold tabular-nums">₹ {money(totalDr)}</p>
+   541→            </Card>
+   542→            <Card className="p-4">
+   543→              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Total Credit</p>
+   544→              <p className="mt-1 text-lg font-semibold tabular-nums">₹ {money(totalCr)}</p>
+   545→            </Card>
+   546→            <Card className="p-4">
+   547→              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Closing</p>
+   548→              <p className={`mt-1 text-lg font-semibold tabular-nums ${data.closing >= 0 ? 'text-primary' : 'text-destructive'}`}>
+   549→                ₹ {money(data.closing)}
+   550→              </p>
+   551→              <p className="mt-0.5 text-xs text-muted-foreground">
+   552→                {data.closing >= 0 ? 'receivable' : 'payable'}
+   553→              </p>
+   554→            </Card>
+   555→          </div>
+   556→
+   557→          <Card className="p-0">
+   558→            <CardContent className="p-0">
+   559→              <div className="max-h-[62vh] overflow-auto erp-scroll">
+   560→                <Table>
+   561→                  <TableHeader className="sticky top-0 z-10 bg-card">
+   562→                    <TableRow>
+   563→                      <TableHead>Date</TableHead>
+   564→                      <TableHead>Voucher</TableHead>
+   565→                      <TableHead>Account</TableHead>
+   566→                      <TableHead className="text-right">Debit</TableHead>
+   567→                      <TableHead className="text-right">Credit</TableHead>
+   568→                      <TableHead className="text-right">Balance</TableHead>
+   569→                    </TableRow>
+   570→                  </TableHeader>
+   571→                  <TableBody>
+   572→                    <TableRow className="bg-muted/40">
+   573→                      <TableCell colSpan={5} className="text-sm font-medium">
+   574→                        Opening balance
+   575→                      </TableCell>
+   576→                      <TableCell className="text-right font-semibold tabular-nums">₹ {money(data.openingBal)}</TableCell>
+   577→                    </TableRow>
+   578→                    {data.rows.map((r) => (
+   579→                      <TableRow key={r.id}>
+   580→                        <TableCell className="whitespace-nowrap">{dateStr(r.date)}</TableCell>
+   581→                        <TableCell>
+   582→                          <span className="block text-xs font-medium">{r.voucherType}</span>
+   583→                          <span className="block text-xs tabular-nums text-muted-foreground">{r.voucherNo}</span>
+   584→                        </TableCell>
+   585→                        <TableCell className="text-sm">{r.accountName}</TableCell>
+   586→                        <TableCell className="text-right tabular-nums">{r.debit > 0 ? money(r.debit) : ''}</TableCell>
+   587→                        <TableCell className="text-right tabular-nums">{r.credit > 0 ? money(r.credit) : ''}</TableCell>
+   588→                        <TableCell className="text-right font-medium tabular-nums">₹ {money(r.balance)}</TableCell>
+   589→                      </TableRow>
+   590→                    ))}
+   591→                    <TableRow className="bg-muted/40 font-semibold">
+   592→                      <TableCell colSpan={3} className="text-sm">
+   593→                        <span className="inline-flex items-center gap-1.5">
+   594→                          <Scale className="size-3.5" aria-hidden /> Closing
+   595→                        </span>
+   596→                      </TableCell>
+   597→                      <TableCell className="text-right tabular-nums">{money(totalDr)}</TableCell>
+   598→                      <TableCell className="text-right tabular-nums">{money(totalCr)}</TableCell>
+   599→                      <TableCell className="text-right tabular-nums">₹ {money(data.closing)}</TableCell>
+   600→                    </TableRow>
+   601→                  </TableBody>
+   602→                </Table>
+   603→              </div>
+   604→            </CardContent>
+   605→          </Card>
+   606→        </>
+   607→      )}
+   608→    </div>
+   609→  )
+   610→}
+   611→

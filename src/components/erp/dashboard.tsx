@@ -111,12 +111,12 @@ export function DashboardView() {
       </div>
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
-        <KpiCard title="Month Sales" value={`₹ ${money(data.monthSales)}`} icon={ReceiptText} hint="Posted sales this month" />
-        <KpiCard title="Month Purchase" value={`₹ ${money(data.monthPurchase)}`} icon={ShoppingCart} hint="Posted purchases this month" />
-        <KpiCard title="Receivables" value={`₹ ${money(data.receivables)}`} icon={HandCoins} tone="positive" hint="Customer outstanding" />
-        <KpiCard title="Payables" value={`₹ ${money(data.payables)}`} icon={HandCoins} tone="negative" hint="Supplier outstanding" />
-        <KpiCard title="Stock Value" value={`₹ ${money(data.stockValue)}`} icon={Boxes} hint="Closing @ avg cost" />
-        <KpiCard title="Open Jobwork" value={`₹ ${money(data.openJobworkValue)}`} icon={Factory} tone="warning" hint="Completed cards, not invoiced" />
+        <KpiCard title="Month Sales" value={`₹ ${money(data.monthSales)}`} icon={ReceiptText} hint="Posted sales this month" onClick={() => setView('sales')} />
+        <KpiCard title="Month Purchase" value={`₹ ${money(data.monthPurchase)}`} icon={ShoppingCart} hint="Posted purchases this month" onClick={() => setView('purchase')} />
+        <KpiCard title="Receivables" value={`₹ ${money(data.receivables)}`} icon={HandCoins} tone="positive" hint="Customer outstanding" onClick={() => setView('accounting')} />
+        <KpiCard title="Payables" value={`₹ ${money(data.payables)}`} icon={HandCoins} tone="negative" hint="Supplier outstanding" onClick={() => setView('accounting')} />
+        <KpiCard title="Stock Value" value={`₹ ${money(data.stockValue)}`} icon={Boxes} hint="Closing @ avg cost" onClick={() => setView('inventory')} />
+        <KpiCard title="Open Jobwork" value={`₹ ${money(data.openJobworkValue)}`} icon={Factory} tone="warning" hint="Completed cards, not invoiced" onClick={() => setView('jobwork')} />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">
@@ -172,16 +172,23 @@ export function DashboardView() {
               <ScrollArea className="h-72">
                 <ul className="divide-y">
                   {data.lowStock.map((l) => (
-                    <li key={l.code} className="flex items-center justify-between gap-2 px-4 py-2.5 text-sm">
-                      <div className="min-w-0">
-                        <p className="truncate font-medium">{l.name}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {l.code} · reorder @ {l.reorderLevel} {l.uom}
-                        </p>
-                      </div>
-                      <span className="shrink-0 rounded-md bg-amber-100 px-2 py-0.5 text-xs font-semibold tabular-nums text-amber-700 dark:bg-amber-500/15 dark:text-amber-400">
-                        {l.closing} {l.uom}
-                      </span>
+                    <li key={l.code}>
+                      <button
+                        type="button"
+                        onClick={() => setView('inventory')}
+                        className="flex w-full items-center justify-between gap-2 px-4 py-2.5 text-left text-sm transition-colors hover:bg-accent/50"
+                        aria-label={`Open inventory — ${l.name} below reorder level`}
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate font-medium">{l.name}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {l.code} · reorder @ {l.reorderLevel} {l.uom}
+                          </p>
+                        </div>
+                        <span className="shrink-0 rounded-md bg-amber-100 px-2 py-0.5 text-xs font-semibold tabular-nums text-amber-700 dark:bg-amber-500/15 dark:text-amber-400">
+                          {l.closing} {l.uom}
+                        </span>
+                      </button>
                     </li>
                   ))}
                 </ul>

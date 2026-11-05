@@ -102,12 +102,15 @@ export function KpiCard({
   icon: Icon,
   hint,
   tone = 'default',
+  onClick,
 }: {
   title: string
   value: string
   icon: LucideIcon
   hint?: string
   tone?: 'default' | 'positive' | 'negative' | 'warning'
+  /** Clickable KPIs drill into the module (Mapsoft-style dashboard nav). */
+  onClick?: () => void
 }) {
   const toneCls =
     tone === 'positive'
@@ -117,19 +120,32 @@ export function KpiCard({
         : tone === 'warning'
           ? 'text-amber-600 dark:text-amber-400'
           : 'text-foreground'
+  const body = (
+    <CardContent className="flex flex-col gap-1 p-0">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{title}</span>
+        <span className="flex size-8 items-center justify-center rounded-md bg-accent text-accent-foreground">
+          <Icon className="size-4" aria-hidden />
+        </span>
+      </div>
+      <span className={cn('text-xl font-semibold tabular-nums sm:text-2xl', toneCls)}>{value}</span>
+      {hint ? <span className="text-xs text-muted-foreground">{hint}</span> : null}
+    </CardContent>
+  )
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className="w-full rounded-lg text-left transition-colors hover:border-primary/50 hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        aria-label={`${title}: ${value}${hint ? ` — ${hint}` : ''} — open module`}
+      >
+        <Card className="border-transparent p-4 shadow-none transition-colors hover:border-primary/50">{body}</Card>
+      </button>
+    )
+  }
   return (
-    <Card className="p-4">
-      <CardContent className="flex flex-col gap-1 p-0">
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{title}</span>
-          <span className="flex size-8 items-center justify-center rounded-md bg-accent text-accent-foreground">
-            <Icon className="size-4" aria-hidden />
-          </span>
-        </div>
-        <span className={cn('text-xl font-semibold tabular-nums sm:text-2xl', toneCls)}>{value}</span>
-        {hint ? <span className="text-xs text-muted-foreground">{hint}</span> : null}
-      </CardContent>
-    </Card>
+    <Card className="p-4">{body}</Card>
   )
 }
 

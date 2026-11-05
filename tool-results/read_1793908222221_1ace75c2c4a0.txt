@@ -1,0 +1,1898 @@
+     1→'use client'
+     2→
+     3→/**
+     4→ * ForgeERP — SaaS Platform Admin console (standalone fullscreen module, key-gated).
+     5→ *
+     6→ * Layout modeled on the reference SaaS console: flat white header with the
+     7→ * admin identity, pill tab navigation, light-gray content canvas — no ERP
+     8→ * sidebar. Tabs: Organizations · Plans · Inquiries · Blog · Logout.
+     9→ *
+    10→ * Honest scope: the ERP runtime always operates the FIRST organization;
+    11→ * orgs created here are real Company rows the platform manages. Full
+    12→ * per-request tenant scoping is a roadmap item. Plan feature pills map to
+    13→ * REAL enforcement (assertFeature) — only catalogued features are shown.
+    14→ */
+    15→
+    16→import { useCallback, useEffect, useState } from 'react'
+    17→import { toast } from 'sonner'
+    18→import {
+    19→  ArrowLeft,
+    20→  Check,
+    21→  CheckCircle2,
+    22→  Copy,
+    23→  DatabaseBackup,
+    24→  KeyRound,
+    25→  Loader2,
+    26→  LogOut,
+    27→  MoreVertical,
+    28→  Pencil,
+    29→  Plus,
+    30→  RefreshCw,
+    31→  Save,
+    32→  ShieldAlert,
+    33→  Trash2,
+    34→} from 'lucide-react'
+    35→import {
+    36→  DropdownMenu,
+    37→  DropdownMenuContent,
+    38→  DropdownMenuItem,
+    39→  DropdownMenuTrigger,
+    40→} from '@/components/ui/dropdown-menu'
+    41→import {
+    42→  AlertDialog,
+    43→  AlertDialogAction,
+    44→  AlertDialogCancel,
+    45→  AlertDialogContent,
+    46→  AlertDialogDescription,
+    47→  AlertDialogFooter,
+    48→  AlertDialogHeader,
+    49→  AlertDialogTitle,
+    50→  AlertDialogTrigger,
+    51→} from '@/components/ui/alert-dialog'
+    52→import { Badge } from '@/components/ui/badge'
+    53→import { Button } from '@/components/ui/button'
+    54→import { Card, CardContent } from '@/components/ui/card'
+    55→import { Checkbox } from '@/components/ui/checkbox'
+    56→import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+    57→import { Input } from '@/components/ui/input'
+    58→import { Label } from '@/components/ui/label'
+    59→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+    60→import { Separator } from '@/components/ui/separator'
+    61→import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+    62→import { Textarea } from '@/components/ui/textarea'
+    63→import { cn } from '@/lib/utils'
+    64→import { dateStr, money } from '@/lib/erp'
+    65→import {
+    66→  api,
+    67→  downloadUrl,
+    68→  platformApi,
+    69→  toastError,
+    70→  type BlogPost,
+    71→  type InquiriesResponse,
+    72→  type InquiryRow,
+    73→  type OrgRow,
+    74→  type OrgsResponse,
+    75→  type Plan,
+    76→  PLAN_FEATURE_CATALOG,
+    77→} from './api'
+    78→import { CardSkeleton, EmptyState, TableSkeleton } from './bits'
+    79→
+    80→const KEY_STORE = 'forge_platform_key'
+    81→
+    82→type ConsoleTab = 'orgs' | 'plans' | 'inquiries' | 'blog'
+    83→
+    84→const slugify = (s: string) =>
+    85→  s
+    86→    .toLowerCase()
+    87→    .replace(/[^a-z0-9]+/g, '-')
+    88→    .replace(/(^-|-$)/g, '')
+    89→    .slice(0, 80)
+    90→
+    91→const dt = (s: string) =>
+    92→  new Date(s).toLocaleString('en-IN', {
+    93→    day: '2-digit',
+    94→    month: 'short',
+    95→    year: 'numeric',
+    96→    hour: '2-digit',
+    97→    minute: '2-digit',
+    98→    hour12: false,
+    99→  })
+   100→
+   101→async function copyText(text: string) {
+   102→  try {
+   103→    await navigator.clipboard.writeText(text)
+   104→    toast.success('Copied to clipboard')
+   105→  } catch {
+   106→    toast.error('Copy failed — select the text manually')
+   107→  }
+   108→}
+   109→
+   110→// ---------------------------------------------------------------------------
+   111→// Entry: key gate → console
+   112→// ---------------------------------------------------------------------------
+   113→
+   114→export function PlatformView({ onExit }: { onExit: () => void }) {
+   115→  const [key, setKey] = useState('')
+   116→  const [authed, setAuthed] = useState(false)
+   117→  const [checking, setChecking] = useState(false)
+   118→
+   119→  useEffect(() => {
+   120→    const saved = sessionStorage.getItem(KEY_STORE)
+   121→    if (saved) {
+   122→      setKey(saved)
+   123→      void verify(saved)
+   124→    }
+   125→  }, [])
+   126→
+   127→  const verify = async (k: string) => {
+   128→    setChecking(true)
+   129→    try {
+   130→      await api('/api/platform/auth', { method: 'POST', body: JSON.stringify({ key: k }) })
+   131→      sessionStorage.setItem(KEY_STORE, k)
+   132→      setAuthed(true)
+   133→    } catch (e) {
+   134→      sessionStorage.removeItem(KEY_STORE)
+   135→      toastError(e)
+   136→    } finally {
+   137→      setChecking(false)
+   138→    }
+   139→  }
+   140→
+   141→  if (!authed) {
+   142→    return (
+   143→      <div className="flex min-h-dvh flex-col items-center justify-center bg-muted/30 p-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+   144→        <div className="w-full max-w-md space-y-6">
+   145→          <div className="space-y-3 text-center">
+   146→            <span className="mx-auto flex size-14 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
+   147→              <KeyRound className="size-7" aria-hidden />
+   148→            </span>
+   149→            <div className="space-y-1">
+   150→              <h1 className="text-2xl font-bold tracking-tight">Platform Admin</h1>
+   151→              <p className="text-sm text-muted-foreground">Plans, organizations, subscriptions, inquiries — the control plane.</p>
+   152→            </div>
+   153→          </div>
+   154→          <Card className="p-0">
+   155→            <CardContent className="space-y-4 p-6">
+   156→              <div className="space-y-1.5">
+   157→                <Label htmlFor="platform-key">Platform admin key</Label>
+   158→                <Input
+   159→                  id="platform-key"
+   160→                  type="password"
+   161→                  value={key}
+   162→                  onChange={(e) => setKey(e.target.value)}
+   163→                  onKeyDown={(e) => {
+   164→                    if (e.key === 'Enter' && key) void verify(key)
+   165→                  }}
+   166→                  placeholder="forge-admin"
+   167→                  className="h-11"
+   168→                  autoFocus
+   169→                />
+   170→                <p className="text-xs text-muted-foreground">
+   171→                  Default is <span className="font-mono">forge-admin</span> — change it with the{' '}
+   172→                  <span className="font-mono">PLATFORM_ADMIN_KEY</span> environment variable.
+   173→                </p>
+   174→              </div>
+   175→              <Button onClick={() => void verify(key)} disabled={!key || checking} className="h-11 w-full gap-2">
+   176→                {checking ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <KeyRound className="size-4" aria-hidden />}
+   177→                Unlock console
+   178→              </Button>
+   179→            </CardContent>
+   180→          </Card>
+   181→          <Button variant="outline" onClick={onExit} className="h-11 w-full gap-2">
+   182→            <ArrowLeft className="size-4" aria-hidden /> Back to ERP
+   183→          </Button>
+   184→        </div>
+   185→      </div>
+   186→    )
+   187→  }
+   188→
+   189→  return <Console key={key} apiKey={key} onAuthLost={() => setAuthed(false)} onExit={onExit} />
+   190→}
+   191→
+   192→// ---------------------------------------------------------------------------
+   193→// Console shell: header (title + identity + pill nav) · tab body · footer
+   194→// ---------------------------------------------------------------------------
+   195→
+   196→function Console({ apiKey, onAuthLost, onExit }: { apiKey: string; onAuthLost: () => void; onExit: () => void }) {
+   197→  const [tab, setTab] = useState<ConsoleTab>('orgs')
+   198→  const [data, setData] = useState<OrgsResponse | null>(null)
+   199→  const [plans, setPlans] = useState<Plan[] | null>(null)
+   200→  const [inquiries, setInquiries] = useState<InquiriesResponse | null>(null)
+   201→  const [posts, setPosts] = useState<BlogPost[] | null>(null)
+   202→  const [loading, setLoading] = useState(true)
+   203→
+   204→  const reload = useCallback(async () => {
+   205→    setLoading(true)
+   206→    try {
+   207→      const [orgs, pl, inq, blog] = await Promise.all([
+   208→        platformApi<OrgsResponse>('/api/platform/orgs', undefined, apiKey),
+   209→        platformApi<Plan[]>('/api/platform/plans', undefined, apiKey),
+   210→        platformApi<InquiriesResponse>('/api/platform/inquiries', undefined, apiKey),
+   211→        platformApi<{ posts: BlogPost[] }>('/api/platform/blog', undefined, apiKey),
+   212→      ])
+   213→      setData(orgs)
+   214→      setPlans(pl)
+   215→      setInquiries(inq)
+   216→      setPosts(blog.posts)
+   217→    } catch (e) {
+   218→      toastError(e)
+   219→      onAuthLost()
+   220→    } finally {
+   221→      setLoading(false)
+   222→    }
+   223→  }, [apiKey, onAuthLost])
+   224→
+   225→  useEffect(() => {
+   226→    void reload()
+   227→  }, [reload])
+   228→
+   229→  const orgAction = async (id: string, body: Record<string, unknown>, okMsg: string) => {
+   230→    try {
+   231→      await platformApi(`/api/platform/orgs/${id}`, { method: 'PATCH', body: JSON.stringify(body) }, apiKey)
+   232→      toast.success(okMsg)
+   233→      void reload()
+   234→    } catch (e) {
+   235→      toastError(e)
+   236→    }
+   237→  }
+   238→
+   239→  const logout = () => {
+   240→    sessionStorage.removeItem(KEY_STORE)
+   241→    onAuthLost()
+   242→  }
+   243→
+   244→  const pill = (t: ConsoleTab, label: React.ReactNode, count?: number) => (
+   245→    <button
+   246→      type="button"
+   247→      onClick={() => setTab(t)}
+   248→      aria-current={tab === t ? 'page' : undefined}
+   249→      className={cn(
+   250→        'inline-flex h-10 min-w-11 items-center justify-center gap-1.5 whitespace-nowrap rounded-full border px-4 text-sm font-medium transition-colors',
+   251→        tab === t
+   252→          ? 'border-primary bg-primary text-primary-foreground'
+   253→          : 'border-border bg-card text-foreground hover:bg-accent'
+   254→      )}
+   255→    >
+   256→      {label}
+   257→      {typeof count === 'number' ? <span className="tabular-nums opacity-70">({count})</span> : null}
+   258→    </button>
+   259→  )
+   260→
+   261→  const newCount = inquiries?.newCount ?? 0
+   262→
+   263→  return (
+   264→    <div className="flex min-h-dvh flex-col bg-muted/30">
+   265→      <header className="border-b bg-card">
+   266→        <div className="mx-auto flex w-full max-w-6xl flex-col gap-3 px-4 py-4 pb-[max(1rem,env(safe-area-inset-top))] sm:flex-row sm:items-center sm:justify-between">
+   267→          <div className="min-w-0 space-y-0.5">
+   268→            <h1 className="truncate text-xl font-bold tracking-tight">Platform Admin</h1>
+   269→            <p className="truncate text-sm text-muted-foreground">
+   270→              <span className="font-mono">{apiKey}</span> · ForgeERP control plane
+   271→            </p>
+   272→          </div>
+   273→          <nav aria-label="Platform Admin sections" className="flex flex-wrap items-center gap-2">
+   274→            {pill('orgs', 'Organizations', data?.orgs.length)}
+   275→            {pill('plans', 'Plans', plans?.length)}
+   276→            {pill('inquiries', 'Inquiries', newCount > 0 ? newCount : undefined)}
+   277→            {pill('blog', 'Blog', posts?.length)}
+   278→            <span className="mx-0.5 hidden h-6 w-px bg-border sm:block" aria-hidden />
+   279→            <Button variant="outline" onClick={onExit} className="h-10 gap-2 rounded-full px-4">
+   280→              <ArrowLeft className="size-4" aria-hidden /> Back to ERP
+   281→            </Button>
+   282→            <Button variant="outline" onClick={logout} className="h-10 gap-2 rounded-full px-4 text-destructive hover:text-destructive">
+   283→              <LogOut className="size-4" aria-hidden /> Logout
+   284→            </Button>
+   285→          </nav>
+   286→        </div>
+   287→      </header>
+   288→
+   289→      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6">
+   290→        {loading && !data ? (
+   291→          <TableSkeleton rows={5} cols={5} />
+   292→        ) : tab === 'orgs' ? (
+   293→          <OrgsTab data={data} plans={plans ?? []} apiKey={apiKey} onAction={orgAction} reload={reload} />
+   294→        ) : tab === 'plans' ? (
+   295→          <PlansTab plans={plans ?? []} apiKey={apiKey} reload={reload} />
+   296→        ) : tab === 'inquiries' ? (
+   297→          <InquiriesTab inquiries={inquiries} apiKey={apiKey} reload={reload} />
+   298→        ) : (
+   299→          <BlogTab posts={posts ?? []} apiKey={apiKey} reload={reload} />
+   300→        )}
+   301→      </main>
+   302→
+   303→      <footer className="mt-auto border-t bg-card pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+   304→        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-1 px-4 py-3 text-center text-xs text-muted-foreground sm:flex-row sm:text-left">
+   305→          <span>
+   306→            <span className="font-medium text-foreground">ForgeERP</span> Platform — plans, subscriptions &amp; enforcement
+   307→          </span>
+   308→          <span>Single-tenant runtime · the ERP operates the first organization</span>
+   309→        </div>
+   310→      </footer>
+   311→    </div>
+   312→  )
+   313→}
+   314→
+   315→// ---------------------------------------------------------------------------
+   316→// Organizations tab
+   317→// ---------------------------------------------------------------------------
+   318→
+   319→function OrgStatusBadge({ o }: { o: OrgRow }) {
+   320→  const now = Date.now()
+   321→  const paidOk = o.paidUntil ? new Date(o.paidUntil).getTime() > now : false
+   322→  const trialOk = o.trialEndsAt ? new Date(o.trialEndsAt).getTime() > now : false
+   323→  if (o.saasStatus === 'SUSPENDED')
+   324→    return (
+   325→      <Badge variant="destructive" className="font-normal">
+   326→        suspended
+   327→      </Badge>
+   328→    )
+   329→  if (paidOk)
+   330→    return (
+   331→      <Badge className="border-transparent bg-emerald-100 font-normal text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400">
+   332→        active
+   333→      </Badge>
+   334→    )
+   335→  if (trialOk)
+   336→    return (
+   337→      <Badge className="border-transparent bg-amber-100 font-normal text-amber-700 dark:bg-amber-500/15 dark:text-amber-400">
+   338→        trial
+   339→      </Badge>
+   340→    )
+   341→  if (o.paidUntil || o.trialEndsAt)
+   342→    return (
+   343→      <Badge variant="destructive" className="font-normal">
+   344→        expired
+   345→      </Badge>
+   346→    )
+   347→  return (
+   348→    <Badge variant="secondary" className="font-normal">
+   349→      free · unlimited
+   350→    </Badge>
+   351→  )
+   352→}
+   353→
+   354→function OrgsTab({
+   355→  data,
+   356→  plans,
+   357→  apiKey,
+   358→  onAction,
+   359→  reload,
+   360→}: {
+   361→  data: OrgsResponse | null
+   362→  plans: Plan[]
+   363→  apiKey: string
+   364→  onAction: (id: string, body: Record<string, unknown>, okMsg: string) => Promise<void>
+   365→  reload: () => Promise<void>
+   366→}) {
+   367→  const [createOpen, setCreateOpen] = useState(false)
+   368→  const [form, setForm] = useState({ name: '', email: '', gstin: '', city: '', planId: 'none', trialDays: '14' })
+   369→  const [creating, setCreating] = useState(false)
+   370→  const [customizing, setCustomizing] = useState<OrgRow | null>(null)
+   371→  const [custom, setCustom] = useState({ items: '', warehouses: '', parties: '' })
+   372→  const [savingCustom, setSavingCustom] = useState(false)
+   373→
+   374→  const create = async () => {
+   375→    setCreating(true)
+   376→    try {
+   377→      await platformApi(
+   378→        '/api/platform/orgs',
+   379→        {
+   380→          method: 'POST',
+   381→          body: JSON.stringify({
+   382→            name: form.name,
+   383→            gstin: form.gstin || undefined,
+   384→            city: form.city || undefined,
+   385→            email: form.email || undefined,
+   386→            planId: form.planId === 'none' ? null : form.planId,
+   387→            trialDays: Number(form.trialDays) || 0,
+   388→          }),
+   389→        },
+   390→        apiKey
+   391→      )
+   392→      toast.success(`Organization "${form.name}" created`)
+   393→      setCreateOpen(false)
+   394→      setForm({ name: '', email: '', gstin: '', city: '', planId: 'none', trialDays: '14' })
+   395→      void reload()
+   396→    } catch (e) {
+   397→      toastError(e)
+   398→    } finally {
+   399→      setCreating(false)
+   400→    }
+   401→  }
+   402→
+   403→  const del = async (id: string, orgName: string) => {
+   404→    try {
+   405→      await platformApi(`/api/platform/orgs/${id}?confirmName=${encodeURIComponent(orgName)}`, { method: 'DELETE' }, apiKey)
+   406→      toast.success(`${orgName} deleted`)
+   407→      void reload()
+   408→    } catch (e) {
+   409→      toastError(e)
+   410→    }
+   411→  }
+   412→
+   413→  const openCustomize = (o: OrgRow) => {
+   414→    setCustomizing(o)
+   415→    setCustom({
+   416→      items: o.limits.items && o.customized ? String(o.limits.items) : '',
+   417→      warehouses: o.limits.warehouses && o.customized ? String(o.limits.warehouses) : '',
+   418→      parties: o.limits.parties && o.customized ? String(o.limits.parties) : '',
+   419→    })
+   420→  }
+   421→
+   422→  const saveCustom = async () => {
+   423→    if (!customizing) return
+   424→    setSavingCustom(true)
+   425→    try {
+   426→      await platformApi(
+   427→        `/api/platform/orgs/${customizing.id}`,
+   428→        {
+   429→          method: 'PATCH',
+   430→          body: JSON.stringify({
+   431→            action: 'customize',
+   432→            maxItems: custom.items === '' ? null : Math.max(0, Math.trunc(Number(custom.items) || 0)),
+   433→            maxWarehouses: custom.warehouses === '' ? null : Math.max(0, Math.trunc(Number(custom.warehouses) || 0)),
+   434→            maxParties: custom.parties === '' ? null : Math.max(0, Math.trunc(Number(custom.parties) || 0)),
+   435→          }),
+   436→        },
+   437→        apiKey
+   438→      )
+   439→      toast.success(`Custom limits saved for ${customizing.name}`)
+   440→      setCustomizing(null)
+   441→      void reload()
+   442→    } catch (e) {
+   443→      toastError(e)
+   444→    } finally {
+   445→      setSavingCustom(false)
+   446→    }
+   447→  }
+   448→
+   449→  const stats = data?.stats
+   450→  const orgs = data?.orgs ?? []
+   451→
+   452→  /** Stacked management actions (desktop cell / shared logic). */
+   453→  const actionButtons = (o: OrgRow, compact: boolean) => {
+   454→    const pillCls = compact
+   455→      ? 'h-8 rounded-full px-3 text-xs'
+   456→      : 'h-9 rounded-full px-4 text-sm'
+   457→    return (
+   458→      <>
+   459→        <Button
+   460→          size="sm"
+   461→          variant="outline"
+   462→          className={pillCls}
+   463→          title="Extends the paid period by one billing cycle (+1 month / +1 year)"
+   464→          onClick={() =>
+   465→            void onAction(
+   466→              o.id,
+   467→              { action: 'markPaid', cycle: o.billingCycle === 'YEARLY' ? 'YEARLY' : 'MONTHLY' },
+   468→              `Marked paid until the next ${o.billingCycle === 'YEARLY' ? 'year' : 'month'}`
+   469→            )
+   470→          }
+   471→        >
+   472→          Mark paid
+   473→        </Button>
+   474→        <Button
+   475→          size="sm"
+   476→          variant="outline"
+   477→          className={pillCls}
+   478→          onClick={() => void onAction(o.id, { action: 'extendTrial', days: 7 }, 'Trial extended +7 days')}
+   479→        >
+   480→          +7d trial
+   481→        </Button>
+   482→        {o.saasStatus === 'SUSPENDED' ? (
+   483→          <Button
+   484→            size="sm"
+   485→            className={cn(pillCls, 'gap-1')}
+   486→            onClick={() => void onAction(o.id, { action: 'activate' }, 'Organization activated')}
+   487→          >
+   488→            <CheckCircle2 className="size-3.5" aria-hidden /> Activate
+   489→          </Button>
+   490→        ) : (
+   491→          <Button
+   492→            size="sm"
+   493→            variant="outline"
+   494→            className={cn(pillCls, 'gap-1')}
+   495→            onClick={() => void onAction(o.id, { action: 'suspend' }, 'Organization suspended — business mutations now blocked')}
+   496→          >
+   497→            <ShieldAlert className="size-3.5" aria-hidden /> Suspend
+   498→          </Button>
+   499→        )}
+   500→        <Button size="sm" variant="outline" className={pillCls} onClick={() => openCustomize(o)}>
+   501→          Customize plan
+   502→        </Button>
+   503→      </>
+   504→    )
+   505→  }
+   506→
+   507→  return (
+   508→    <div className="space-y-6">
+   509→      <div className="flex flex-wrap items-center justify-between gap-3">
+   510→        <div>
+   511→          <h2 className="text-lg font-semibold tracking-tight">Organizations ({orgs.length})</h2>
+   512→          {stats ? (
+   513→            <p className="mt-0.5 text-xs text-muted-foreground">
+   514→              {stats.active} active · {stats.suspended} suspended · MRR ₹{money(stats.mrr)}
+   515→            </p>
+   516→          ) : null}
+   517→        </div>
+   518→        <Button onClick={() => setCreateOpen(true)} className="h-10 gap-2">
+   519→          <Plus className="size-4" aria-hidden /> Create organization
+   520→        </Button>
+   521→      </div>
+   522→
+   523→      {orgs.length === 0 ? (
+   524→        <Card className="p-0">
+   525→          <CardContent className="p-6">
+   526→            <EmptyState
+   527→              title="No organizations"
+   528→              hint="Create the first organization — it becomes a real Company row you can manage here."
+   529→              action={
+   530→                <Button onClick={() => setCreateOpen(true)} className="mt-2 h-11 gap-2">
+   531→                  <Plus className="size-4" aria-hidden /> New organization
+   532→                </Button>
+   533→              }
+   534→            />
+   535→          </CardContent>
+   536→        </Card>
+   537→      ) : (
+   538→        <Card className="p-0">
+   539→          <CardContent className="p-0">
+   540→            <div className="max-h-[64dvh] overflow-auto erp-scroll [&_[data-slot=table-container]]:overflow-visible">
+   541→              <Table>
+   542→                <TableHeader className="sticky top-0 z-10 bg-card">
+   543→                  <TableRow>
+   544→                    <TableHead>Organization</TableHead>
+   545→                    <TableHead className="hidden lg:table-cell">Contact</TableHead>
+   546→                    <TableHead>Plan</TableHead>
+   547→                    <TableHead>Status</TableHead>
+   548→                    <TableHead className="hidden lg:table-cell">Usage</TableHead>
+   549→                    <TableHead className="hidden md:table-cell">Period / Trial</TableHead>
+   550→                    <TableHead className="text-right">Actions</TableHead>
+   551→                  </TableRow>
+   552→                </TableHeader>
+   553→                <TableBody>
+   554→                  {orgs.map((o) => (
+   555→                    <TableRow key={o.id}>
+   556→                      <TableCell>
+   557→                        <span className="block font-medium">{o.name}</span>
+   558→                        <span className="block truncate text-xs text-muted-foreground">
+   559→                          {slugify(o.name)}
+   560→                          {o.city ? ` · ${o.city}` : ''}
+   561→                          {o.operating ? ' · operating (opens in the ERP)' : ''}
+   562→                        </span>
+   563→                      </TableCell>
+   564→                      <TableCell className="hidden lg:table-cell">
+   565→                        <span className="block text-sm">{o.email ?? <span className="text-muted-foreground">no email</span>}</span>
+   566→                        {o.gstin ? (
+   567→                          <button
+   568→                            type="button"
+   569→                            onClick={() => void copyText(o.gstin ?? '')}
+   570→                            className="mt-1 inline-flex items-center gap-1 rounded-full border bg-muted/50 px-2 py-0.5 font-mono text-[11px] text-muted-foreground transition-colors hover:bg-accent"
+   571→                            title="Copy GSTIN"
+   572→                          >
+   573→                            {o.gstin}
+   574→                            <Copy className="size-3" aria-hidden />
+   575→                            <span className="sr-only">Copy GSTIN {o.gstin}</span>
+   576→                          </button>
+   577→                        ) : null}
+   578→                      </TableCell>
+   579→                      <TableCell>
+   580→                        <Select
+   581→                          value={o.plan?.id ?? 'none'}
+   582→                          onValueChange={(v) => void onAction(o.id, { action: 'setPlan', planId: v === 'none' ? null : v }, 'Plan updated')}
+   583→                        >
+   584→                          <SelectTrigger className="h-9 w-36" aria-label={`Plan for ${o.name}`}>
+   585→                            <SelectValue />
+   586→                          </SelectTrigger>
+   587→                          <SelectContent>
+   588→                            <SelectItem value="none">No plan (unlimited)</SelectItem>
+   589→                            {plans.map((p) => (
+   590→                              <SelectItem key={p.id} value={p.id}>
+   591→                                {p.name}
+   592→                              </SelectItem>
+   593→                            ))}
+   594→                          </SelectContent>
+   595→                        </Select>
+   596→                        {o.customized ? <span className="mt-1 block text-[11px] text-muted-foreground">custom limits</span> : null}
+   597→                      </TableCell>
+   598→                      <TableCell>
+   599→                        <OrgStatusBadge o={o} />
+   600→                      </TableCell>
+   601→                      <TableCell className="hidden text-xs tabular-nums lg:table-cell">
+   602→                        {o.operating ? (
+   603→                          <>
+   604→                            {o.usage.parties}/{o.limits.parties || '∞'} parties · {o.usage.items}/{o.limits.items || '∞'} items ·{' '}
+   605→                            {o.usage.warehouses}/{o.limits.warehouses || '∞'} wh · {o.usage.salesInvoices} inv
+   606→                          </>
+   607→                        ) : (
+   608→                          <span className="text-muted-foreground">—</span>
+   609→                        )}
+   610→                      </TableCell>
+   611→                      <TableCell className="hidden text-xs tabular-nums md:table-cell">
+   612→                        {o.paidUntil ? (
+   613→                          <span className="block">
+   614→                            Paid until {dateStr(o.paidUntil)}
+   615→                            <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+   616→                              {o.billingCycle}
+   617→                            </span>
+   618→                          </span>
+   619→                        ) : null}
+   620→                        {!o.paidUntil && o.trialEndsAt ? <span className="block">Trial until {dateStr(o.trialEndsAt)}</span> : null}
+   621→                        {!o.paidUntil && !o.trialEndsAt ? <span className="text-muted-foreground">No expiry</span> : null}
+   622→                      </TableCell>
+   623→                      <TableCell>
+   624→                        {/* Desktop: stacked management pills (reference style) */}
+   625→                        <div className="hidden flex-col items-end gap-1.5 md:flex">
+   626→                          {actionButtons(o, false)}
+   627→                          {o.customized ? (
+   628→                            <Button
+   629→                              size="sm"
+   630→                              variant="ghost"
+   631→                              className="h-8 rounded-full px-3 text-xs text-muted-foreground"
+   632→                              onClick={() => void onAction(o.id, { action: 'resetCustom' }, 'Custom limits removed — plan defaults apply')}
+   633→                            >
+   634→                              Reset custom
+   635→                            </Button>
+   636→                          ) : null}
+   637→                          <AlertDialog>
+   638→                            <AlertDialogTrigger asChild>
+   639→                              <Button
+   640→                                size="sm"
+   641→                                variant="outline"
+   642→                                className="h-8 rounded-full border-destructive/40 px-3 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+   643→                                aria-label={`Delete ${o.name}`}
+   644→                              >
+   645→                                Delete
+   646→                              </Button>
+   647→                            </AlertDialogTrigger>
+   648→                            <AlertDialogContent>
+   649→                              <AlertDialogHeader>
+   650→                                <AlertDialogTitle>Delete {o.name}?</AlertDialogTitle>
+   651→                                <AlertDialogDescription>
+   652→                                  {o.operating
+   653→                                    ? 'This is the OPERATING organization — deleting it wipes ALL business data (invoices, ledgers, jobwork, masters). Type the exact name to confirm.'
+   654→                                    : 'Type the exact organization name to confirm.'}
+   655→                                </AlertDialogDescription>
+   656→                              </AlertDialogHeader>
+   657→                              <DeleteConfirm name={o.name} onConfirm={() => void del(o.id, o.name)} />
+   658→                            </AlertDialogContent>
+   659→                          </AlertDialog>
+   660→                        </div>
+   661→                        {/* Mobile: one overflow menu + guarded delete */}
+   662→                        <div className="flex items-center justify-end gap-1.5 md:hidden">
+   663→                          <DropdownMenu>
+   664→                            <DropdownMenuTrigger asChild>
+   665→                              <Button variant="ghost" size="icon" className="size-10" aria-label={`More actions for ${o.name}`}>
+   666→                                <MoreVertical className="size-4" aria-hidden />
+   667→                              </Button>
+   668→                            </DropdownMenuTrigger>
+   669→                            <DropdownMenuContent align="end">
+   670→                              <DropdownMenuItem
+   671→                                onClick={() =>
+   672→                                  void onAction(
+   673→                                    o.id,
+   674→                                    { action: 'markPaid', cycle: o.billingCycle === 'YEARLY' ? 'YEARLY' : 'MONTHLY' },
+   675→                                    'Marked paid'
+   676→                                  )
+   677→                                }
+   678→                              >
+   679→                                Mark paid (+{o.billingCycle === 'YEARLY' ? '1 year' : '1 month'})
+   680→                              </DropdownMenuItem>
+   681→                              <DropdownMenuItem onClick={() => void onAction(o.id, { action: 'extendTrial', days: 7 }, 'Trial extended +7 days')}>
+   682→                                Extend trial +7 days
+   683→                              </DropdownMenuItem>
+   684→                              {o.saasStatus === 'SUSPENDED' ? (
+   685→                                <DropdownMenuItem onClick={() => void onAction(o.id, { action: 'activate' }, 'Organization activated')}>
+   686→                                  <CheckCircle2 className="size-4" aria-hidden /> Activate
+   687→                                </DropdownMenuItem>
+   688→                              ) : (
+   689→                                <DropdownMenuItem onClick={() => void onAction(o.id, { action: 'suspend' }, 'Organization suspended')}>
+   690→                                  <ShieldAlert className="size-4" aria-hidden /> Suspend
+   691→                                </DropdownMenuItem>
+   692→                              )}
+   693→                              <DropdownMenuItem onClick={() => openCustomize(o)}>Customize plan limits…</DropdownMenuItem>
+   694→                              {o.customized ? (
+   695→                                <DropdownMenuItem
+   696→                                  onClick={() => void onAction(o.id, { action: 'resetCustom' }, 'Custom limits removed')}
+   697→                                >
+   698→                                  Reset custom limits
+   699→                                </DropdownMenuItem>
+   700→                              ) : null}
+   701→                            </DropdownMenuContent>
+   702→                          </DropdownMenu>
+   703→                          <AlertDialog>
+   704→                            <AlertDialogTrigger asChild>
+   705→                              <Button
+   706→                                size="sm"
+   707→                                variant="ghost"
+   708→                                className="h-10 text-destructive hover:text-destructive"
+   709→                                aria-label={`Delete ${o.name}`}
+   710→                              >
+   711→                                <Trash2 className="size-4" aria-hidden />
+   712→                              </Button>
+   713→                            </AlertDialogTrigger>
+   714→                            <AlertDialogContent>
+   715→                              <AlertDialogHeader>
+   716→                                <AlertDialogTitle>Delete {o.name}?</AlertDialogTitle>
+   717→                                <AlertDialogDescription>
+   718→                                  {o.operating
+   719→                                    ? 'This is the OPERATING organization — deleting it wipes ALL business data. Type the exact name to confirm.'
+   720→                                    : 'Type the exact organization name to confirm.'}
+   721→                                </AlertDialogDescription>
+   722→                              </AlertDialogHeader>
+   723→                              <DeleteConfirm name={o.name} onConfirm={() => void del(o.id, o.name)} />
+   724→                            </AlertDialogContent>
+   725→                          </AlertDialog>
+   726→                        </div>
+   727→                      </TableCell>
+   728→                    </TableRow>
+   729→                  ))}
+   730→                </TableBody>
+   731→              </Table>
+   732→            </div>
+   733→          </CardContent>
+   734→        </Card>
+   735→      )}
+   736→
+   737→      <BackupCard />
+   738→
+   739→      {/* Create organization dialog */}
+   740→      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+   741→        <DialogContent className="sm:max-w-md">
+   742→          <DialogHeader>
+   743→            <DialogTitle>Create organization</DialogTitle>
+   744→            <DialogDescription>Creates a real Company row with a plan and trial. The ERP keeps operating the first org.</DialogDescription>
+   745→          </DialogHeader>
+   746→          <div className="space-y-3">
+   747→            <div className="space-y-1.5">
+   748→              <Label htmlFor="org-name">Name</Label>
+   749→              <Input
+   750→                id="org-name"
+   751→                value={form.name}
+   752→                onChange={(e) => setForm({ ...form, name: e.target.value })}
+   753→                className="h-11"
+   754→                placeholder="Acme Industries"
+   755→              />
+   756→            </div>
+   757→            <div className="grid gap-3 sm:grid-cols-2">
+   758→              <div className="space-y-1.5">
+   759→                <Label htmlFor="org-email">Email (optional)</Label>
+   760→                <Input
+   761→                  id="org-email"
+   762→                  type="email"
+   763→                  value={form.email}
+   764→                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+   765→                  className="h-11"
+   766→                  placeholder="works@acme.example.com"
+   767→                />
+   768→              </div>
+   769→              <div className="space-y-1.5">
+   770→                <Label htmlFor="org-city">City (optional)</Label>
+   771→                <Input
+   772→                  id="org-city"
+   773→                  value={form.city}
+   774→                  onChange={(e) => setForm({ ...form, city: e.target.value })}
+   775→                  className="h-11"
+   776→                  placeholder="Pune"
+   777→                />
+   778→              </div>
+   779→            </div>
+   780→            <div className="space-y-1.5">
+   781→              <Label htmlFor="org-gstin">GSTIN (optional)</Label>
+   782→              <Input
+   783→                id="org-gstin"
+   784→                value={form.gstin}
+   785→                onChange={(e) => setForm({ ...form, gstin: e.target.value.toUpperCase() })}
+   786→                className="h-11 font-mono"
+   787→                maxLength={15}
+   788→                placeholder="27ABCDE1234F1Z5"
+   789→              />
+   790→            </div>
+   791→            <div className="grid gap-3 sm:grid-cols-2">
+   792→              <div className="space-y-1.5">
+   793→                <Label>Plan</Label>
+   794→                <Select value={form.planId} onValueChange={(v) => setForm({ ...form, planId: v })}>
+   795→                  <SelectTrigger className="h-11">
+   796→                    <SelectValue />
+   797→                  </SelectTrigger>
+   798→                  <SelectContent>
+   799→                    <SelectItem value="none">No plan (unlimited)</SelectItem>
+   800→                    {plans.map((p) => (
+   801→                      <SelectItem key={p.id} value={p.id}>
+   802→                        {p.name}
+   803→                      </SelectItem>
+   804→                    ))}
+   805→                  </SelectContent>
+   806→                </Select>
+   807→              </div>
+   808→              <div className="space-y-1.5">
+   809→                <Label htmlFor="org-trial">Trial days</Label>
+   810→                <Input
+   811→                  id="org-trial"
+   812→                  type="number"
+   813→                  min={0}
+   814→                  max={365}
+   815→                  value={form.trialDays}
+   816→                  onChange={(e) => setForm({ ...form, trialDays: e.target.value })}
+   817→                  className="h-11"
+   818→                />
+   819→              </div>
+   820→            </div>
+   821→          </div>
+   822→          <DialogFooter className="gap-2">
+   823→            <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={creating} className="h-11">
+   824→              Cancel
+   825→            </Button>
+   826→            <Button onClick={create} disabled={!form.name.trim() || creating} className="h-11 gap-2">
+   827→              {creating ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null} Create
+   828→            </Button>
+   829→          </DialogFooter>
+   830→        </DialogContent>
+   831→      </Dialog>
+   832→
+   833→      {/* Customize plan limits dialog */}
+   834→      <Dialog open={!!customizing} onOpenChange={(o) => !o && setCustomizing(null)}>
+   835→        <DialogContent className="sm:max-w-md">
+   836→          <DialogHeader>
+   837→            <DialogTitle>Customize plan — {customizing?.name}</DialogTitle>
+   838→            <DialogDescription>
+   839→              Per-organization overrides. Blank = plan default · 0 = unlimited.
+   840→            </DialogDescription>
+   841→          </DialogHeader>
+   842→          <div className="grid gap-3 sm:grid-cols-3">
+   843→            <div className="space-y-1.5">
+   844→              <Label htmlFor="c-items">Items</Label>
+   845→              <Input
+   846→                id="c-items"
+   847→                type="number"
+   848→                min={0}
+   849→                value={custom.items}
+   850→                onChange={(e) => setCustom({ ...custom, items: e.target.value })}
+   851→                className="h-11"
+   852→                placeholder={customizing ? String(customizing.plan?.name ?? 'unlimited') : '0'}
+   853→              />
+   854→            </div>
+   855→            <div className="space-y-1.5">
+   856→              <Label htmlFor="c-wh">Warehouses</Label>
+   857→              <Input
+   858→                id="c-wh"
+   859→                type="number"
+   860→                min={0}
+   861→                value={custom.warehouses}
+   862→                onChange={(e) => setCustom({ ...custom, warehouses: e.target.value })}
+   863→                className="h-11"
+   864→                placeholder="plan"
+   865→              />
+   866→            </div>
+   867→            <div className="space-y-1.5">
+   868→              <Label htmlFor="c-parties">Parties</Label>
+   869→              <Input
+   870→                id="c-parties"
+   871→                type="number"
+   872→                min={0}
+   873→                value={custom.parties}
+   874→                onChange={(e) => setCustom({ ...custom, parties: e.target.value })}
+   875→                className="h-11"
+   876→                placeholder="plan"
+   877→              />
+   878→            </div>
+   879→          </div>
+   880→          <DialogFooter className="gap-2">
+   881→            <Button variant="outline" onClick={() => setCustomizing(null)} disabled={savingCustom} className="h-11">
+   882→              Cancel
+   883→            </Button>
+   884→            <Button onClick={saveCustom} disabled={savingCustom} className="h-11 gap-2">
+   885→              {savingCustom ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Save className="size-4" aria-hidden />} Save limits
+   886→            </Button>
+   887→          </DialogFooter>
+   888→        </DialogContent>
+   889→      </Dialog>
+   890→    </div>
+   891→  )
+   892→}
+   893→
+   894→function DeleteConfirm({ name, onConfirm }: { name: string; onConfirm: () => void }) {
+   895→  const [typed, setTyped] = useState('')
+   896→  return (
+   897→    <div className="space-y-3">
+   898→      <Input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={`Type "${name}" to confirm`} className="h-11" />
+   899→      <AlertDialogFooter>
+   900→        <AlertDialogCancel>Keep</AlertDialogCancel>
+   901→        <AlertDialogAction
+   902→          disabled={typed !== name}
+   903→          onClick={onConfirm}
+   904→          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+   905→        >
+   906→          Delete permanently
+   907→        </AlertDialogAction>
+   908→      </AlertDialogFooter>
+   909→    </div>
+   910→  )
+   911→}
+   912→
+   913→// ---------------------------------------------------------------------------
+   914→// Plans tab — pricing cards (reference style) with limits + feature pills
+   915→// ---------------------------------------------------------------------------
+   916→
+   917→function PlansTab({ plans, apiKey, reload }: { plans: Plan[]; apiKey: string; reload: () => Promise<void> }) {
+   918→  const [open, setOpen] = useState(false)
+   919→  const [editing, setEditing] = useState<Plan | null>(null)
+   920→  const [form, setForm] = useState({
+   921→    name: '',
+   922→    priceMonthly: '0',
+   923→    priceYearly: '0',
+   924→    maxItems: '0',
+   925→    maxWarehouses: '0',
+   926→    maxParties: '0',
+   927→  })
+   928→  const [features, setFeatures] = useState<string[]>(PLAN_FEATURE_CATALOG.map((f) => f.key))
+   929→  const [saving, setSaving] = useState(false)
+   930→
+   931→  const openNew = () => {
+   932→    setEditing(null)
+   933→    setForm({ name: '', priceMonthly: '0', priceYearly: '0', maxItems: '0', maxWarehouses: '0', maxParties: '0' })
+   934→    setFeatures(PLAN_FEATURE_CATALOG.map((f) => f.key))
+   935→    setOpen(true)
+   936→  }
+   937→
+   938→  const openEdit = (p: Plan) => {
+   939→    setEditing(p)
+   940→    setForm({
+   941→      name: p.name,
+   942→      priceMonthly: String(p.priceMonthly),
+   943→      priceYearly: String(p.priceYearly),
+   944→      maxItems: String(p.maxItems),
+   945→      maxWarehouses: String(p.maxWarehouses),
+   946→      maxParties: String(p.maxParties),
+   947→    })
+   948→    setFeatures(p.features ?? [])
+   949→    setOpen(true)
+   950→  }
+   951→
+   952→  const save = async () => {
+   953→    setSaving(true)
+   954→    try {
+   955→      const body = {
+   956→        name: form.name.trim(),
+   957→        priceMonthly: Number(form.priceMonthly) || 0,
+   958→        priceYearly: Number(form.priceYearly) || 0,
+   959→        maxItems: Math.max(0, Math.trunc(Number(form.maxItems) || 0)),
+   960→        maxWarehouses: Math.max(0, Math.trunc(Number(form.maxWarehouses) || 0)),
+   961→        maxParties: Math.max(0, Math.trunc(Number(form.maxParties) || 0)),
+   962→        features,
+   963→      }
+   964→      if (editing) await platformApi(`/api/platform/plans/${editing.id}`, { method: 'PATCH', body: JSON.stringify(body) }, apiKey)
+   965→      else await platformApi('/api/platform/plans', { method: 'POST', body: JSON.stringify(body) }, apiKey)
+   966→      toast.success(editing ? 'Plan updated' : 'Plan created')
+   967→      setOpen(false)
+   968→      void reload()
+   969→    } catch (e) {
+   970→      toastError(e)
+   971→    } finally {
+   972→      setSaving(false)
+   973→    }
+   974→  }
+   975→
+   976→  const del = async (p: Plan) => {
+   977→    try {
+   978→      await platformApi(`/api/platform/plans?id=${p.id}`, { method: 'DELETE' }, apiKey)
+   979→      toast.success(`${p.name} deleted`)
+   980→      void reload()
+   981→    } catch (e) {
+   982→      toastError(e)
+   983→    }
+   984→  }
+   985→
+   986→  const limitRow = (value: number, label: string) => (
+   987→    <li className="flex items-center gap-2 text-sm">
+   988→      <Check className="size-4 shrink-0 text-primary" aria-hidden />
+   989→      <span className="tabular-nums">{value === 0 ? 'Unlimited' : value}</span> {label}
+   990→    </li>
+   991→  )
+   992→
+   993→  return (
+   994→    <div className="space-y-5">
+   995→      <div className="flex flex-wrap items-center justify-between gap-3">
+   996→        <h2 className="text-lg font-semibold tracking-tight">Plans ({plans.length})</h2>
+   997→        <Button onClick={openNew} className="h-10 gap-2">
+   998→          <Plus className="size-4" aria-hidden /> Add plan
+   999→        </Button>
+  1000→      </div>
+  1001→
+  1002→      {plans.length === 0 ? (
+  1003→        <Card className="p-0">
+  1004→          <CardContent className="p-6">
+  1005→            <EmptyState
+  1006→              title="No plans yet"
+  1007→              hint="Plans carry pricing, master limits and feature toggles — enforced for the operating organization."
+  1008→              action={
+  1009→                <Button onClick={openNew} className="mt-2 h-11 gap-2">
+  1010→                  <Plus className="size-4" aria-hidden /> Add plan
+  1011→                </Button>
+  1012→              }
+  1013→            />
+  1014→          </CardContent>
+  1015→        </Card>
+  1016→      ) : (
+  1017→        <>
+  1018→          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Standard plans</p>
+  1019→          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+  1020→            {plans.map((p) => (
+  1021→              <Card key={p.id} className="p-0">
+  1022→                <CardContent className="flex h-full flex-col gap-4 p-5">
+  1023→                  <div className="flex items-start justify-between gap-2">
+  1024→                    <div className="min-w-0">
+  1025→                      <p className="truncate text-lg font-semibold tracking-tight">{p.name}</p>
+  1026→                      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+  1027→                        {slugify(p.name).toUpperCase()}
+  1028→                      </p>
+  1029→                    </div>
+  1030→                    <div className="flex shrink-0 gap-1.5">
+  1031→                      <Button size="sm" variant="outline" className="h-8 rounded-full px-3 text-xs" onClick={() => openEdit(p)}>
+  1032→                        <Pencil className="size-3.5" aria-hidden /> Edit
+  1033→                      </Button>
+  1034→                      <AlertDialog>
+  1035→                        <AlertDialogTrigger asChild>
+  1036→                          <Button
+  1037→                            size="sm"
+  1038→                            variant="outline"
+  1039→                            className="h-8 rounded-full border-destructive/40 px-3 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+  1040→                            disabled={(p._count?.companies ?? 0) > 0}
+  1041→                            title={(p._count?.companies ?? 0) > 0 ? 'Plans in use by organizations cannot be deleted' : `Delete ${p.name}`}
+  1042→                          >
+  1043→                            Delete
+  1044→                          </Button>
+  1045→                        </AlertDialogTrigger>
+  1046→                        <AlertDialogContent>
+  1047→                          <AlertDialogHeader>
+  1048→                            <AlertDialogTitle>Delete plan {p.name}?</AlertDialogTitle>
+  1049→                            <AlertDialogDescription>Plans in use by organizations cannot be deleted.</AlertDialogDescription>
+  1050→                          </AlertDialogHeader>
+  1051→                          <AlertDialogFooter>
+  1052→                            <AlertDialogCancel>Keep</AlertDialogCancel>
+  1053→                            <AlertDialogAction
+  1054→                              onClick={() => void del(p)}
+  1055→                              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+  1056→                            >
+  1057→                              Delete
+  1058→                            </AlertDialogAction>
+  1059→                          </AlertDialogFooter>
+  1060→                        </AlertDialogContent>
+  1061→                      </AlertDialog>
+  1062→                    </div>
+  1063→                  </div>
+  1064→
+  1065→                  <div>
+  1066→                    <p className="text-2xl font-bold tabular-nums text-primary">
+  1067→                      ₹{money(p.priceMonthly)}
+  1068→                      <span className="text-sm font-normal text-muted-foreground">/month</span>
+  1069→                    </p>
+  1070→                    <p className="text-sm tabular-nums text-muted-foreground">₹{money(p.priceYearly)}/year</p>
+  1071→                  </div>
+  1072→
+  1073→                  <div className="space-y-2">
+  1074→                    <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Limits</p>
+  1075→                    <ul className="space-y-1.5">
+  1076→                      {limitRow(p.maxItems, 'items')}
+  1077→                      {limitRow(p.maxWarehouses, 'warehouses')}
+  1078→                      {limitRow(p.maxParties, 'parties')}
+  1079→                      <li className="flex items-center gap-2 text-sm">
+  1080→                        <Check className="size-4 shrink-0 text-primary" aria-hidden />
+  1081→                        <span className="tabular-nums">{p._count?.companies ?? 0}</span> organizations
+  1082→                      </li>
+  1083→                    </ul>
+  1084→                  </div>
+  1085→
+  1086→                  <div className="mt-auto space-y-2">
+  1087→                    <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Features</p>
+  1088→                    <div className="flex flex-wrap gap-1.5">
+  1089→                      {PLAN_FEATURE_CATALOG.map((f) => {
+  1090→                        const on = (p.features ?? []).includes(f.key)
+  1091→                        return (
+  1092→                          <span
+  1093→                            key={f.key}
+  1094→                            title={on ? `${f.label} — included & enforced` : `${f.label} — not included`}
+  1095→                            className={cn(
+  1096→                              'inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-medium',
+  1097→                              on
+  1098→                                ? 'border-primary/30 bg-primary/10 text-primary'
+  1099→                                : 'border-border bg-muted text-muted-foreground line-through'
+  1100→                            )}
+  1101→                          >
+  1102→                            {f.label}
+  1103→                          </span>
+  1104→                        )
+  1105→                      })}
+  1106→                    </div>
+  1107→                  </div>
+  1108→                </CardContent>
+  1109→              </Card>
+  1110→            ))}
+  1111→          </div>
+  1112→        </>
+  1113→      )}
+  1114→
+  1115→      <Dialog open={open} onOpenChange={setOpen}>
+  1116→        <DialogContent className="sm:max-w-lg">
+  1117→          <DialogHeader>
+  1118→            <DialogTitle>{editing ? `Edit plan — ${editing.name}` : 'New plan'}</DialogTitle>
+  1119→            <DialogDescription>Limits of 0 mean unlimited. Prices are in ₹ (0 = free). Features toggle real enforcement.</DialogDescription>
+  1120→          </DialogHeader>
+  1121→          <div className="grid gap-3 sm:grid-cols-2">
+  1122→            <div className="space-y-1.5 sm:col-span-2">
+  1123→              <Label htmlFor="plan-name">Name</Label>
+  1124→              <Input
+  1125→                id="plan-name"
+  1126→                value={form.name}
+  1127→                onChange={(e) => setForm({ ...form, name: e.target.value })}
+  1128→                className="h-11"
+  1129→                placeholder="Growth"
+  1130→              />
+  1131→            </div>
+  1132→            <div className="space-y-1.5">
+  1133→              <Label htmlFor="plan-m">₹ / month</Label>
+  1134→              <Input
+  1135→                id="plan-m"
+  1136→                type="number"
+  1137→                min={0}
+  1138→                value={form.priceMonthly}
+  1139→                onChange={(e) => setForm({ ...form, priceMonthly: e.target.value })}
+  1140→                className="h-11"
+  1141→              />
+  1142→            </div>
+  1143→            <div className="space-y-1.5">
+  1144→              <Label htmlFor="plan-y">₹ / year</Label>
+  1145→              <Input
+  1146→                id="plan-y"
+  1147→                type="number"
+  1148→                min={0}
+  1149→                value={form.priceYearly}
+  1150→                onChange={(e) => setForm({ ...form, priceYearly: e.target.value })}
+  1151→                className="h-11"
+  1152→              />
+  1153→            </div>
+  1154→            <div className="space-y-1.5">
+  1155→              <Label htmlFor="plan-i">Max items</Label>
+  1156→              <Input
+  1157→                id="plan-i"
+  1158→                type="number"
+  1159→                min={0}
+  1160→                value={form.maxItems}
+  1161→                onChange={(e) => setForm({ ...form, maxItems: e.target.value })}
+  1162→                className="h-11"
+  1163→              />
+  1164→            </div>
+  1165→            <div className="space-y-1.5">
+  1166→              <Label htmlFor="plan-w">Max warehouses</Label>
+  1167→              <Input
+  1168→                id="plan-w"
+  1169→                type="number"
+  1170→                min={0}
+  1171→                value={form.maxWarehouses}
+  1172→                onChange={(e) => setForm({ ...form, maxWarehouses: e.target.value })}
+  1173→                className="h-11"
+  1174→              />
+  1175→            </div>
+  1176→            <div className="space-y-1.5 sm:col-span-2">
+  1177→              <Label htmlFor="plan-p">Max parties</Label>
+  1178→              <Input
+  1179→                id="plan-p"
+  1180→                type="number"
+  1181→                min={0}
+  1182→                value={form.maxParties}
+  1183→                onChange={(e) => setForm({ ...form, maxParties: e.target.value })}
+  1184→                className="h-11"
+  1185→              />
+  1186→            </div>
+  1187→            <div className="space-y-2 sm:col-span-2">
+  1188→              <Label>Features</Label>
+  1189→              <div className="space-y-2 rounded-lg border p-3">
+  1190→                {PLAN_FEATURE_CATALOG.map((f) => (
+  1191→                  <label key={f.key} className="flex cursor-pointer items-start gap-2.5 text-sm">
+  1192→                    <Checkbox
+  1193→                      checked={features.includes(f.key)}
+  1194→                      onCheckedChange={(c) =>
+  1195→                        setFeatures((prev) => (c ? [...prev, f.key] : prev.filter((k) => k !== f.key)))
+  1196→                      }
+  1197→                    />
+  1198→                    <span>
+  1199→                      {f.label}
+  1200→                      <span className="block text-xs text-muted-foreground">
+  1201→                        {f.key === 'exportData' ? 'Tally XML & e-Invoice JSON downloads' : 'GST returns, trial balance, P&L'}
+  1202→                      </span>
+  1203→                    </span>
+  1204→                  </label>
+  1205→                ))}
+  1206→              </div>
+  1207→            </div>
+  1208→          </div>
+  1209→          <DialogFooter className="gap-2">
+  1210→            <Button variant="outline" onClick={() => setOpen(false)} disabled={saving} className="h-11">
+  1211→              Cancel
+  1212→            </Button>
+  1213→            <Button onClick={save} disabled={!form.name.trim() || saving} className="h-11 gap-2">
+  1214→              {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Save className="size-4" aria-hidden />} Save plan
+  1215→            </Button>
+  1216→          </DialogFooter>
+  1217→        </DialogContent>
+  1218→      </Dialog>
+  1219→    </div>
+  1220→  )
+  1221→}
+  1222→
+  1223→// ---------------------------------------------------------------------------
+  1224→// Inquiries tab — lead cards with status + follow-ups
+  1225→// ---------------------------------------------------------------------------
+  1226→
+  1227→function InquiryStatusBadge({ status }: { status: string }) {
+  1228→  switch (status) {
+  1229→    case 'new':
+  1230→      return (
+  1231→        <Badge className="border-transparent bg-primary/10 font-normal text-primary">new</Badge>
+  1232→      )
+  1233→    case 'contacted':
+  1234→      return (
+  1235→        <Badge className="border-transparent bg-amber-100 font-normal text-amber-700 dark:bg-amber-500/15 dark:text-amber-400">
+  1236→          contacted
+  1237→        </Badge>
+  1238→      )
+  1239→    case 'converted':
+  1240→      return (
+  1241→        <Badge className="border-transparent bg-emerald-100 font-normal text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400">
+  1242→          converted
+  1243→        </Badge>
+  1244→      )
+  1245→    default:
+  1246→      return (
+  1247→        <Badge variant="outline" className="font-normal text-muted-foreground">
+  1248→          closed
+  1249→        </Badge>
+  1250→      )
+  1251→  }
+  1252→}
+  1253→
+  1254→function InquiriesTab({
+  1255→  inquiries,
+  1256→  apiKey,
+  1257→  reload,
+  1258→}: {
+  1259→  inquiries: InquiriesResponse | null
+  1260→  apiKey: string
+  1261→  reload: () => Promise<void>
+  1262→}) {
+  1263→  const [createOpen, setCreateOpen] = useState(false)
+  1264→  const [form, setForm] = useState({ name: '', contactName: '', email: '', phone: '', city: '', message: '' })
+  1265→  const [creating, setCreating] = useState(false)
+  1266→  const [followUpFor, setFollowUpFor] = useState<string | null>(null)
+  1267→  const [note, setNote] = useState('')
+  1268→  const [savingNote, setSavingNote] = useState(false)
+  1269→  const [deleting, setDeleting] = useState<InquiryRow | null>(null)
+  1270→
+  1271→  const create = async () => {
+  1272→    setCreating(true)
+  1273→    try {
+  1274→      await platformApi(
+  1275→        '/api/platform/inquiries',
+  1276→        {
+  1277→          method: 'POST',
+  1278→          body: JSON.stringify({
+  1279→            name: form.name,
+  1280→            contactName: form.contactName || undefined,
+  1281→            email: form.email || undefined,
+  1282→            phone: form.phone || undefined,
+  1283→            city: form.city || undefined,
+  1284→            message: form.message || undefined,
+  1285→          }),
+  1286→        },
+  1287→        apiKey
+  1288→      )
+  1289→      toast.success(`Inquiry "${form.name}" logged`)
+  1290→      setCreateOpen(false)
+  1291→      setForm({ name: '', contactName: '', email: '', phone: '', city: '', message: '' })
+  1292→      void reload()
+  1293→    } catch (e) {
+  1294→      toastError(e)
+  1295→    } finally {
+  1296→      setCreating(false)
+  1297→    }
+  1298→  }
+  1299→
+  1300→  const setStatus = async (id: string, status: string) => {
+  1301→    try {
+  1302→      await platformApi(`/api/platform/inquiries/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }, apiKey)
+  1303→      toast.success(`Status set to ${status}`)
+  1304→      void reload()
+  1305→    } catch (e) {
+  1306→      toastError(e)
+  1307→    }
+  1308→  }
+  1309→
+  1310→  const del = async (inq: InquiryRow) => {
+  1311→    try {
+  1312→      await platformApi(`/api/platform/inquiries/${inq.id}`, { method: 'DELETE' }, apiKey)
+  1313→      toast.success(`${inq.name} deleted`)
+  1314→      setDeleting(null)
+  1315→      void reload()
+  1316→    } catch (e) {
+  1317→      toastError(e)
+  1318→    }
+  1319→  }
+  1320→
+  1321→  const addFollowUp = async (id: string) => {
+  1322→    if (!note.trim()) return
+  1323→    setSavingNote(true)
+  1324→    try {
+  1325→      await platformApi(`/api/platform/inquiries/${id}/follow-ups`, { method: 'POST', body: JSON.stringify({ note }) }, apiKey)
+  1326→      toast.success('Follow-up logged')
+  1327→      setNote('')
+  1328→      setFollowUpFor(null)
+  1329→      void reload()
+  1330→    } catch (e) {
+  1331→      toastError(e)
+  1332→    } finally {
+  1333→      setSavingNote(false)
+  1334→    }
+  1335→  }
+  1336→
+  1337→  const list = inquiries?.inquiries ?? []
+  1338→
+  1339→  return (
+  1340→    <div className="space-y-5">
+  1341→      <div className="flex flex-wrap items-center justify-between gap-3">
+  1342→        <h2 className="text-lg font-semibold tracking-tight">Inquiries ({list.length})</h2>
+  1343→        <div className="flex gap-2">
+  1344→          <Button variant="outline" onClick={() => void reload()} className="h-10 gap-2 rounded-full">
+  1345→            <RefreshCw className="size-4" aria-hidden /> Refresh
+  1346→          </Button>
+  1347→          <Button onClick={() => setCreateOpen(true)} className="h-10 gap-2">
+  1348→            <Plus className="size-4" aria-hidden /> Log inquiry
+  1349→          </Button>
+  1350→        </div>
+  1351→      </div>
+  1352→
+  1353→      {list.length === 0 ? (
+  1354→        inquiries ? (
+  1355→          <Card className="p-0">
+  1356→            <CardContent className="p-6">
+  1357→              <EmptyState
+  1358→                title="No inquiries"
+  1359→                hint="Sales leads land here. Log one manually or pull Refresh to check for new ones."
+  1360→              />
+  1361→            </CardContent>
+  1362→          </Card>
+  1363→        ) : (
+  1364→          <CardSkeleton className="h-40" />
+  1365→        )
+  1366→      ) : (
+  1367→        <div className="space-y-4">
+  1368→          {list.map((inq) => {
+  1369→            const contact = [inq.contactName, inq.email, inq.phone, inq.city].filter(Boolean).join(' · ')
+  1370→            return (
+  1371→              <Card key={inq.id} className="p-0">
+  1372→                <CardContent className="p-0">
+  1373→                  <div className="space-y-2 p-5">
+  1374→                    <div className="flex flex-wrap items-start justify-between gap-3">
+  1375→                      <div className="min-w-0 space-y-1">
+  1376→                        <div className="flex flex-wrap items-center gap-2">
+  1377→                          <p className="text-lg font-semibold tracking-tight">{inq.name}</p>
+  1378→                          <InquiryStatusBadge status={inq.status} />
+  1379→                        </div>
+  1380→                        {contact ? <p className="text-sm text-muted-foreground">{contact}</p> : null}
+  1381→                        {inq.message ? <p className="max-w-2xl text-sm text-muted-foreground">{inq.message}</p> : null}
+  1382→                        <p className="text-xs text-muted-foreground/80">Received {dt(inq.createdAt)}</p>
+  1383→                      </div>
+  1384→                      <div className="flex shrink-0 items-center gap-2">
+  1385→                        <Select value={inq.status} onValueChange={(v) => void setStatus(inq.id, v)}>
+  1386→                          <SelectTrigger className="h-9 w-32" aria-label={`Status for ${inq.name}`}>
+  1387→                            <SelectValue />
+  1388→                          </SelectTrigger>
+  1389→                          <SelectContent>
+  1390→                            <SelectItem value="new">new</SelectItem>
+  1391→                            <SelectItem value="contacted">contacted</SelectItem>
+  1392→                            <SelectItem value="converted">converted</SelectItem>
+  1393→                            <SelectItem value="closed">closed</SelectItem>
+  1394→                          </SelectContent>
+  1395→                        </Select>
+  1396→                        <Button
+  1397→                          size="sm"
+  1398→                          variant="outline"
+  1399→                          className="h-9 rounded-full border-destructive/40 px-3 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+  1400→                          onClick={() => setDeleting(inq)}
+  1401→                        >
+  1402→                          Delete
+  1403→                        </Button>
+  1404→                      </div>
+  1405→                    </div>
+  1406→                  </div>
+  1407→                  <Separator />
+  1408→                  <div className="space-y-3 p-5">
+  1409→                    <div className="flex flex-wrap items-center justify-between gap-2">
+  1410→                      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+  1411→                        Follow-ups ({inq.followUps.length})
+  1412→                      </p>
+  1413→                      <Button
+  1414→                        size="sm"
+  1415→                        variant="outline"
+  1416→                        className="h-8 rounded-full px-3 text-xs"
+  1417→                        onClick={() => {
+  1418→                          setFollowUpFor(followUpFor === inq.id ? null : inq.id)
+  1419→                          setNote('')
+  1420→                        }}
+  1421→                      >
+  1422→                        <Plus className="size-3.5" aria-hidden /> Add follow-up
+  1423→                      </Button>
+  1424→                    </div>
+  1425→                    {followUpFor === inq.id ? (
+  1426→                      <div className="flex flex-col gap-2 sm:flex-row">
+  1427→                        <Input
+  1428→                          value={note}
+  1429→                          onChange={(e) => setNote(e.target.value)}
+  1430→                          onKeyDown={(e) => {
+  1431→                            if (e.key === 'Enter' && note.trim()) void addFollowUp(inq.id)
+  1432→                          }}
+  1433→                          placeholder="Called the buyer — they want a demo next Tuesday…"
+  1434→                          className="h-10 flex-1"
+  1435→                          maxLength={500}
+  1436→                          autoFocus
+  1437→                        />
+  1438→                        <div className="flex gap-2">
+  1439→                          <Button
+  1440→                            size="sm"
+  1441→                            onClick={() => void addFollowUp(inq.id)}
+  1442→                            disabled={!note.trim() || savingNote}
+  1443→                            className="h-10 gap-2"
+  1444→                          >
+  1445→                            {savingNote ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null} Save
+  1446→                          </Button>
+  1447→                          <Button
+  1448→                            size="sm"
+  1449→                            variant="ghost"
+  1450→                            onClick={() => setFollowUpFor(null)}
+  1451→                            className="h-10"
+  1452→                          >
+  1453→                            Cancel
+  1454→                          </Button>
+  1455→                        </div>
+  1456→                      </div>
+  1457→                    ) : null}
+  1458→                    {inq.followUps.length > 0 ? (
+  1459→                      <ul className="max-h-44 space-y-2 overflow-y-auto erp-scroll-y pr-1">
+  1460→                        {inq.followUps.map((f) => (
+  1461→                          <li key={f.id} className="flex flex-wrap items-baseline justify-between gap-2 rounded-lg bg-muted/40 px-3 py-2">
+  1462→                            <span className="min-w-0 flex-1 text-sm">{f.note}</span>
+  1463→                            <span className="shrink-0 text-[11px] text-muted-foreground">{dt(f.createdAt)}</span>
+  1464→                          </li>
+  1465→                        ))}
+  1466→                      </ul>
+  1467→                    ) : null}
+  1468→                  </div>
+  1469→                </CardContent>
+  1470→              </Card>
+  1471→            )
+  1472→          })}
+  1473→        </div>
+  1474→      )}
+  1475→
+  1476→      {/* Log inquiry dialog */}
+  1477→      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+  1478→        <DialogContent className="sm:max-w-md">
+  1479→          <DialogHeader>
+  1480→            <DialogTitle>Log inquiry</DialogTitle>
+  1481→            <DialogDescription>A sales lead from a prospective customer.</DialogDescription>
+  1482→          </DialogHeader>
+  1483→          <div className="space-y-3">
+  1484→            <div className="space-y-1.5">
+  1485→              <Label htmlFor="inq-name">Organization name</Label>
+  1486→              <Input
+  1487→                id="inq-name"
+  1488→                value={form.name}
+  1489→                onChange={(e) => setForm({ ...form, name: e.target.value })}
+  1490→                className="h-11"
+  1491→                placeholder="Kalyani Castings Pvt. Ltd."
+  1492→              />
+  1493→            </div>
+  1494→            <div className="grid gap-3 sm:grid-cols-2">
+  1495→              <div className="space-y-1.5">
+  1496→                <Label htmlFor="inq-contact">Contact person</Label>
+  1497→                <Input
+  1498→                  id="inq-contact"
+  1499→                  value={form.contactName}
+  1500→                  onChange={(e) => setForm({ ...form, contactName: e.target.value })}
+  1501→                  className="h-11"
+  1502→                  placeholder="Anitha V"
+  1503→                />
+  1504→              </div>
+  1505→              <div className="space-y-1.5">
+  1506→                <Label htmlFor="inq-city">City</Label>
+  1507→                <Input
+  1508→                  id="inq-city"
+  1509→                  value={form.city}
+  1510→                  onChange={(e) => setForm({ ...form, city: e.target.value })}
+  1511→                  className="h-11"
+  1512→                  placeholder="Bengaluru"
+  1513→                />
+  1514→              </div>
+  1515→              <div className="space-y-1.5">
+  1516→                <Label htmlFor="inq-email">Email</Label>
+  1517→                <Input
+  1518→                  id="inq-email"
+  1519→                  type="email"
+  1520→                  value={form.email}
+  1521→                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+  1522→                  className="h-11"
+  1523→                  placeholder="purchase@example.com"
+  1524→                />
+  1525→              </div>
+  1526→              <div className="space-y-1.5">
+  1527→                <Label htmlFor="inq-phone">Phone</Label>
+  1528→                <Input
+  1529→                  id="inq-phone"
+  1530→                  value={form.phone}
+  1531→                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
+  1532→                  className="h-11"
+  1533→                  placeholder="8971233080"
+  1534→                />
+  1535→              </div>
+  1536→            </div>
+  1537→            <div className="space-y-1.5">
+  1538→              <Label htmlFor="inq-msg">What they asked (optional)</Label>
+  1539→              <Textarea
+  1540→                id="inq-msg"
+  1541→                value={form.message}
+  1542→                onChange={(e) => setForm({ ...form, message: e.target.value })}
+  1543→                rows={3}
+  1544→                maxLength={2000}
+  1545→                placeholder="Need jobwork billing for heat treatment + galvanizing…"
+  1546→              />
+  1547→            </div>
+  1548→          </div>
+  1549→          <DialogFooter className="gap-2">
+  1550→            <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={creating} className="h-11">
+  1551→              Cancel
+  1552→            </Button>
+  1553→            <Button onClick={create} disabled={!form.name.trim() || creating} className="h-11 gap-2">
+  1554→              {creating ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null} Log inquiry
+  1555→            </Button>
+  1556→          </DialogFooter>
+  1557→        </DialogContent>
+  1558→      </Dialog>
+  1559→
+  1560→      {/* Delete inquiry confirm */}
+  1561→      <AlertDialog open={!!deleting} onOpenChange={(o) => !o && setDeleting(null)}>
+  1562→        <AlertDialogContent>
+  1563→          <AlertDialogHeader>
+  1564→            <AlertDialogTitle>Delete {deleting?.name}?</AlertDialogTitle>
+  1565→            <AlertDialogDescription>
+  1566→              This removes the inquiry and its {deleting?.followUps.length ?? 0} follow-up(s). This cannot be undone.
+  1567→            </AlertDialogDescription>
+  1568→          </AlertDialogHeader>
+  1569→          <AlertDialogFooter>
+  1570→            <AlertDialogCancel>Keep</AlertDialogCancel>
+  1571→            <AlertDialogAction
+  1572→              onClick={() => deleting && void del(deleting)}
+  1573→              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+  1574→            >
+  1575→              Delete
+  1576→            </AlertDialogAction>
+  1577→          </AlertDialogFooter>
+  1578→        </AlertDialogContent>
+  1579→      </AlertDialog>
+  1580→    </div>
+  1581→  )
+  1582→}
+  1583→
+  1584→// ---------------------------------------------------------------------------
+  1585→// Blog tab — post list + editor
+  1586→// ---------------------------------------------------------------------------
+  1587→
+  1588→function BlogTab({ posts, apiKey, reload }: { posts: BlogPost[]; apiKey: string; reload: () => Promise<void> }) {
+  1589→  const [open, setOpen] = useState(false)
+  1590→  const [editing, setEditing] = useState<BlogPost | null>(null)
+  1591→  const [form, setForm] = useState({ title: '', slug: '', excerpt: '', body: '', status: 'draft' })
+  1592→  const [slugTouched, setSlugTouched] = useState(false)
+  1593→  const [saving, setSaving] = useState(false)
+  1594→
+  1595→  const openNew = () => {
+  1596→    setEditing(null)
+  1597→    setForm({ title: '', slug: '', excerpt: '', body: '', status: 'draft' })
+  1598→    setSlugTouched(false)
+  1599→    setOpen(true)
+  1600→  }
+  1601→
+  1602→  const openEdit = (p: BlogPost) => {
+  1603→    setEditing(p)
+  1604→    setForm({
+  1605→      title: p.title,
+  1606→      slug: p.slug,
+  1607→      excerpt: p.excerpt ?? '',
+  1608→      body: p.body ?? '',
+  1609→      status: p.status === 'published' ? 'published' : 'draft',
+  1610→    })
+  1611→    setSlugTouched(true)
+  1612→    setOpen(true)
+  1613→  }
+  1614→
+  1615→  const save = async () => {
+  1616→    setSaving(true)
+  1617→    try {
+  1618→      const body = {
+  1619→        title: form.title.trim(),
+  1620→        slug: form.slug.trim() ? slugify(form.slug) : undefined,
+  1621→        excerpt: form.excerpt.trim() || undefined,
+  1622→        body: form.body.trim() || undefined,
+  1623→        status: form.status,
+  1624→      }
+  1625→      if (editing) await platformApi(`/api/platform/blog/${editing.id}`, { method: 'PATCH', body: JSON.stringify(body) }, apiKey)
+  1626→      else await platformApi('/api/platform/blog', { method: 'POST', body: JSON.stringify(body) }, apiKey)
+  1627→      toast.success(editing ? 'Post updated' : 'Post created')
+  1628→      setOpen(false)
+  1629→      void reload()
+  1630→    } catch (e) {
+  1631→      toastError(e)
+  1632→    } finally {
+  1633→      setSaving(false)
+  1634→    }
+  1635→  }
+  1636→
+  1637→  const del = async (p: BlogPost) => {
+  1638→    try {
+  1639→      await platformApi(`/api/platform/blog/${p.id}`, { method: 'DELETE' }, apiKey)
+  1640→      toast.success(`"${p.title}" deleted`)
+  1641→      void reload()
+  1642→    } catch (e) {
+  1643→      toastError(e)
+  1644→    }
+  1645→  }
+  1646→
+  1647→  return (
+  1648→    <div className="space-y-5">
+  1649→      <div className="flex flex-wrap items-center justify-between gap-3">
+  1650→        <h2 className="text-lg font-semibold tracking-tight">Blog ({posts.length})</h2>
+  1651→        <Button onClick={openNew} className="h-10 gap-2">
+  1652→          <Plus className="size-4" aria-hidden /> New post
+  1653→        </Button>
+  1654→      </div>
+  1655→
+  1656→      {posts.length === 0 ? (
+  1657→        <Card className="p-0">
+  1658→          <CardContent className="p-6">
+  1659→            <EmptyState
+  1660→              title="No posts yet"
+  1661→              hint="Announcements, release notes and launch posts live here."
+  1662→              action={
+  1663→                <Button onClick={openNew} className="mt-2 h-11 gap-2">
+  1664→                  <Plus className="size-4" aria-hidden /> New post
+  1665→                </Button>
+  1666→              }
+  1667→            />
+  1668→          </CardContent>
+  1669→        </Card>
+  1670→      ) : (
+  1671→        <div className="space-y-3">
+  1672→          {posts.map((p) => (
+  1673→            <Card key={p.id} className="p-0">
+  1674→              <CardContent className="flex flex-wrap items-start justify-between gap-3 p-4">
+  1675→                <div className="min-w-0 flex-1 space-y-1">
+  1676→                  <div className="flex flex-wrap items-center gap-2">
+  1677→                    <p className="text-base font-semibold tracking-tight">{p.title}</p>
+  1678→                    {p.status === 'published' ? (
+  1679→                      <Badge className="border-transparent bg-emerald-100 font-normal text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400">
+  1680→                        published
+  1681→                      </Badge>
+  1682→                    ) : (
+  1683→                      <Badge variant="secondary" className="font-normal">
+  1684→                        draft
+  1685→                      </Badge>
+  1686→                    )}
+  1687→                  </div>
+  1688→                  <p className="font-mono text-xs text-muted-foreground">/{p.slug}</p>
+  1689→                  {p.excerpt ? <p className="max-w-2xl text-sm text-muted-foreground">{p.excerpt}</p> : null}
+  1690→                  <p className="text-xs text-muted-foreground/80">
+  1691→                    {p.publishedAt ? `Published ${dt(p.publishedAt)}` : `Created ${dt(p.createdAt)}`} · Updated {dt(p.updatedAt)}
+  1692→                  </p>
+  1693→                </div>
+  1694→                <div className="flex shrink-0 gap-1.5">
+  1695→                  <Button size="sm" variant="outline" className="h-9 rounded-full px-3 text-xs" onClick={() => openEdit(p)}>
+  1696→                    <Pencil className="size-3.5" aria-hidden /> Edit
+  1697→                  </Button>
+  1698→                  <AlertDialog>
+  1699→                    <AlertDialogTrigger asChild>
+  1700→                      <Button
+  1701→                        size="sm"
+  1702→                        variant="outline"
+  1703→                        className="h-9 rounded-full border-destructive/40 px-3 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+  1704→                      >
+  1705→                        Delete
+  1706→                      </Button>
+  1707→                    </AlertDialogTrigger>
+  1708→                    <AlertDialogContent>
+  1709→                      <AlertDialogHeader>
+  1710→                        <AlertDialogTitle>Delete &ldquo;{p.title}&rdquo;?</AlertDialogTitle>
+  1711→                        <AlertDialogDescription>The post is removed permanently.</AlertDialogDescription>
+  1712→                      </AlertDialogHeader>
+  1713→                      <AlertDialogFooter>
+  1714→                        <AlertDialogCancel>Keep</AlertDialogCancel>
+  1715→                        <AlertDialogAction
+  1716→                          onClick={() => void del(p)}
+  1717→                          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+  1718→                        >
+  1719→                          Delete
+  1720→                        </AlertDialogAction>
+  1721→                      </AlertDialogFooter>
+  1722→                    </AlertDialogContent>
+  1723→                  </AlertDialog>
+  1724→                </div>
+  1725→              </CardContent>
+  1726→            </Card>
+  1727→          ))}
+  1728→        </div>
+  1729→      )}
+  1730→
+  1731→      <Dialog open={open} onOpenChange={setOpen}>
+  1732→        <DialogContent className="sm:max-w-lg">
+  1733→          <DialogHeader>
+  1734→            <DialogTitle>{editing ? 'Edit post' : 'New post'}</DialogTitle>
+  1735→            <DialogDescription>
+  1736→              {editing ? `/${editing.slug}` : 'Slug is generated from the title unless you set one.'}
+  1737→            </DialogDescription>
+  1738→          </DialogHeader>
+  1739→          <div className="space-y-3">
+  1740→            <div className="space-y-1.5">
+  1741→              <Label htmlFor="bp-title">Title</Label>
+  1742→              <Input
+  1743→                id="bp-title"
+  1744→                value={form.title}
+  1745→                onChange={(e) =>
+  1746→                  setForm({
+  1747→                    ...form,
+  1748→                    title: e.target.value,
+  1749→                    ...(slugTouched || editing ? {} : { slug: slugify(e.target.value) }),
+  1750→                  })
+  1751→                }
+  1752→                className="h-11"
+  1753→                placeholder="Introducing ForgeERP 2.0"
+  1754→                maxLength={160}
+  1755→              />
+  1756→            </div>
+  1757→            <div className="grid gap-3 sm:grid-cols-[1fr_160px]">
+  1758→              <div className="space-y-1.5">
+  1759→                <Label htmlFor="bp-slug">Slug</Label>
+  1760→                <Input
+  1761→                  id="bp-slug"
+  1762→                  value={form.slug}
+  1763→                  onChange={(e) => {
+  1764→                    setSlugTouched(true)
+  1765→                    setForm({ ...form, slug: e.target.value })
+  1766→                  }}
+  1767→                  className="h-11 font-mono"
+  1768→                  placeholder={slugify(form.title) || 'auto-from-title'}
+  1769→                  maxLength={80}
+  1770→                />
+  1771→              </div>
+  1772→              <div className="space-y-1.5">
+  1773→                <Label>Status</Label>
+  1774→                <Select value={form.status} onValueChange={(v) => setForm({ ...form, status: v })}>
+  1775→                  <SelectTrigger className="h-11">
+  1776→                    <SelectValue />
+  1777→                  </SelectTrigger>
+  1778→                  <SelectContent>
+  1779→                    <SelectItem value="draft">draft</SelectItem>
+  1780→                    <SelectItem value="published">published</SelectItem>
+  1781→                  </SelectContent>
+  1782→                </Select>
+  1783→              </div>
+  1784→            </div>
+  1785→            <div className="space-y-1.5">
+  1786→              <Label htmlFor="bp-excerpt">Excerpt</Label>
+  1787→              <Input
+  1788→                id="bp-excerpt"
+  1789→                value={form.excerpt}
+  1790→                onChange={(e) => setForm({ ...form, excerpt: e.target.value })}
+  1791→                placeholder="One-line summary shown in lists"
+  1792→                maxLength={300}
+  1793→              />
+  1794→            </div>
+  1795→            <div className="space-y-1.5">
+  1796→              <Label htmlFor="bp-body">Body</Label>
+  1797→              <Textarea
+  1798→                id="bp-body"
+  1799→                value={form.body}
+  1800→                onChange={(e) => setForm({ ...form, body: e.target.value })}
+  1801→                rows={6}
+  1802→                maxLength={20000}
+  1803→                placeholder="Write the post…"
+  1804→              />
+  1805→            </div>
+  1806→          </div>
+  1807→          <DialogFooter className="gap-2">
+  1808→            <Button variant="outline" onClick={() => setOpen(false)} disabled={saving} className="h-11">
+  1809→              Cancel
+  1810→            </Button>
+  1811→            <Button onClick={save} disabled={!form.title.trim() || saving} className="h-11 gap-2">
+  1812→              {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Save className="size-4" aria-hidden />} Save post
+  1813→            </Button>
+  1814→          </DialogFooter>
+  1815→        </DialogContent>
+  1816→      </Dialog>
+  1817→    </div>
+  1818→  )
+  1819→}
+  1820→
+  1821→// ---------------------------------------------------------------------------
+  1822→// Data & backup (kept from the original console — a real, useful tool)
+  1823→// ---------------------------------------------------------------------------
+  1824→
+  1825→function BackupCard() {
+  1826→  const [restoring, setRestoring] = useState(false)
+  1827→  const [confirmText, setConfirmText] = useState('')
+  1828→
+  1829→  const restore = async (file: File) => {
+  1830→    setRestoring(true)
+  1831→    try {
+  1832→      const snapshot = JSON.parse(await file.text())
+  1833→      const res = await api<{ restored: boolean }>('/api/backup/restore', {
+  1834→        method: 'POST',
+  1835→        body: JSON.stringify({ confirm: 'RESTORE', snapshot }),
+  1836→      })
+  1837→      if (res.restored) {
+  1838→        toast.success('Snapshot restored', { description: 'Reload the page to see the restored data.' })
+  1839→      }
+  1840→    } catch (e) {
+  1841→      toastError(e)
+  1842→    } finally {
+  1843→      setRestoring(false)
+  1844→      setConfirmText('')
+  1845→    }
+  1846→  }
+  1847→
+  1848→  return (
+  1849→    <Card className="p-0">
+  1850→      <CardContent className="space-y-3 p-4">
+  1851→        <div className="flex flex-wrap items-center justify-between gap-2">
+  1852→          <div>
+  1853→            <p className="text-sm font-semibold">Data &amp; backup</p>
+  1854→            <p className="text-xs text-muted-foreground">
+  1855→              Full JSON snapshot of every table. Restore is destructive and transactional — everything is replaced inside one
+  1856→              transaction.
+  1857→            </p>
+  1858→          </div>
+  1859→          <Button variant="outline" className="h-10 gap-2 rounded-full" onClick={() => downloadUrl('/api/backup')}>
+  1860→            <DatabaseBackup className="size-4" aria-hidden /> Download backup
+  1861→          </Button>
+  1862→        </div>
+  1863→        <div className="flex flex-wrap items-end gap-3 rounded-lg border border-dashed p-3">
+  1864→          <div className="min-w-44 flex-1 space-y-1.5">
+  1865→            <Label htmlFor="restore-confirm">Restore — type RESTORE to enable</Label>
+  1866→            <Input
+  1867→              id="restore-confirm"
+  1868→              value={confirmText}
+  1869→              onChange={(e) => setConfirmText(e.target.value.toUpperCase())}
+  1870→              placeholder="RESTORE"
+  1871→              className="h-11"
+  1872→            />
+  1873→          </div>
+  1874→          <Label
+  1875→            className={`inline-flex h-11 cursor-pointer items-center gap-2 rounded-md border px-4 text-sm font-medium ${
+  1876→              confirmText === 'RESTORE' ? 'border-destructive text-destructive hover:bg-destructive/10' : 'pointer-events-none opacity-50'
+  1877→            }`}
+  1878→          >
+  1879→            {restoring ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <DatabaseBackup className="size-4" aria-hidden />}
+  1880→            {restoring ? 'Restoring…' : 'Pick snapshot file…'}
+  1881→            <input
+  1882→              type="file"
+  1883→              accept="application/json"
+  1884→              className="sr-only"
+  1885→              disabled={confirmText !== 'RESTORE' || restoring}
+  1886→              onChange={(e) => {
+  1887→                const f = e.target.files?.[0]
+  1888→                if (f) void restore(f)
+  1889→                e.target.value = ''
+  1890→              }}
+  1891→            />
+  1892→          </Label>
+  1893→        </div>
+  1894→      </CardContent>
+  1895→    </Card>
+  1896→  )
+  1897→}
+  1898→

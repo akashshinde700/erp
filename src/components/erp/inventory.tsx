@@ -82,7 +82,7 @@ function StockSummaryTab() {
           ) : null}
           <span className="ml-auto tabular-nums">Closing value ₹ {money(totalValue)}</span>
         </div>
-        <div className="max-h-[62vh] overflow-auto erp-scroll">
+        <div className="max-h-[62dvh] overflow-auto erp-scroll [&_[data-slot=table-container]]:overflow-visible">
           <Table>
             <TableHeader className="sticky top-0 z-10 bg-card">
               <TableRow>
@@ -101,7 +101,7 @@ function StockSummaryTab() {
               {rows.map((r) => (
                 <TableRow key={r.item.id}>
                   <TableCell>
-                    <span className="block font-medium">{r.item.name}</span>
+                    <span className="block max-w-40 truncate font-medium">{r.item.name}</span>
                     <span className="block text-xs text-muted-foreground">{r.item.code}</span>
                   </TableCell>
                   <TableCell className="tabular-nums">{r.item.hsn ?? '—'}</TableCell>
@@ -232,20 +232,20 @@ function StockLedgerTab() {
               <EmptyState title="No ledger entries" hint="No stock movements match the current filters." icon={Boxes} />
             </div>
           ) : (
-            <div className="max-h-[62vh] overflow-auto erp-scroll">
+            <div className="max-h-[62dvh] overflow-auto erp-scroll [&_[data-slot=table-container]]:overflow-visible">
               <Table>
                 <TableHeader className="sticky top-0 z-10 bg-card">
                   <TableRow>
                     <TableHead>Date</TableHead>
                     <TableHead>Voucher</TableHead>
                     <TableHead>Item</TableHead>
-                    <TableHead>Warehouse</TableHead>
+                    <TableHead className="hidden sm:table-cell">Warehouse</TableHead>
                     <TableHead className="text-right">Qty In</TableHead>
                     <TableHead className="text-right">Qty Out</TableHead>
-                    <TableHead className="text-right">Rate</TableHead>
+                    <TableHead className="hidden text-right sm:table-cell">Rate</TableHead>
                     <TableHead className="text-right">Balance</TableHead>
-                    <TableHead className="text-right">Value</TableHead>
-                    <TableHead>Remarks</TableHead>
+                    <TableHead className="hidden text-right sm:table-cell">Value</TableHead>
+                    <TableHead className="hidden sm:table-cell">Remarks</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -262,15 +262,15 @@ function StockLedgerTab() {
                         <span className="block max-w-40 truncate font-medium">{r.item?.name ?? '—'}</span>
                         <span className="block text-xs text-muted-foreground">{r.item?.code}</span>
                       </TableCell>
-                      <TableCell className="text-xs">{r.warehouse?.code ?? '—'}</TableCell>
+                      <TableCell className="hidden text-xs sm:table-cell">{r.warehouse?.code ?? '—'}</TableCell>
                       <TableCell className="text-right tabular-nums">{r.qtyIn > 0 ? qtyFmt(r.qtyIn) : ''}</TableCell>
                       <TableCell className="text-right tabular-nums">{r.qtyOut > 0 ? qtyFmt(r.qtyOut) : ''}</TableCell>
-                      <TableCell className="text-right tabular-nums">{money(r.rate)}</TableCell>
+                      <TableCell className="hidden text-right tabular-nums sm:table-cell">{money(r.rate)}</TableCell>
                       <TableCell className="text-right font-medium tabular-nums">{qtyFmt(r.balance)}</TableCell>
-                      <TableCell className="text-right tabular-nums">
+                      <TableCell className="hidden text-right tabular-nums sm:table-cell">
                         <Money value={r.value} plain />
                       </TableCell>
-                      <TableCell className="max-w-40 truncate text-xs text-muted-foreground">{r.remarks ?? ''}</TableCell>
+                      <TableCell className="hidden max-w-40 truncate text-xs text-muted-foreground sm:table-cell">{r.remarks ?? ''}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -444,15 +444,15 @@ function OpeningStockTab() {
         </Table>
       </div>
 
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <Button variant="outline" onClick={() => setRows((rs) => [...rs, { key: seq + 1, itemId: '', qty: '', rate: '' }])} className="h-11 gap-2">
+      <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+        <Button variant="outline" onClick={() => setRows((rs) => [...rs, { key: seq + 1, itemId: '', qty: '', rate: '' }])} className="h-11 gap-2 sm:w-auto">
           <Plus className="size-4" aria-hidden /> Add row
         </Button>
-        <div className="flex items-center gap-4">
+        <div className="flex flex-wrap items-center gap-4">
           <span className="text-sm text-muted-foreground">
             Total: <span className="font-semibold tabular-nums text-foreground">₹ {money(totalValue)}</span>
           </span>
-          <Button onClick={submit} disabled={saving} className="h-11 gap-2">
+          <Button onClick={submit} disabled={saving} className="h-11 gap-2 sm:w-auto">
             {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
             {saving ? 'Posting…' : 'Post Opening Stock'}
           </Button>

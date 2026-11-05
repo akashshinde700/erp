@@ -174,3 +174,68 @@ User directive: on clicking "e-Invoice JSON (GST portal)", the GST portal's Bulk
 ### 13.3 Verification (executed live, headless Chromium)
 - Instrumented `window.open` at click time: exactly one call with the exact portal URL, returning a live Window (not blocked); preview 200 → file download 200 per-invoice (INV-2627-003, toast "e-Invoice JSON ready") and bulk (2026-11-01→05 range).
 - Portal tab confirmed loading the real government site and staying open (multiple repetitions, both entry points; final tab `einvoice1.gst.gov.in/Home/Index?ReturnUrl=%2FInvoice%2FBulkUpload` stable across checks). `bun run lint` clean; no dev.log errors.
+
+## 14. Word user manual + data + Playwright E2E (2026-11-06, session 3)
+
+User directive: ek word file banao jo pura software kaise use krna hai batao — screenshots + instructions + data add + Playwright test.
+
+### 14.1 Data added to the live app (via real UI flows)
+- Sales invoice INV-2627-005 (Flange DN50 SS316 ×10 @ ₹640 → ₹7,552 incl. GST) + full payment received with allocation.
+- Jobwork chain: job card JWI-2627-002 (CNC+QC+Packing) → certificate CERT-2627-002 → auto jobwork GST invoice.
+- New party CUST-004 Nashik Steel Traders (GSTIN 27AAANF4821K1Z0, pincode 422010) — first attempt failed GSTIN checksum validation (app validation working as designed), corrected with computed checksum.
+- Root-caused during this: party POST 400 was invalid-GSTIN checksum (not an app bug); job-cards route is POST-only (GET lives on /api/jobwork/inwards).
+
+### 14.2 Playwright E2E suite — tests/e2e_playwright.py (Python Playwright 1.57 + Chromium)
+16 groups · 49 tests · 49 PASS · 0 console/page errors: app load, 12 module navigation, sales data, 7-item Tally dropdown, e-Invoice JSON single+bulk+preview downloads, Tally voucher/masters XML, jobwork chain data, reports tabs, payment recording, masters data, palette/search, audit trail, platform-admin gate+unlock, mobile 390px (no overflow + drawer), sticky footer (0px gap). Results JSON: agent-ctx/playwright-results.json.
+
+### 14.3 Word manual — ForgeERP-User-Manual.docx (project root, ~4.9 MB, 30 pages)
+- Hindi (Devanagari, Mangal complex-script) + English tech terms; cover recipe R1 + DM-1 palette (per docx skill design system; calcTitleLayout/calcCoverSpacing).
+- 33 embedded screenshots (agent-ctx/manual/*.png) with numbered captions; 16 chapters: intro, navigation+shortcuts, masters, sales, payment, jobwork chain (crown chapter), purchase, inventory, accounting, reports, Tally+e-Invoice (incl. GST-portal auto-open steps), platform admin, audit trail, mobile, Playwright results table, troubleshooting table.
+- 3-section structure: cover (margin 0) → विषय-सूची TOC (Roman i, ii; TableOfContents field + placeholders) → body (Arabic from 1); footers patched PAGE \* ROMAN / \* arabic; empty pgNumType removed.
+- Generator: agent-ctx/manual/generate-manual.js (docx@9.15.2 + image-size); postcheck: 0 errors (2 acceptable warnings: table cell 276 spacing, Mangal font fallback).
+- Verified via LibreOffice→PDF render + VLM review of pages 1-5 and mid/end pages: cover, TOC entries, Hindi text, tables, figures all clean.
+
+## 15. Mobile UI/UX + PWA hardening (2026-11-06, session 4)
+
+User directive (master prompt): full PWA/mobile audit → root causes → fixes → viewport testing, preserving the existing theme, business logic and desktop layout.
+
+### 15.1 Root causes found (3-agent module audit + browser verification)
+1. **Dialog gutter regression (all modules)**: custom `max-w-*` classes on DialogContent defeated shadcn's `max-w-[calc(100%-2rem)]` via tailwind-merge → full-bleed dialogs below 640px AND a silent 512px (`sm:max-w-lg`) cap on desktop. 9 call sites affected.
+2. **Dead sticky table headers**: `Table` primitive's own `overflow-x-auto` wrapper is the nearest scroll container, so `sticky top-0` on thead never engaged the outer `max-h-[62vh]` scroller.
+3. **~800px nested line-item editor** inside a 272px dialog (invoice create form) — worst mobile data-entry path.
+4. **vh units** (`92vh/62vh/68vh/100vh`) under iOS dynamic toolbars + soft keyboard.
+5. **No PWA at all**: no manifest, no icons, no service worker, no viewport/themeColor metadata.
+6. **KPI money values**: unbreakable `₹ 12,34,56,789.00` strings at 24px overflowed 149px cards (the source of a 5px document-wide overflow at 768px, traced via scrollWidth forensics).
+7. Wide tables (9–11 cols) = 2–3-screen swipe tracks at 320px; 20px checkboxes; 28px inner tabs; sub-40px tap targets on platform/tally rows; missing truncates on user-data strings.
+
+### 15.2 Fixes (files → purpose)
+- `ui/dialog.tsx` — hardened base width to `w-[calc(100%-2rem)]` (width group ≠ max-w group, so caller `max-w-*` can never kill the mobile gutter); 36px close-button hit area; `pr-9` title so long titles don't run under the X; mobile `p-4 sm:p-6`.
+- Dialog call-sites normalized (`sm:max-w-*` only, no bare `max-w-*`, no `w-full`, `dvh`): invoice-module (create invoice), jobwork (inward + job card), masters (party view/edit, item, warehouse, process), accounting (payment).
+- Sticky-header fix without touching the Table primitive: outer scrollers get `[&_[data-slot=table-container]]:overflow-visible` (10 tables across 7 modules) + `62vh→62dvh`/`68vh→68dvh`/`92vh→92dvh` everywhere; erp-app sidebar `100vh→100dvh`.
+- `invoice-module.tsx` — **stacked line-item editor below sm** (labeled full-width fields, per-line Taxable/Total footer, 44px delete, same state handlers as the desktop table which stays `hidden sm:block`); list hides Taxable/GST/Paid/Balance below `md` and Source below `lg`; Eye button hidden below md (row tap navigates); item meta 10px→12px.
+- Column hiding: masters items (Group/HSN/Cost/Reorder/Flags below sm), parties (Types/State/City/Opening Bal), inventory ledger (Warehouse/Rate/Value/Remarks), accounting payments (Mode/Ref/Allocated below md), allocation (Date below sm), GSTR-1 (CGST/SGST/IGST below md), platform orgs (Usage/Expiry below md).
+- `platform.tsx` — org actions collapsed into a `⋯` overflow menu below md (40px trigger, guarded Delete stays its own 40px button); row buttons 40px on touch.
+- Truncates/`min-w-0` on unbounded strings (jobwork item/process names, challan, inventory item, masters stat grid, audit details + title tooltip); tally pairing buttons ≥44px, `break-all` on the connector command, LINEERROR title tooltip; invoice-print summary tables `min-w-0 sm:min-w-72`.
+- Inputs: phone `type=tel inputMode=tel` (party + company), company pincode digit-strip + inputMode; opening-stock footer stacks with full-width Post; company save full-width below sm.
+- `bits.tsx` KpiCard — **container-query font sizing** (`@container` + `@min-[200px/260px/320px]`) so ₹ amounts always fit their card at every breakpoint + `title` tooltip (root fix for the 768px overflow).
+- Dashboard: quick-action labels wrap (no truncation), "View all" 40px; palette kbd hints `hidden sm:inline` on touch; masters inner tabs 28px→36/44px; audit filters `w-full sm:w-40`.
+
+### 15.3 PWA built from scratch
+- `public/manifest.webmanifest` (standalone, `/` scope+start, any orientation, theme #00785c, bg #f8f7f2, 3 icons incl. maskable), `scripts/gen-icons.mjs` (sharp renders the emerald factory brand mark → 32/192/512/maskable-512/apple-180).
+- `public/sw.js` — **never caches `/api/*`** (no stale financial data, no replay); navigations network-first with offline fallback; statics stale-while-revalidate only when the server allows caching (dev HTML `no-store` never pinned — v2); old caches purged on activate; updates wait for explicit user-approved `SKIP_WAITING` (no silent takeovers).
+- `public/offline.html` — branded offline page (safe-area aware, dark-mode aware) with retry CTA.
+- `src/components/pwa-register.tsx` — SW registration, persistent amber **offline banner** (useSyncExternalStore online status; states that transactions are not queued), update toast with Reload action (guarded controllerchange, no first-visit reload).
+- `layout.tsx` — `viewport` export (`viewport-fit=cover`, themeColor light/dark), manifest link, local icon set, appleWebApp metadata.
+
+### 15.4 Performance
+- All 15 module views `React.lazy` + Suspense skeleton (`erp-app.tsx`) — initial payload carries only shell+dashboard; heavy chunks (invoice editor, masters, jobwork, charts) load on first navigation. Zustand state unaffected.
+
+### 15.5 Verification (agent-browser, live dev server)
+- **Viewport matrix — 8/8 PASS** (320×568, 360×800, 375×812, 390×844, 412×915, 768×1024, 1024×768, 1366×768): zero document-level horizontal overflow on the dashboard; all 11 modules swept clean at 320px.
+- Found+fixed during testing: header company-name span (38px overflow at 320) and KPI money overflow (5px at 768).
+- **Mobile golden path**: created INV-2627-007 via the stacked line editor at 360px (stock validation correctly blocked MAIN-warehouse post first; succeeded from JW store; ₹5,406→₹6,379 w/ 18% GST; DB row verified) → recorded ₹500 partial payment RCP-2627-005 on mobile (DB: paid 500, balance 5,879, GL committed).
+- Drawer: opens/closes, scroll locked while open + restored on close, Escape closes, closes after navigation; tablet 768 shows desktop sidebar + hides hamburger.
+- Dialog gutters measured 16px each side at 320/360; 92dvh cap + internal scroll verified; column hiding verified by header inspection (6→5 visible cols items table at 320; 11 restored at 1366).
+- PWA: manifest/sw/offline/icons all 200; SW `registered/active/controlled` scope `/`; offline emulation → amber banner shows, page fetches fail honestly (no fake success), offline.html precached (full-outage navigation fallback is code-reviewed + precache-verified; CDP offline emulation does not block the SW's own fetches, so the end-to-end fallback could not be exercised here — flagged honestly).
+- e-Invoice JSON + GST-portal auto-open regression PASS (exact portal URL, retry engaged when first open blocked, preview 200 → download 200, toast confirmed).
+- Desktop regression: all 11 Sales columns, sidebar, charts, no overflow at 1366; `bun run lint` clean; no dev.log errors; no console errors (only pre-existing Radix a11y warnings).

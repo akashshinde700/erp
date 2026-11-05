@@ -1,0 +1,1767 @@
+     1→'use client'
+     2→
+     3→/**
+     4→ * ForgeERP — Masters view.
+     5→ * Parties (GSTIN live checksum), Items, Warehouses, Processes (WEIGHT/QTY
+     6→ * basis), Party Rates grid (full-list replace), Company profile.
+     7→ */
+     8→
+     9→import { useEffect, useMemo, useState } from 'react'
+    10→import { toast } from 'sonner'
+    11→import {
+    12→  BookOpen,
+    13→  Building2,
+    14→  CheckCircle2,
+    15→  Database,
+    16→  Eye,
+    17→  HandCoins,
+    18→  ListChecks,
+    19→  Package,
+    20→  Pencil,
+    21→  Plus,
+    22→  ReceiptText,
+    23→  Search,
+    24→  ShoppingCart,
+    25→  Store,
+    26→  Wrench,
+    27→  XCircle,
+    28→} from 'lucide-react'
+    29→import { Badge } from '@/components/ui/badge'
+    30→import { Button } from '@/components/ui/button'
+    31→import { Card, CardContent } from '@/components/ui/card'
+    32→import { Checkbox } from '@/components/ui/checkbox'
+    33→import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+    34→import { Input } from '@/components/ui/input'
+    35→import { Label } from '@/components/ui/label'
+    36→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+    37→import { Switch } from '@/components/ui/switch'
+    38→import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+    39→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+    40→import { Skeleton } from '@/components/ui/skeleton'
+    41→import {
+    42→  apiDelete,
+    43→  apiPost,
+    44→  apiPut,
+    45→  num,
+    46→  toastError,
+    47→  useApi,
+    48→  type Company,
+    49→  type Item,
+    50→  type Party,
+    51→  type PartyRateGrid,
+    52→  type PartyRateRow,
+    53→  type Process,
+    54→  type Warehouse,
+    55→} from './api'
+    56→import { EmptyState, Money, SectionHeading, TableSkeleton } from './bits'
+    57→import { useErpUi } from './store'
+    58→import { setCreatePreset } from './nav'
+    59→import { INDIAN_STATES, stateName, gstinChecksumValid, dateStr, money, PARTY_TYPES, UOMS } from '@/lib/erp'
+    60→
+    61→const GST_RATES = [0, 5, 12, 18, 28]
+    62→
+    63→export function MastersView() {
+    64→  return (
+    65→    <div className="space-y-4">
+    66→      <SectionHeading
+    67→        title="Masters"
+    68→        description="Parties, items, warehouses, process rates and the company profile — the reference data every transaction validates against."
+    69→      />
+    70→      <Tabs defaultValue="parties">
+    71→        <TabsList className="h-11 w-full justify-start overflow-x-auto sm:w-auto">
+    72→          <TabsTrigger value="parties" className="h-9">Parties</TabsTrigger>
+    73→          <TabsTrigger value="items" className="h-9">Items</TabsTrigger>
+    74→          <TabsTrigger value="warehouses" className="h-9">Warehouses</TabsTrigger>
+    75→          <TabsTrigger value="processes" className="h-9">Processes</TabsTrigger>
+    76→          <TabsTrigger value="party-rates" className="h-9">Party Rates</TabsTrigger>
+    77→          <TabsTrigger value="company" className="h-9">Company</TabsTrigger>
+    78→        </TabsList>
+    79→        <TabsContent value="parties" className="mt-4"><PartiesTab /></TabsContent>
+    80→        <TabsContent value="items" className="mt-4"><ItemsTab /></TabsContent>
+    81→        <TabsContent value="warehouses" className="mt-4"><WarehousesTab /></TabsContent>
+    82→        <TabsContent value="processes" className="mt-4"><ProcessesTab /></TabsContent>
+    83→        <TabsContent value="party-rates" className="mt-4"><PartyRatesTab /></TabsContent>
+    84→        <TabsContent value="company" className="mt-4"><CompanyTab /></TabsContent>
+    85→      </Tabs>
+    86→    </div>
+    87→  )
+    88→}
+    89→
+    90→// ---------- shared bits ----------
+    91→
+    92→function GstinHint({ value }: { value: string }) {
+    93→  if (!value.trim()) return <p className="text-xs text-muted-foreground">Optional for B2C / unregistered.</p>
+    94→  const ok = gstinChecksumValid(value)
+    95→  return (
+    96→    <p className={`flex items-center gap-1 text-xs font-medium ${ok ? 'text-primary' : 'text-destructive'}`}>
+    97→      {ok ? <CheckCircle2 className="size-3.5" aria-hidden /> : <XCircle className="size-3.5" aria-hidden />}
+    98→      {ok ? 'Checksum valid' : 'Invalid GSTIN — checksum failed (format: 27ABCDE1234F1Z5)'}
+    99→    </p>
+   100→  )
+   101→}
+   102→
+   103→function ActiveToggle({
+   104→  active,
+   105→  onToggle,
+   106→  label,
+   107→}: {
+   108→  active: boolean
+   109→  onToggle: () => void
+   110→  label: string
+   111→}) {
+   112→  return (
+   113→    <Button
+   114→      variant={active ? 'ghost' : 'outline'}
+   115→      size="sm"
+   116→      onClick={onToggle}
+   117→      className={`h-11 md:h-9 ${active ? 'text-muted-foreground hover:text-destructive' : 'text-primary'}`}
+   118→    >
+   119→      {active ? 'Deactivate' : 'Reactivate'}
+   120→      <span className="sr-only"> — {label}</span>
+   121→    </Button>
+   122→  )
+   123→}
+   124→
+   125→// ===========================================================================
+   126→// Parties
+   127→// ===========================================================================
+   128→
+   129→function PartiesTab() {
+   130→  const list = useApi<Party[]>('/api/masters/parties')
+   131→  const setView = useErpUi((s) => s.setView)
+   132→  const [search, setSearch] = useState('')
+   133→  const [dialogOpen, setDialogOpen] = useState(false)
+   134→  const [editing, setEditing] = useState<Party | null>(null)
+   135→  const [viewing, setViewing] = useState<Party | null>(null)
+   136→
+   137→  const parties = (list.data ?? []).filter((p) => {
+   138→    const q = search.trim().toLowerCase()
+   139→    if (!q) return true
+   140→    return p.name.toLowerCase().includes(q) || p.code.toLowerCase().includes(q) || (p.gstin ?? '').toLowerCase().includes(q)
+   141→  })
+   142→
+   143→  const toggleActive = async (p: Party) => {
+   144→    try {
+   145→      await apiDelete(`/api/masters/parties/${p.id}${p.active ? '' : '?activate=1'}`)
+   146→      toast.success(`${p.code} ${p.active ? 'deactivated' : 'reactivated'}`)
+   147→      list.reload()
+   148→    } catch (e) {
+   149→      toastError(e)
+   150→    }
+   151→  }
+   152→
+   153→  return (
+   154→    <div className="space-y-4">
+   155→      <div className="flex flex-wrap items-center gap-2">
+   156→        <div className="relative min-w-52 flex-1">
+   157→          <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+   158→          <Input
+   159→            value={search}
+   160→            onChange={(e) => setSearch(e.target.value)}
+   161→            placeholder="Search name / code / GSTIN…"
+   162→            className="h-11 pl-8"
+   163→            aria-label="Search parties"
+   164→          />
+   165→        </div>
+   166→        <Button
+   167→          onClick={() => {
+   168→            setEditing(null)
+   169→            setDialogOpen(true)
+   170→          }}
+   171→          className="h-11 gap-2"
+   172→        >
+   173→          <Plus className="size-4" aria-hidden /> New Party
+   174→        </Button>
+   175→      </div>
+   176→
+   177→      <Card className="p-0">
+   178→        <CardContent className="p-0">
+   179→          {list.loading ? (
+   180→            <TableSkeleton rows={8} cols={6} />
+   181→          ) : parties.length === 0 ? (
+   182→            <div className="p-6">
+   183→              <EmptyState title="No parties" hint="Create customers, suppliers and jobworkers here." icon={Building2} />
+   184→            </div>
+   185→          ) : (
+   186→            <div className="max-h-[62vh] overflow-auto erp-scroll">
+   187→              <Table>
+   188→                <TableHeader className="sticky top-0 z-10 bg-card">
+   189→                  <TableRow>
+   190→                    <TableHead>Code</TableHead>
+   191→                    <TableHead>Name</TableHead>
+   192→                    <TableHead>Types</TableHead>
+   193→                    <TableHead>GSTIN</TableHead>
+   194→                    <TableHead>State</TableHead>
+   195→                    <TableHead>City</TableHead>
+   196→                    <TableHead className="text-right">Opening Bal</TableHead>
+   197→                    <TableHead>Status</TableHead>
+   198→                    <TableHead className="w-36" />
+   199→                  </TableRow>
+   200→                </TableHeader>
+   201→                <TableBody>
+   202→                  {parties.map((p) => (
+   203→                    <TableRow key={p.id} className="cursor-pointer" onClick={() => setViewing(p)}>
+   204→                      <TableCell className="font-mono text-xs font-medium">{p.code}</TableCell>
+   205→                      <TableCell className="max-w-44 truncate font-medium">{p.name}</TableCell>
+   206→                      <TableCell>
+   207→                        <div className="flex flex-wrap gap-1">
+   208→                          {p.types.split(',').filter(Boolean).map((t) => (
+   209→                            <Badge key={t} variant={t === 'CUSTOMER' ? 'default' : t === 'SUPPLIER' ? 'secondary' : 'outline'} className="text-[10px]">
+   210→                              {t}
+   211→                            </Badge>
+   212→                          ))}
+   213→                        </div>
+   214→                      </TableCell>
+   215→                      <TableCell className="font-mono text-xs tabular-nums">{p.gstin ?? '—'}</TableCell>
+   216→                      <TableCell className="text-xs">{stateName(p.stateCode)}</TableCell>
+   217→                      <TableCell className="text-xs">{p.city ?? '—'}</TableCell>
+   218→                      <TableCell className="text-right tabular-nums">
+   219→                        <Money value={p.openingBal} plain />
+   220→                      </TableCell>
+   221→                      <TableCell>
+   222→                        <Badge variant={p.active ? 'default' : 'destructive'} className="text-[10px]">
+   223→                          {p.active ? 'ACTIVE' : 'INACTIVE'}
+   224→                        </Badge>
+   225→                      </TableCell>
+   226→                      <TableCell>
+   227→                        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+   228→                          <Button
+   229→                            variant="ghost"
+   230→                            size="icon"
+   231→                            className="size-11 md:size-9"
+   232→                            onClick={() => setViewing(p)}
+   233→                            aria-label={`View ${p.code}`}
+   234→                            title="View profile & activity"
+   235→                          >
+   236→                            <Eye className="size-4" aria-hidden />
+   237→                          </Button>
+   238→                          <Button
+   239→                            variant="ghost"
+   240→                            size="icon"
+   241→                            className="size-11 md:size-9"
+   242→                            onClick={() => {
+   243→                              setEditing(p)
+   244→                              setDialogOpen(true)
+   245→                            }}
+   246→                            aria-label={`Edit ${p.code}`}
+   247→                          >
+   248→                            <Pencil className="size-4" aria-hidden />
+   249→                          </Button>
+   250→                          <ActiveToggle active={p.active} onToggle={() => toggleActive(p)} label={p.code} />
+   251→                        </div>
+   252→                      </TableCell>
+   253→                    </TableRow>
+   254→                  ))}
+   255→                </TableBody>
+   256→              </Table>
+   257→            </div>
+   258→          )}
+   259→        </CardContent>
+   260→      </Card>
+   261→
+   262→      <PartyDialog
+   263→        party={editing}
+   264→        open={dialogOpen}
+   265→        onOpenChange={setDialogOpen}
+   266→        onSaved={() => list.reload()}
+   267→      />
+   268→
+   269→      <PartyViewDialog party={viewing} onOpenChange={(o) => !o && setViewing(null)} onNavigate={setView} />
+   270→    </div>
+   271→  )
+   272→}
+   273→
+   274→// ---------------------------------------------------------------------------
+   275→// Party detail: profile + activity tabs + one-click next actions.
+   276→// ---------------------------------------------------------------------------
+   277→
+   278→function PartyViewDialog({
+   279→  party,
+   280→  onOpenChange,
+   281→  onNavigate,
+   282→}: {
+   283→  party: Party | null
+   284→  onOpenChange: (o: boolean) => void
+   285→  onNavigate: (view: import('./store').ErpView) => void
+   286→}) {
+   287→  const open = !!party
+   288→  const types = party?.types.split(',').filter(Boolean) ?? []
+   289→  const isCustomer = types.includes('CUSTOMER')
+   290→  const isSupplier = types.includes('SUPPLIER')
+   291→
+   292→  const sales = useApi<{ id: string; invoiceNo: string; date: string; grandTotal: number; paidAmount: number; status: string }[] | null>(
+   293→    party && isCustomer ? `/api/sales-invoices?partyId=${party.id}` : null
+   294→  )
+   295→  const purchases = useApi<{ id: string; invoiceNo: string; date: string; grandTotal: number; paidAmount: number; status: string }[] | null>(
+   296→    party && isSupplier ? `/api/purchase-invoices?partyId=${party.id}` : null
+   297→  )
+   298→  const payments = useApi<{ id: string; paymentNo: string; date: string; type: string; amount: number; mode: string | null; status: string }[] | null>(
+   299→    party ? `/api/payments?partyId=${party.id}` : null
+   300→  )
+   301→
+   302→  if (!party) return null
+   303→
+   304→  const close = () => onOpenChange(false)
+   305→
+   306→  const newInvoice = () => {
+   307→    setCreatePreset({ type: 'sales-invoice', partyId: party.id })
+   308→    close()
+   309→    onNavigate('sales')
+   310→  }
+   311→  const newPurchase = () => {
+   312→    setCreatePreset({ type: 'purchase-invoice', partyId: party.id })
+   313→    close()
+   314→    onNavigate('purchase')
+   315→  }
+   316→  const receivePayment = () => {
+   317→    setCreatePreset({ type: 'payment', partyId: party.id, paymentType: 'RECEIPT' })
+   318→    close()
+   319→    onNavigate('accounting')
+   320→  }
+   321→  const makePayment = () => {
+   322→    setCreatePreset({ type: 'payment', partyId: party.id, paymentType: 'PAYMENT' })
+   323→    close()
+   324→    onNavigate('accounting')
+   325→  }
+   326→  const openLedger = () => {
+   327→    setCreatePreset({ type: 'party-ledger', partyId: party.id })
+   328→    close()
+   329→    onNavigate('accounting')
+   330→  }
+   331→
+   332→  const salesRows = sales.data ?? []
+   333→  const purchaseRows = purchases.data ?? []
+   334→  const paymentRows = payments.data ?? []
+   335→  const receivable = salesRows
+   336→    .filter((i) => i.status === 'POSTED')
+   337→    .reduce((s, i) => s + i.grandTotal - i.paidAmount, 0)
+   338→  const payable = purchaseRows
+   339→    .filter((i) => i.status === 'POSTED')
+   340→    .reduce((s, i) => s + i.grandTotal - i.paidAmount, 0)
+   341→
+   342→  const invLine = (i: { id: string; invoiceNo: string; date: string; grandTotal: number; paidAmount: number; status: string }) => (
+   343→    <TableRow key={i.id}>
+   344→      <TableCell className="font-medium tabular-nums">{i.invoiceNo}</TableCell>
+   345→      <TableCell className="whitespace-nowrap text-xs">{dateStr(i.date)}</TableCell>
+   346→      <TableCell className="text-right tabular-nums">₹ {money(i.grandTotal)}</TableCell>
+   347→      <TableCell className="text-right tabular-nums text-muted-foreground">₹ {money(i.paidAmount)}</TableCell>
+   348→      <TableCell className="text-right font-medium tabular-nums">₹ {money(i.grandTotal - i.paidAmount)}</TableCell>
+   349→      <TableCell>
+   350→        <Badge variant={i.status === 'POSTED' ? 'default' : 'destructive'} className="text-[10px]">
+   351→          {i.status}
+   352→        </Badge>
+   353→      </TableCell>
+   354→    </TableRow>
+   355→  )
+   356→
+   357→  return (
+   358→    <Dialog open={open} onOpenChange={onOpenChange}>
+   359→      <DialogContent className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden sm:max-w-3xl">
+   360→        <DialogHeader>
+   361→          <DialogTitle className="flex flex-wrap items-center gap-2">
+   362→            {party.name}
+   363→            <span className="font-mono text-xs font-normal text-muted-foreground">{party.code}</span>
+   364→            {types.map((t) => (
+   365→              <Badge key={t} variant={t === 'CUSTOMER' ? 'default' : t === 'SUPPLIER' ? 'secondary' : 'outline'} className="text-[10px]">
+   366→                {t}
+   367→              </Badge>
+   368→            ))}
+   369→          </DialogTitle>
+   370→          <DialogDescription>
+   371→            {party.gstin ? `${party.gstin} · ` : 'Unregistered · '}
+   372→            {stateName(party.stateCode)}
+   373→            {party.city ? ` · ${party.city}` : ''}
+   374→            {party.pincode ? ` ${party.pincode}` : ''}
+   375→            {party.phone ? ` · ${party.phone}` : ''}
+   376→          </DialogDescription>
+   377→        </DialogHeader>
+   378→
+   379→        {/* One-click next actions — the Mapsoft-style flow buttons */}
+   380→        <div className="flex flex-wrap gap-2">
+   381→          {isCustomer ? (
+   382→            <Button size="sm" className="h-10 gap-2" onClick={newInvoice}>
+   383→              <ReceiptText className="size-4" aria-hidden /> New Invoice
+   384→            </Button>
+   385→          ) : null}
+   386→          {isSupplier ? (
+   387→            <Button size="sm" variant="outline" className="h-10 gap-2" onClick={newPurchase}>
+   388→              <ShoppingCart className="size-4" aria-hidden /> New Purchase
+   389→            </Button>
+   390→          ) : null}
+   391→          {isCustomer ? (
+   392→            <Button size="sm" variant="outline" className="h-10 gap-2" onClick={receivePayment}>
+   393→              <HandCoins className="size-4" aria-hidden /> Receive Payment
+   394→            </Button>
+   395→          ) : null}
+   396→          {isSupplier ? (
+   397→            <Button size="sm" variant="outline" className="h-10 gap-2" onClick={makePayment}>
+   398→              <HandCoins className="size-4" aria-hidden /> Pay Supplier
+   399→            </Button>
+   400→          ) : null}
+   401→          <Button size="sm" variant="ghost" className="h-10 gap-2" onClick={openLedger}>
+   402→            <BookOpen className="size-4" aria-hidden /> Party Ledger
+   403→          </Button>
+   404→        </div>
+   405→
+   406→        <div className="grid grid-cols-3 gap-2">
+   407→          <div className="rounded-md border bg-muted/30 p-2.5 text-center">
+   408→            <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Receivable</p>
+   409→            <p className="text-sm font-semibold tabular-nums text-primary">₹ {money(Math.max(0, receivable))}</p>
+   410→          </div>
+   411→          <div className="rounded-md border bg-muted/30 p-2.5 text-center">
+   412→            <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Payable</p>
+   413→            <p className="text-sm font-semibold tabular-nums text-destructive">₹ {money(Math.max(0, payable))}</p>
+   414→          </div>
+   415→          <div className="rounded-md border bg-muted/30 p-2.5 text-center">
+   416→            <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Vouchers</p>
+   417→            <p className="text-sm font-semibold tabular-nums">{salesRows.length + purchaseRows.length + paymentRows.length}</p>
+   418→          </div>
+   419→        </div>
+   420→
+   421→        <div className="min-h-0 flex-1 overflow-hidden">
+   422→          <Tabs defaultValue={isCustomer ? 'sales' : 'purchases'}>
+   423→            <TabsList className="h-9">
+   424→              {isCustomer ? <TabsTrigger value="sales" className="h-7 text-xs">Sales ({salesRows.length})</TabsTrigger> : null}
+   425→              {isSupplier ? <TabsTrigger value="purchases" className="h-7 text-xs">Purchases ({purchaseRows.length})</TabsTrigger> : null}
+   426→              <TabsTrigger value="payments" className="h-7 text-xs">Payments ({paymentRows.length})</TabsTrigger>
+   427→            </TabsList>
+   428→            {isCustomer ? (
+   429→              <TabsContent value="sales" className="mt-2">
+   430→                {salesRows.length === 0 ? (
+   431→                  <EmptyState title="No invoices yet" hint="Create the first invoice with the button above." />
+   432→                ) : (
+   433→                  <div className="max-h-64 overflow-auto rounded-md border erp-scroll">
+   434→                    <Table>
+   435→                      <TableHeader className="sticky top-0 bg-card">
+   436→                        <TableRow>
+   437→                          <TableHead>Invoice</TableHead>
+   438→                          <TableHead>Date</TableHead>
+   439→                          <TableHead className="text-right">Total</TableHead>
+   440→                          <TableHead className="text-right">Paid</TableHead>
+   441→                          <TableHead className="text-right">Balance</TableHead>
+   442→                          <TableHead>Status</TableHead>
+   443→                        </TableRow>
+   444→                      </TableHeader>
+   445→                      <TableBody>{salesRows.map((i) => invLine(i))}</TableBody>
+   446→                    </Table>
+   447→                  </div>
+   448→                )}
+   449→              </TabsContent>
+   450→            ) : null}
+   451→            {isSupplier ? (
+   452→              <TabsContent value="purchases" className="mt-2">
+   453→                {purchaseRows.length === 0 ? (
+   454→                  <EmptyState title="No purchases yet" hint="Record the first purchase invoice with the button above." />
+   455→                ) : (
+   456→                  <div className="max-h-64 overflow-auto rounded-md border erp-scroll">
+   457→                    <Table>
+   458→                      <TableHeader className="sticky top-0 bg-card">
+   459→                        <TableRow>
+   460→                          <TableHead>Invoice</TableHead>
+   461→                          <TableHead>Date</TableHead>
+   462→                          <TableHead className="text-right">Total</TableHead>
+   463→                          <TableHead className="text-right">Paid</TableHead>
+   464→                          <TableHead className="text-right">Balance</TableHead>
+   465→                          <TableHead>Status</TableHead>
+   466→                        </TableRow>
+   467→                      </TableHeader>
+   468→                      <TableBody>{purchaseRows.map((i) => invLine(i))}</TableBody>
+   469→                    </Table>
+   470→                  </div>
+   471→                )}
+   472→              </TabsContent>
+   473→            ) : null}
+   474→            <TabsContent value="payments" className="mt-2">
+   475→              {paymentRows.length === 0 ? (
+   476→                <EmptyState title="No payments yet" hint="Receipts and payments for this party appear here." />
+   477→              ) : (
+   478→                <div className="max-h-64 overflow-auto rounded-md border erp-scroll">
+   479→                  <Table>
+   480→                    <TableHeader className="sticky top-0 bg-card">
+   481→                      <TableRow>
+   482→                        <TableHead>Voucher</TableHead>
+   483→                        <TableHead>Date</TableHead>
+   484→                        <TableHead>Type</TableHead>
+   485→                        <TableHead className="text-right">Amount</TableHead>
+   486→                        <TableHead>Mode</TableHead>
+   487→                        <TableHead>Status</TableHead>
+   488→                      </TableRow>
+   489→                    </TableHeader>
+   490→                    <TableBody>
+   491→                      {paymentRows.map((p) => (
+   492→                        <TableRow key={p.id}>
+   493→                          <TableCell className="font-medium tabular-nums">{p.paymentNo}</TableCell>
+   494→                          <TableCell className="whitespace-nowrap text-xs">{dateStr(p.date)}</TableCell>
+   495→                          <TableCell>
+   496→                            <Badge variant={p.type === 'RECEIPT' ? 'default' : 'secondary'} className="text-[10px]">
+   497→                              {p.type}
+   498→                            </Badge>
+   499→                          </TableCell>
+   500→                          <TableCell className="text-right tabular-nums">₹ {money(p.amount)}</TableCell>
+   501→                          <TableCell className="text-xs">{p.mode ?? '—'}</TableCell>
+   502→                          <TableCell>
+   503→                            <Badge variant={p.status === 'POSTED' ? 'default' : 'destructive'} className="text-[10px]">
+   504→                              {p.status}
+   505→                            </Badge>
+   506→                          </TableCell>
+   507→                        </TableRow>
+   508→                      ))}
+   509→                    </TableBody>
+   510→                  </Table>
+   511→                </div>
+   512→              )}
+   513→            </TabsContent>
+   514→          </Tabs>
+   515→        </div>
+   516→      </DialogContent>
+   517→    </Dialog>
+   518→  )
+   519→}
+   520→
+   521→function PartyDialog({
+   522→  party,
+   523→  open,
+   524→  onOpenChange,
+   525→  onSaved,
+   526→}: {
+   527→  party: Party | null
+   528→  open: boolean
+   529→  onOpenChange: (o: boolean) => void
+   530→  onSaved: () => void
+   531→}) {
+   532→  const [code, setCode] = useState('')
+   533→  const [name, setName] = useState('')
+   534→  const [types, setTypes] = useState<Record<string, boolean>>({ CUSTOMER: true })
+   535→  const [gstin, setGstin] = useState('')
+   536→  const [stateCode, setStateCode] = useState('27')
+   537→  const [address, setAddress] = useState('')
+   538→  const [city, setCity] = useState('')
+   539→  const [pincode, setPincode] = useState('')
+   540→  const [phone, setPhone] = useState('')
+   541→  const [email, setEmail] = useState('')
+   542→  const [openingBal, setOpeningBal] = useState('')
+   543→  const [saving, setSaving] = useState(false)
+   544→
+   545→  useEffect(() => {
+   546→    if (!open) return
+   547→    setCode(party?.code ?? '')
+   548→    setName(party?.name ?? '')
+   549→    const t: Record<string, boolean> = {}
+   550→    for (const ty of (party?.types ?? 'CUSTOMER').split(',').filter(Boolean)) t[ty] = true
+   551→    setTypes(t)
+   552→    setGstin(party?.gstin ?? '')
+   553→    setStateCode(party?.stateCode ?? '27')
+   554→    setAddress(party?.address ?? '')
+   555→    setCity(party?.city ?? '')
+   556→    setPincode(party?.pincode ?? '')
+   557→    setPhone(party?.phone ?? '')
+   558→    setEmail(party?.email ?? '')
+   559→    setOpeningBal(party ? String(party.openingBal) : '')
+   560→  }, [open, party])
+   561→
+   562→  const chosenTypes = PARTY_TYPES.filter((t) => types[t])
+   563→
+   564→  const submit = async () => {
+   565→    if (!code.trim() || !name.trim()) {
+   566→      toast.error('Code and name are required')
+   567→      return
+   568→    }
+   569→    if (chosenTypes.length === 0) {
+   570→      toast.error('Pick at least one party type')
+   571→      return
+   572→    }
+   573→    if (gstin.trim() && !gstinChecksumValid(gstin)) {
+   574→      toast.error('GSTIN checksum failed — fix or clear the field')
+   575→      return
+   576→    }
+   577→    if (pincode.trim() && !/^\d{6}$/.test(pincode.trim())) {
+   578→      toast.error('Pincode must be 6 digits — required for e-Invoice')
+   579→      return
+   580→    }
+   581→    setSaving(true)
+   582→    try {
+   583→      const body = {
+   584→        code: code.trim(),
+   585→        name: name.trim(),
+   586→        types: chosenTypes,
+   587→        gstin: gstin.trim() || null,
+   588→        stateCode,
+   589→        address: address.trim() || null,
+   590→        city: city.trim() || null,
+   591→        pincode: pincode.trim() || null,
+   592→        phone: phone.trim() || null,
+   593→        email: email.trim() || null,
+   594→        openingBal: num(openingBal),
+   595→      }
+   596→      const res = party
+   597→        ? await apiPut<Party>(`/api/masters/parties/${party.id}`, body)
+   598→        : await apiPost<Party>('/api/masters/parties', body)
+   599→      toast.success(`${res.code} saved`, { description: `${res.name} — ${chosenTypes.join(', ')}` })
+   600→      onSaved()
+   601→      onOpenChange(false)
+   602→    } catch (e) {
+   603→      toastError(e)
+   604→    } finally {
+   605→      setSaving(false)
+   606→    }
+   607→  }
+   608→
+   609→  return (
+   610→    <Dialog open={open} onOpenChange={onOpenChange}>
+   611→      <DialogContent className="max-h-[92vh] w-full max-w-2xl overflow-y-auto erp-scroll-y">
+   612→        <DialogHeader>
+   613→          <DialogTitle>{party ? `Edit ${party.code}` : 'New Party'}</DialogTitle>
+   614→          <DialogDescription>Customers, suppliers and jobworkers — GSTIN is checksum-validated live.</DialogDescription>
+   615→        </DialogHeader>
+   616→
+   617→        <div className="grid gap-4 sm:grid-cols-2">
+   618→          <div className="space-y-1.5">
+   619→            <Label htmlFor="p-code">Code *</Label>
+   620→            <Input id="p-code" value={code} onChange={(e) => setCode(e.target.value)} placeholder="CUST-004" className="h-11" maxLength={20} />
+   621→          </div>
+   622→          <div className="space-y-1.5">
+   623→            <Label htmlFor="p-name">Name *</Label>
+   624→            <Input id="p-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Party legal name" className="h-11" />
+   625→          </div>
+   626→          <div className="space-y-1.5 sm:col-span-2">
+   627→            <Label>Types *</Label>
+   628→            <div className="flex flex-wrap gap-4 pt-1">
+   629→              {PARTY_TYPES.map((t) => (
+   630→                <label key={t} className="flex cursor-pointer items-center gap-2 text-sm">
+   631→                  <Checkbox
+   632→                    checked={!!types[t]}
+   633→                    onCheckedChange={(v) => setTypes((s) => ({ ...s, [t]: v === true }))}
+   634→                    aria-label={t}
+   635→                    className="size-5"
+   636→                  />
+   637→                  {t}
+   638→                </label>
+   639→              ))}
+   640→            </div>
+   641→          </div>
+   642→          <div className="space-y-1.5">
+   643→            <Label htmlFor="p-gstin">GSTIN</Label>
+   644→            <Input
+   645→              id="p-gstin"
+   646→              value={gstin}
+   647→              onChange={(e) => setGstin(e.target.value.toUpperCase())}
+   648→              placeholder="27ABCDE1234F1Z5"
+   649→              className="h-11 font-mono"
+   650→              maxLength={15}
+   651→            />
+   652→            <GstinHint value={gstin} />
+   653→          </div>
+   654→          <div className="space-y-1.5">
+   655→            <Label>State</Label>
+   656→            <Select value={stateCode} onValueChange={setStateCode}>
+   657→              <SelectTrigger className="h-11 w-full">
+   658→                <SelectValue />
+   659→              </SelectTrigger>
+   660→              <SelectContent className="max-h-64">
+   661→                {INDIAN_STATES.map((s) => (
+   662→                  <SelectItem key={s.code} value={s.code}>
+   663→                    {s.code}-{s.name}
+   664→                  </SelectItem>
+   665→                ))}
+   666→              </SelectContent>
+   667→            </Select>
+   668→          </div>
+   669→          <div className="space-y-1.5">
+   670→            <Label htmlFor="p-address">Address</Label>
+   671→            <Input id="p-address" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Street / area" className="h-11" />
+   672→          </div>
+   673→          <div className="space-y-1.5">
+   674→            <Label htmlFor="p-city">City</Label>
+   675→            <Input id="p-city" value={city} onChange={(e) => setCity(e.target.value)} placeholder="City" className="h-11" />
+   676→          </div>
+   677→          <div className="space-y-1.5">
+   678→            <Label htmlFor="p-pin">Pincode</Label>
+   679→            <Input
+   680→              id="p-pin"
+   681→              value={pincode}
+   682→              onChange={(e) => setPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+   683→              placeholder="411026"
+   684→              className="h-11"
+   685→              inputMode="numeric"
+   686→              pattern="[0-9]{6}"
+   687→            />
+   688→            <p className="text-xs text-muted-foreground">Needed for e-Invoice BuyerDtls (IRP).</p>
+   689→          </div>
+   690→          <div className="space-y-1.5">
+   691→            <Label htmlFor="p-phone">Phone</Label>
+   692→            <Input id="p-phone" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+91…" className="h-11" />
+   693→          </div>
+   694→          <div className="space-y-1.5">
+   695→            <Label htmlFor="p-email">Email</Label>
+   696→            <Input id="p-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@company.in" className="h-11" />
+   697→          </div>
+   698→          <div className="space-y-1.5">
+   699→            <Label htmlFor="p-bal">Opening Balance ₹</Label>
+   700→            <Input
+   701→              id="p-bal"
+   702→              type="number"
+   703→              step="any"
+   704→              value={openingBal}
+   705→              onChange={(e) => setOpeningBal(e.target.value)}
+   706→              placeholder="0"
+   707→              className="h-11 text-right tabular-nums"
+   708→            />
+   709→            <p className="text-xs text-muted-foreground">+ = receivable (customer), − = payable (supplier)</p>
+   710→          </div>
+   711→        </div>
+   712→
+   713→        <DialogFooter className="gap-2">
+   714→          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving} className="h-11">
+   715→            Cancel
+   716→          </Button>
+   717→          <Button onClick={submit} disabled={saving} className="h-11">
+   718→            {saving ? 'Saving…' : party ? 'Save changes' : 'Create party'}
+   719→          </Button>
+   720→        </DialogFooter>
+   721→      </DialogContent>
+   722→    </Dialog>
+   723→  )
+   724→}
+   725→
+   726→// ===========================================================================
+   727→// Items
+   728→// ===========================================================================
+   729→
+   730→function ItemsTab() {
+   731→  const list = useApi<Item[]>('/api/masters/items')
+   732→  const [search, setSearch] = useState('')
+   733→  const [dialogOpen, setDialogOpen] = useState(false)
+   734→  const [editing, setEditing] = useState<Item | null>(null)
+   735→
+   736→  const items = (list.data ?? []).filter((i) => {
+   737→    const q = search.trim().toLowerCase()
+   738→    if (!q) return true
+   739→    return i.name.toLowerCase().includes(q) || i.code.toLowerCase().includes(q) || (i.hsn ?? '').includes(q)
+   740→  })
+   741→
+   742→  const toggleActive = async (it: Item) => {
+   743→    try {
+   744→      await apiDelete(`/api/masters/items/${it.id}${it.active ? '' : '?activate=1'}`)
+   745→      toast.success(`${it.code} ${it.active ? 'deactivated' : 'reactivated'}`)
+   746→      list.reload()
+   747→    } catch (e) {
+   748→      toastError(e)
+   749→    }
+   750→  }
+   751→
+   752→  return (
+   753→    <div className="space-y-4">
+   754→      <div className="flex flex-wrap items-center gap-2">
+   755→        <div className="relative min-w-52 flex-1">
+   756→          <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+   757→          <Input
+   758→            value={search}
+   759→            onChange={(e) => setSearch(e.target.value)}
+   760→            placeholder="Search code / name / HSN…"
+   761→            className="h-11 pl-8"
+   762→            aria-label="Search items"
+   763→          />
+   764→        </div>
+   765→        <Button
+   766→          onClick={() => {
+   767→            setEditing(null)
+   768→            setDialogOpen(true)
+   769→          }}
+   770→          className="h-11 gap-2"
+   771→        >
+   772→          <Plus className="size-4" aria-hidden /> New Item
+   773→        </Button>
+   774→      </div>
+   775→
+   776→      <Card className="p-0">
+   777→        <CardContent className="p-0">
+   778→          {list.loading ? (
+   779→            <TableSkeleton rows={8} cols={7} />
+   780→          ) : items.length === 0 ? (
+   781→            <div className="p-6">
+   782→              <EmptyState title="No items" hint="Create finished goods, raw materials and services." icon={Package} />
+   783→            </div>
+   784→          ) : (
+   785→            <div className="max-h-[62vh] overflow-auto erp-scroll">
+   786→              <Table>
+   787→                <TableHeader className="sticky top-0 z-10 bg-card">
+   788→                  <TableRow>
+   789→                    <TableHead>Code</TableHead>
+   790→                    <TableHead>Name</TableHead>
+   791→                    <TableHead>Group</TableHead>
+   792→                    <TableHead>HSN</TableHead>
+   793→                    <TableHead>UOM</TableHead>
+   794→                    <TableHead className="text-right">GST %</TableHead>
+   795→                    <TableHead className="text-right">Sale Rate</TableHead>
+   796→                    <TableHead className="text-right">Cost Rate</TableHead>
+   797→                    <TableHead className="text-right">Reorder</TableHead>
+   798→                    <TableHead>Flags</TableHead>
+   799→                    <TableHead className="w-36" />
+   800→                  </TableRow>
+   801→                </TableHeader>
+   802→                <TableBody>
+   803→                  {items.map((it) => (
+   804→                    <TableRow key={it.id}>
+   805→                      <TableCell className="font-mono text-xs font-medium">{it.code}</TableCell>
+   806→                      <TableCell className="max-w-44 truncate font-medium">{it.name}</TableCell>
+   807→                      <TableCell className="text-xs">{it.groupName}</TableCell>
+   808→                      <TableCell className="font-mono text-xs tabular-nums">{it.hsn ?? '—'}</TableCell>
+   809→                      <TableCell className="text-xs">{it.uom}</TableCell>
+   810→                      <TableCell className="text-right tabular-nums">{it.gstRate}%</TableCell>
+   811→                      <TableCell className="text-right tabular-nums">
+   812→                        <Money value={it.saleRate} plain />
+   813→                      </TableCell>
+   814→                      <TableCell className="text-right tabular-nums">
+   815→                        <Money value={it.costRate} plain />
+   816→                      </TableCell>
+   817→                      <TableCell className="text-right tabular-nums">{it.reorderLevel}</TableCell>
+   818→                      <TableCell>
+   819→                        <div className="flex flex-wrap gap-1">
+   820→                          {it.isService ? <Badge variant="outline" className="text-[10px]">SERVICE</Badge> : null}
+   821→                          {it.isStockItem ? <Badge variant="secondary" className="text-[10px]">STOCK</Badge> : null}
+   822→                          {!it.active ? <Badge variant="destructive" className="text-[10px]">INACTIVE</Badge> : null}
+   823→                        </div>
+   824→                      </TableCell>
+   825→                      <TableCell>
+   826→                        <div className="flex items-center gap-1">
+   827→                          <Button
+   828→                            variant="ghost"
+   829→                            size="icon"
+   830→                            className="size-11 md:size-9"
+   831→                            onClick={() => {
+   832→                              setEditing(it)
+   833→                              setDialogOpen(true)
+   834→                            }}
+   835→                            aria-label={`Edit ${it.code}`}
+   836→                          >
+   837→                            <Pencil className="size-4" aria-hidden />
+   838→                          </Button>
+   839→                          <ActiveToggle active={it.active} onToggle={() => toggleActive(it)} label={it.code} />
+   840→                        </div>
+   841→                      </TableCell>
+   842→                    </TableRow>
+   843→                  ))}
+   844→                </TableBody>
+   845→              </Table>
+   846→            </div>
+   847→          )}
+   848→        </CardContent>
+   849→      </Card>
+   850→
+   851→      <ItemDialog item={editing} open={dialogOpen} onOpenChange={setDialogOpen} onSaved={() => list.reload()} />
+   852→    </div>
+   853→  )
+   854→}
+   855→
+   856→function ItemDialog({
+   857→  item,
+   858→  open,
+   859→  onOpenChange,
+   860→  onSaved,
+   861→}: {
+   862→  item: Item | null
+   863→  open: boolean
+   864→  onOpenChange: (o: boolean) => void
+   865→  onSaved: () => void
+   866→}) {
+   867→  const [code, setCode] = useState('')
+   868→  const [name, setName] = useState('')
+   869→  const [groupName, setGroupName] = useState('')
+   870→  const [hsn, setHsn] = useState('')
+   871→  const [isService, setIsService] = useState(false)
+   872→  const [isStockItem, setIsStockItem] = useState(true)
+   873→  const [uom, setUom] = useState<string>('PCS')
+   874→  const [gstRate, setGstRate] = useState('18')
+   875→  const [saleRate, setSaleRate] = useState('')
+   876→  const [costRate, setCostRate] = useState('')
+   877→  const [reorderLevel, setReorderLevel] = useState('')
+   878→  const [saving, setSaving] = useState(false)
+   879→
+   880→  useEffect(() => {
+   881→    if (!open) return
+   882→    setCode(item?.code ?? '')
+   883→    setName(item?.name ?? '')
+   884→    setGroupName(item?.groupName ?? '')
+   885→    setHsn(item?.hsn ?? '')
+   886→    setIsService(item?.isService ?? false)
+   887→    setIsStockItem(item?.isStockItem ?? true)
+   888→    setUom(item?.uom ?? 'PCS')
+   889→    setGstRate(item ? String(item.gstRate) : '18')
+   890→    setSaleRate(item ? String(item.saleRate) : '')
+   891→    setCostRate(item ? String(item.costRate) : '')
+   892→    setReorderLevel(item ? String(item.reorderLevel) : '')
+   893→  }, [open, item])
+   894→
+   895→  const submit = async () => {
+   896→    if (!code.trim() || !name.trim()) {
+   897→      toast.error('Code and name are required')
+   898→      return
+   899→    }
+   900→    setSaving(true)
+   901→    try {
+   902→      const body = {
+   903→        code: code.trim(),
+   904→        name: name.trim(),
+   905→        groupName: groupName.trim() || undefined,
+   906→        hsn: hsn.trim() || undefined,
+   907→        isService,
+   908→        isStockItem: isService ? false : isStockItem,
+   909→        uom,
+   910→        gstRate: num(gstRate),
+   911→        saleRate: num(saleRate),
+   912→        costRate: num(costRate),
+   913→        reorderLevel: num(reorderLevel),
+   914→      }
+   915→      const res = item
+   916→        ? await apiPut<Item>(`/api/masters/items/${item.id}`, body)
+   917→        : await apiPost<Item>('/api/masters/items', body)
+   918→      toast.success(`${res.code} saved`, { description: `${res.name} · ${res.uom} · GST ${res.gstRate}%` })
+   919→      onSaved()
+   920→      onOpenChange(false)
+   921→    } catch (e) {
+   922→      toastError(e)
+   923→    } finally {
+   924→      setSaving(false)
+   925→    }
+   926→  }
+   927→
+   928→  return (
+   929→    <Dialog open={open} onOpenChange={onOpenChange}>
+   930→      <DialogContent className="max-h-[92vh] w-full max-w-2xl overflow-y-auto erp-scroll-y">
+   931→        <DialogHeader>
+   932→          <DialogTitle>{item ? `Edit ${item.code}` : 'New Item'}</DialogTitle>
+   933→          <DialogDescription>Finished goods, raw material or service — services skip the stock ledger.</DialogDescription>
+   934→        </DialogHeader>
+   935→
+   936→        <div className="grid gap-4 sm:grid-cols-2">
+   937→          <div className="space-y-1.5">
+   938→            <Label htmlFor="i-code">Code *</Label>
+   939→            <Input id="i-code" value={code} onChange={(e) => setCode(e.target.value)} placeholder="FG-1004" className="h-11" maxLength={30} />
+   940→          </div>
+   941→          <div className="space-y-1.5">
+   942→            <Label htmlFor="i-name">Name *</Label>
+   943→            <Input id="i-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Item name" className="h-11" />
+   944→          </div>
+   945→          <div className="space-y-1.5">
+   946→            <Label htmlFor="i-group">Group</Label>
+   947→            <Input id="i-group" value={groupName} onChange={(e) => setGroupName(e.target.value)} placeholder="Finished Goods" className="h-11" />
+   948→          </div>
+   949→          <div className="space-y-1.5">
+   950→            <Label htmlFor="i-hsn">HSN / SAC</Label>
+   951→            <Input id="i-hsn" value={hsn} onChange={(e) => setHsn(e.target.value)} placeholder="8483" className="h-11 font-mono" />
+   952→          </div>
+   953→          <div className="space-y-1.5">
+   954→            <Label>UOM</Label>
+   955→            <Select value={uom} onValueChange={setUom}>
+   956→              <SelectTrigger className="h-11 w-full">
+   957→                <SelectValue />
+   958→              </SelectTrigger>
+   959→              <SelectContent>
+   960→                {UOMS.map((u) => (
+   961→                  <SelectItem key={u} value={u}>
+   962→                    {u}
+   963→                  </SelectItem>
+   964→                ))}
+   965→              </SelectContent>
+   966→            </Select>
+   967→          </div>
+   968→          <div className="space-y-1.5">
+   969→            <Label>GST Rate</Label>
+   970→            <Select value={gstRate} onValueChange={setGstRate}>
+   971→              <SelectTrigger className="h-11 w-full">
+   972→                <SelectValue />
+   973→              </SelectTrigger>
+   974→              <SelectContent>
+   975→                {GST_RATES.map((r) => (
+   976→                  <SelectItem key={r} value={String(r)}>
+   977→                    {r}%
+   978→                  </SelectItem>
+   979→                ))}
+   980→              </SelectContent>
+   981→            </Select>
+   982→          </div>
+   983→          <div className="space-y-1.5">
+   984→            <Label htmlFor="i-sale">Sale Rate ₹</Label>
+   985→            <Input id="i-sale" type="number" min="0" step="any" value={saleRate} onChange={(e) => setSaleRate(e.target.value)} placeholder="0" className="h-11 text-right tabular-nums" />
+   986→          </div>
+   987→          <div className="space-y-1.5">
+   988→            <Label htmlFor="i-cost">Cost Rate ₹</Label>
+   989→            <Input id="i-cost" type="number" min="0" step="any" value={costRate} onChange={(e) => setCostRate(e.target.value)} placeholder="0" className="h-11 text-right tabular-nums" />
+   990→          </div>
+   991→          <div className="space-y-1.5">
+   992→            <Label htmlFor="i-reorder">Reorder Level</Label>
+   993→            <Input id="i-reorder" type="number" min="0" step="any" value={reorderLevel} onChange={(e) => setReorderLevel(e.target.value)} placeholder="0" className="h-11 text-right tabular-nums" />
+   994→          </div>
+   995→          <div className="flex items-center gap-6 pt-4">
+   996→            <div className="flex items-center gap-2">
+   997→              <Switch
+   998→                id="i-service"
+   999→                checked={isService}
+  1000→                onCheckedChange={(v) => {
+  1001→                  setIsService(v)
+  1002→                  if (v) setIsStockItem(false)
+  1003→                }}
+  1004→                aria-label="Service item"
+  1005→              />
+  1006→              <Label htmlFor="i-service" className="text-sm font-normal text-muted-foreground">Service</Label>
+  1007→            </div>
+  1008→            <div className="flex items-center gap-2">
+  1009→              <Switch
+  1010→                id="i-stock"
+  1011→                checked={isStockItem && !isService}
+  1012→                disabled={isService}
+  1013→                onCheckedChange={setIsStockItem}
+  1014→                aria-label="Stock item"
+  1015→              />
+  1016→              <Label htmlFor="i-stock" className="text-sm font-normal text-muted-foreground">Stock item</Label>
+  1017→            </div>
+  1018→          </div>
+  1019→        </div>
+  1020→
+  1021→        <DialogFooter className="gap-2">
+  1022→          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving} className="h-11">
+  1023→            Cancel
+  1024→          </Button>
+  1025→          <Button onClick={submit} disabled={saving} className="h-11">
+  1026→            {saving ? 'Saving…' : item ? 'Save changes' : 'Create item'}
+  1027→          </Button>
+  1028→        </DialogFooter>
+  1029→      </DialogContent>
+  1030→    </Dialog>
+  1031→  )
+  1032→}
+  1033→
+  1034→// ===========================================================================
+  1035→// Warehouses
+  1036→// ===========================================================================
+  1037→
+  1038→function WarehousesTab() {
+  1039→  const list = useApi<Warehouse[]>('/api/masters/warehouses')
+  1040→  const [dialogOpen, setDialogOpen] = useState(false)
+  1041→  const [editing, setEditing] = useState<Warehouse | null>(null)
+  1042→
+  1043→  const toggleActive = async (w: Warehouse) => {
+  1044→    try {
+  1045→      await apiDelete(`/api/masters/warehouses/${w.id}${w.active ? '' : '?activate=1'}`)
+  1046→      toast.success(`${w.code} ${w.active ? 'deactivated' : 'reactivated'}`)
+  1047→      list.reload()
+  1048→    } catch (e) {
+  1049→      toastError(e)
+  1050→    }
+  1051→  }
+  1052→
+  1053→  return (
+  1054→    <div className="space-y-4">
+  1055→      <div className="flex items-center justify-between gap-2">
+  1056→        <p className="text-sm text-muted-foreground">Stock locations — every ledger row carries a warehouse.</p>
+  1057→        <Button
+  1058→          onClick={() => {
+  1059→            setEditing(null)
+  1060→            setDialogOpen(true)
+  1061→          }}
+  1062→          className="h-11 gap-2"
+  1063→        >
+  1064→          <Plus className="size-4" aria-hidden /> New Warehouse
+  1065→        </Button>
+  1066→      </div>
+  1067→
+  1068→      <Card className="p-0">
+  1069→        <CardContent className="p-0">
+  1070→          {list.loading ? (
+  1071→            <TableSkeleton rows={4} cols={4} />
+  1072→          ) : (list.data ?? []).length === 0 ? (
+  1073→            <div className="p-6">
+  1074→              <EmptyState title="No warehouses" hint="Create at least one stores location." icon={Store} />
+  1075→            </div>
+  1076→          ) : (
+  1077→            <div className="overflow-x-auto">
+  1078→              <Table>
+  1079→                <TableHeader>
+  1080→                  <TableRow>
+  1081→                    <TableHead>Code</TableHead>
+  1082→                    <TableHead>Name</TableHead>
+  1083→                    <TableHead>Location</TableHead>
+  1084→                    <TableHead>Status</TableHead>
+  1085→                    <TableHead className="w-36" />
+  1086→                  </TableRow>
+  1087→                </TableHeader>
+  1088→                <TableBody>
+  1089→                  {(list.data ?? []).map((w) => (
+  1090→                    <TableRow key={w.id}>
+  1091→                      <TableCell className="font-mono text-xs font-medium">{w.code}</TableCell>
+  1092→                      <TableCell className="font-medium">{w.name}</TableCell>
+  1093→                      <TableCell className="text-xs text-muted-foreground">{w.location ?? '—'}</TableCell>
+  1094→                      <TableCell>
+  1095→                        <Badge variant={w.active ? 'default' : 'destructive'} className="text-[10px]">
+  1096→                          {w.active ? 'ACTIVE' : 'INACTIVE'}
+  1097→                        </Badge>
+  1098→                      </TableCell>
+  1099→                      <TableCell>
+  1100→                        <div className="flex items-center gap-1">
+  1101→                          <Button
+  1102→                            variant="ghost"
+  1103→                            size="icon"
+  1104→                            className="size-11 md:size-9"
+  1105→                            onClick={() => {
+  1106→                              setEditing(w)
+  1107→                              setDialogOpen(true)
+  1108→                            }}
+  1109→                            aria-label={`Edit ${w.code}`}
+  1110→                          >
+  1111→                            <Pencil className="size-4" aria-hidden />
+  1112→                          </Button>
+  1113→                          <ActiveToggle active={w.active} onToggle={() => toggleActive(w)} label={w.code} />
+  1114→                        </div>
+  1115→                      </TableCell>
+  1116→                    </TableRow>
+  1117→                  ))}
+  1118→                </TableBody>
+  1119→              </Table>
+  1120→            </div>
+  1121→          )}
+  1122→        </CardContent>
+  1123→      </Card>
+  1124→
+  1125→      <WarehouseDialog warehouse={editing} open={dialogOpen} onOpenChange={setDialogOpen} onSaved={() => list.reload()} />
+  1126→    </div>
+  1127→  )
+  1128→}
+  1129→
+  1130→function WarehouseDialog({
+  1131→  warehouse,
+  1132→  open,
+  1133→  onOpenChange,
+  1134→  onSaved,
+  1135→}: {
+  1136→  warehouse: Warehouse | null
+  1137→  open: boolean
+  1138→  onOpenChange: (o: boolean) => void
+  1139→  onSaved: () => void
+  1140→}) {
+  1141→  const [code, setCode] = useState('')
+  1142→  const [name, setName] = useState('')
+  1143→  const [location, setLocation] = useState('')
+  1144→  const [saving, setSaving] = useState(false)
+  1145→
+  1146→  useEffect(() => {
+  1147→    if (!open) return
+  1148→    setCode(warehouse?.code ?? '')
+  1149→    setName(warehouse?.name ?? '')
+  1150→    setLocation(warehouse?.location ?? '')
+  1151→  }, [open, warehouse])
+  1152→
+  1153→  const submit = async () => {
+  1154→    if (!code.trim() || !name.trim()) {
+  1155→      toast.error('Code and name are required')
+  1156→      return
+  1157→    }
+  1158→    setSaving(true)
+  1159→    try {
+  1160→      const body = { code: code.trim(), name: name.trim(), location: location.trim() || undefined }
+  1161→      const res = warehouse
+  1162→        ? await apiPut<Warehouse>(`/api/masters/warehouses/${warehouse.id}`, body)
+  1163→        : await apiPost<Warehouse>('/api/masters/warehouses', body)
+  1164→      toast.success(`${res.code} saved`)
+  1165→      onSaved()
+  1166→      onOpenChange(false)
+  1167→    } catch (e) {
+  1168→      toastError(e)
+  1169→    } finally {
+  1170→      setSaving(false)
+  1171→    }
+  1172→  }
+  1173→
+  1174→  return (
+  1175→    <Dialog open={open} onOpenChange={onOpenChange}>
+  1176→      <DialogContent className="w-full max-w-md">
+  1177→        <DialogHeader>
+  1178→          <DialogTitle>{warehouse ? `Edit ${warehouse.code}` : 'New Warehouse'}</DialogTitle>
+  1179→          <DialogDescription>A physical stock location.</DialogDescription>
+  1180→        </DialogHeader>
+  1181→        <div className="grid gap-4">
+  1182→          <div className="space-y-1.5">
+  1183→            <Label htmlFor="w-code">Code *</Label>
+  1184→            <Input id="w-code" value={code} onChange={(e) => setCode(e.target.value)} placeholder="MAIN" className="h-11" maxLength={20} />
+  1185→          </div>
+  1186→          <div className="space-y-1.5">
+  1187→            <Label htmlFor="w-name">Name *</Label>
+  1188→            <Input id="w-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Main Stores" className="h-11" />
+  1189→          </div>
+  1190→          <div className="space-y-1.5">
+  1191→            <Label htmlFor="w-loc">Location</Label>
+  1192→            <Input id="w-loc" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="Plant / city" className="h-11" />
+  1193→          </div>
+  1194→        </div>
+  1195→        <DialogFooter className="gap-2">
+  1196→          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving} className="h-11">
+  1197→            Cancel
+  1198→          </Button>
+  1199→          <Button onClick={submit} disabled={saving} className="h-11">
+  1200→            {saving ? 'Saving…' : warehouse ? 'Save changes' : 'Create warehouse'}
+  1201→          </Button>
+  1202→        </DialogFooter>
+  1203→      </DialogContent>
+  1204→    </Dialog>
+  1205→  )
+  1206→}
+  1207→
+  1208→// ===========================================================================
+  1209→// Processes
+  1210→// ===========================================================================
+  1211→
+  1212→function ProcessesTab() {
+  1213→  const list = useApi<Process[]>('/api/masters/processes')
+  1214→  const [dialogOpen, setDialogOpen] = useState(false)
+  1215→  const [editing, setEditing] = useState<Process | null>(null)
+  1216→
+  1217→  const toggleActive = async (p: Process) => {
+  1218→    try {
+  1219→      await apiDelete(`/api/masters/processes/${p.id}${p.active ? '' : '?activate=1'}`)
+  1220→      toast.success(`${p.code} ${p.active ? 'deactivated' : 'reactivated'}`)
+  1221→      list.reload()
+  1222→    } catch (e) {
+  1223→      toastError(e)
+  1224→    }
+  1225→  }
+  1226→
+  1227→  return (
+  1228→    <div className="space-y-4">
+  1229→      <div className="flex items-center justify-between gap-2">
+  1230→        <p className="text-sm text-muted-foreground">Jobwork routing — rate per KG (WEIGHT) or per piece (QTY).</p>
+  1231→        <Button
+  1232→          onClick={() => {
+  1233→            setEditing(null)
+  1234→            setDialogOpen(true)
+  1235→          }}
+  1236→          className="h-11 gap-2"
+  1237→        >
+  1238→          <Plus className="size-4" aria-hidden /> New Process
+  1239→        </Button>
+  1240→      </div>
+  1241→
+  1242→      <Card className="p-0">
+  1243→        <CardContent className="p-0">
+  1244→          {list.loading ? (
+  1245→            <TableSkeleton rows={5} cols={5} />
+  1246→          ) : (list.data ?? []).length === 0 ? (
+  1247→            <div className="p-6">
+  1248→              <EmptyState title="No processes" hint="Define the treatment steps used on job cards." icon={Wrench} />
+  1249→            </div>
+  1250→          ) : (
+  1251→            <div className="overflow-x-auto">
+  1252→              <Table>
+  1253→                <TableHeader>
+  1254→                  <TableRow>
+  1255→                    <TableHead className="text-right">Seq</TableHead>
+  1256→                    <TableHead>Code</TableHead>
+  1257→                    <TableHead>Name</TableHead>
+  1258→                    <TableHead>Basis</TableHead>
+  1259→                    <TableHead className="text-right">Rate</TableHead>
+  1260→                    <TableHead className="text-right">Lot Charge</TableHead>
+  1261→                    <TableHead>Status</TableHead>
+  1262→                    <TableHead className="w-36" />
+  1263→                  </TableRow>
+  1264→                </TableHeader>
+  1265→                <TableBody>
+  1266→                  {(list.data ?? [])
+  1267→                    .slice()
+  1268→                    .sort((a, b) => a.seq - b.seq)
+  1269→                    .map((p) => (
+  1270→                      <TableRow key={p.id}>
+  1271→                        <TableCell className="text-right tabular-nums">{p.seq}</TableCell>
+  1272→                        <TableCell className="font-mono text-xs font-medium">{p.code}</TableCell>
+  1273→                        <TableCell className="font-medium">{p.name}</TableCell>
+  1274→                        <TableCell>
+  1275→                          <Badge variant="secondary" className="text-[10px]">
+  1276→                            {p.basis === 'WEIGHT' ? '₹ per KG' : '₹ per piece'}
+  1277→                          </Badge>
+  1278→                        </TableCell>
+  1279→                        <TableCell className="text-right tabular-nums">₹ {money(p.rate)}</TableCell>
+  1280→                        <TableCell className="text-right tabular-nums">{p.lotCharge > 0 ? `₹ ${money(p.lotCharge)}` : '—'}</TableCell>
+  1281→                        <TableCell>
+  1282→                          <Badge variant={p.active ? 'default' : 'destructive'} className="text-[10px]">
+  1283→                            {p.active ? 'ACTIVE' : 'INACTIVE'}
+  1284→                          </Badge>
+  1285→                        </TableCell>
+  1286→                        <TableCell>
+  1287→                          <div className="flex items-center gap-1">
+  1288→                            <Button
+  1289→                              variant="ghost"
+  1290→                              size="icon"
+  1291→                              className="size-11 md:size-9"
+  1292→                              onClick={() => {
+  1293→                                setEditing(p)
+  1294→                                setDialogOpen(true)
+  1295→                              }}
+  1296→                              aria-label={`Edit ${p.code}`}
+  1297→                            >
+  1298→                              <Pencil className="size-4" aria-hidden />
+  1299→                            </Button>
+  1300→                            <ActiveToggle active={p.active} onToggle={() => toggleActive(p)} label={p.code} />
+  1301→                          </div>
+  1302→                        </TableCell>
+  1303→                      </TableRow>
+  1304→                    ))}
+  1305→                </TableBody>
+  1306→              </Table>
+  1307→            </div>
+  1308→          )}
+  1309→        </CardContent>
+  1310→      </Card>
+  1311→
+  1312→      <ProcessDialog process={editing} open={dialogOpen} onOpenChange={setDialogOpen} onSaved={() => list.reload()} />
+  1313→    </div>
+  1314→  )
+  1315→}
+  1316→
+  1317→function ProcessDialog({
+  1318→  process,
+  1319→  open,
+  1320→  onOpenChange,
+  1321→  onSaved,
+  1322→}: {
+  1323→  process: Process | null
+  1324→  open: boolean
+  1325→  onOpenChange: (o: boolean) => void
+  1326→  onSaved: () => void
+  1327→}) {
+  1328→  const [code, setCode] = useState('')
+  1329→  const [name, setName] = useState('')
+  1330→  const [seq, setSeq] = useState('')
+  1331→  const [basis, setBasis] = useState<'WEIGHT' | 'QTY'>('WEIGHT')
+  1332→  const [rate, setRate] = useState('')
+  1333→  const [lotCharge, setLotCharge] = useState('')
+  1334→  const [saving, setSaving] = useState(false)
+  1335→
+  1336→  useEffect(() => {
+  1337→    if (!open) return
+  1338→    setCode(process?.code ?? '')
+  1339→    setName(process?.name ?? '')
+  1340→    setSeq(process ? String(process.seq) : '')
+  1341→    setBasis((process?.basis as 'WEIGHT' | 'QTY') ?? 'WEIGHT')
+  1342→    setRate(process ? String(process.rate) : '')
+  1343→    setLotCharge(process ? String(process.lotCharge) : '')
+  1344→  }, [open, process])
+  1345→
+  1346→  const submit = async () => {
+  1347→    if (!code.trim() || !name.trim()) {
+  1348→      toast.error('Code and name are required')
+  1349→      return
+  1350→    }
+  1351→    setSaving(true)
+  1352→    try {
+  1353→      const body = {
+  1354→        code: code.trim(),
+  1355→        name: name.trim(),
+  1356→        seq: num(seq),
+  1357→        basis,
+  1358→        rate: num(rate),
+  1359→        lotCharge: num(lotCharge),
+  1360→      }
+  1361→      const res = process
+  1362→        ? await apiPut<Process>(`/api/masters/processes/${process.id}`, body)
+  1363→        : await apiPost<Process>('/api/masters/processes', body)
+  1364→      toast.success(`${res.code} saved`, { description: `${res.name} · ₹ ${money(res.rate)} ${res.basis === 'WEIGHT' ? 'per KG' : 'per piece'}` })
+  1365→      onSaved()
+  1366→      onOpenChange(false)
+  1367→    } catch (e) {
+  1368→      toastError(e)
+  1369→    } finally {
+  1370→      setSaving(false)
+  1371→    }
+  1372→  }
+  1373→
+  1374→  return (
+  1375→    <Dialog open={open} onOpenChange={onOpenChange}>
+  1376→      <DialogContent className="w-full max-w-md">
+  1377→        <DialogHeader>
+  1378→          <DialogTitle>{process ? `Edit ${process.code}` : 'New Process'}</DialogTitle>
+  1379→          <DialogDescription>A jobwork treatment step with its default rate.</DialogDescription>
+  1380→        </DialogHeader>
+  1381→        <div className="grid gap-4">
+  1382→          <div className="grid grid-cols-2 gap-4">
+  1383→            <div className="space-y-1.5">
+  1384→              <Label htmlFor="pr-code">Code *</Label>
+  1385→              <Input id="pr-code" value={code} onChange={(e) => setCode(e.target.value)} placeholder="HT" className="h-11" maxLength={20} />
+  1386→            </div>
+  1387→            <div className="space-y-1.5">
+  1388→              <Label htmlFor="pr-seq">Sequence</Label>
+  1389→              <Input id="pr-seq" type="number" value={seq} onChange={(e) => setSeq(e.target.value)} placeholder="1" className="h-11 text-right tabular-nums" />
+  1390→            </div>
+  1391→          </div>
+  1392→          <div className="space-y-1.5">
+  1393→            <Label htmlFor="pr-name">Name *</Label>
+  1394→            <Input id="pr-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Heat Treatment" className="h-11" />
+  1395→          </div>
+  1396→          <div className="space-y-1.5">
+  1397→            <Label>Basis</Label>
+  1398→            <Select value={basis} onValueChange={(v) => setBasis(v as 'WEIGHT' | 'QTY')}>
+  1399→              <SelectTrigger className="h-11 w-full">
+  1400→                <SelectValue />
+  1401→              </SelectTrigger>
+  1402→              <SelectContent>
+  1403→                <SelectItem value="WEIGHT">WEIGHT — ₹ per KG</SelectItem>
+  1404→                <SelectItem value="QTY">QTY — ₹ per piece</SelectItem>
+  1405→              </SelectContent>
+  1406→            </Select>
+  1407→            <p className="text-xs text-muted-foreground">
+  1408→              {basis === 'WEIGHT' ? 'Charged on the processed weight (kg)' : 'Charged on the processed quantity (pieces)'}
+  1409→            </p>
+  1410→          </div>
+  1411→          <div className="grid grid-cols-2 gap-4">
+  1412→            <div className="space-y-1.5">
+  1413→              <Label htmlFor="pr-rate">Rate ₹</Label>
+  1414→              <Input id="pr-rate" type="number" min="0" step="any" value={rate} onChange={(e) => setRate(e.target.value)} placeholder="0" className="h-11 text-right tabular-nums" />
+  1415→            </div>
+  1416→            <div className="space-y-1.5">
+  1417→              <Label htmlFor="pr-lot">Lot Charge ₹</Label>
+  1418→              <Input id="pr-lot" type="number" min="0" step="any" value={lotCharge} onChange={(e) => setLotCharge(e.target.value)} placeholder="0" className="h-11 text-right tabular-nums" />
+  1419→            </div>
+  1420→          </div>
+  1421→        </div>
+  1422→        <DialogFooter className="gap-2">
+  1423→          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving} className="h-11">
+  1424→            Cancel
+  1425→          </Button>
+  1426→          <Button onClick={submit} disabled={saving} className="h-11">
+  1427→            {saving ? 'Saving…' : process ? 'Save changes' : 'Create process'}
+  1428→          </Button>
+  1429→        </DialogFooter>
+  1430→      </DialogContent>
+  1431→    </Dialog>
+  1432→  )
+  1433→}
+  1434→
+  1435→// ===========================================================================
+  1436→// Party rates
+  1437→// ===========================================================================
+  1438→
+  1439→function PartyRatesTab() {
+  1440→  const partiesApi = useApi<Party[]>('/api/masters/parties')
+  1441→  const parties = partiesApi.data ?? []
+  1442→  const [partyId, setPartyId] = useState('')
+  1443→  const grid = useApi<PartyRateGrid | null>(partyId ? `/api/masters/party-rates?partyId=${partyId}` : null)
+  1444→  const [rows, setRows] = useState<PartyRateRow[]>([])
+  1445→  const [saving, setSaving] = useState(false)
+  1446→
+  1447→  useEffect(() => {
+  1448→    setRows((grid.data?.rows ?? []).map((r) => ({ ...r })))
+  1449→  }, [grid.data])
+  1450→
+  1451→  const sortedParties = useMemo(() => [...parties].sort((a, b) => a.name.localeCompare(b.name)), [parties])
+  1452→
+  1453→  const changedCount = rows.filter((r) => r.rate !== r.defaultRate || r.lotCharge !== r.defaultLot).length
+  1454→
+  1455→  const setRow = (processId: string, patch: Partial<PartyRateRow>) =>
+  1456→    setRows((rs) => rs.map((r) => (r.processId === processId ? { ...r, ...patch } : r)))
+  1457→
+  1458→  const save = async () => {
+  1459→    if (!partyId) return
+  1460→    setSaving(true)
+  1461→    try {
+  1462→      // full-list replace — send only rows that differ from the process defaults
+  1463→      const rates = rows
+  1464→        .filter((r) => r.rate !== r.defaultRate || r.lotCharge !== r.defaultLot)
+  1465→        .map((r) => ({ processId: r.processId, rate: r.rate, lotCharge: r.lotCharge }))
+  1466→      const res = await apiPut<{ partyId: string; count: number }>('/api/masters/party-rates', { partyId, rates })
+  1467→      toast.success('Party rates saved', {
+  1468→        description: `${res.count} overridden rate${res.count === 1 ? '' : 's'} stored — job cards for this party now bill at these rates.`,
+  1469→      })
+  1470→      grid.reload()
+  1471→    } catch (e) {
+  1472→      toastError(e)
+  1473→    } finally {
+  1474→      setSaving(false)
+  1475→    }
+  1476→  }
+  1477→
+  1478→  return (
+  1479→    <div className="space-y-4">
+  1480→      <div className="grid gap-2 sm:max-w-md">
+  1481→        <Label>Party</Label>
+  1482→        <Select value={partyId || undefined} onValueChange={setPartyId}>
+  1483→          <SelectTrigger className="h-11 w-full">
+  1484→            <SelectValue placeholder="Select party…" />
+  1485→          </SelectTrigger>
+  1486→          <SelectContent className="max-h-64">
+  1487→            {sortedParties.map((p) => (
+  1488→              <SelectItem key={p.id} value={p.id}>
+  1489→                {p.code} — {p.name}
+  1490→              </SelectItem>
+  1491→            ))}
+  1492→          </SelectContent>
+  1493→        </Select>
+  1494→      </div>
+  1495→
+  1496→      {!partyId ? (
+  1497→        <EmptyState
+  1498→          title="Pick a party"
+  1499→          hint="Override the default process rates for a specific customer — job cards resolve these automatically."
+  1500→          icon={ListChecks}
+  1501→        />
+  1502→      ) : grid.loading ? (
+  1503→        <TableSkeleton rows={6} cols={4} />
+  1504→      ) : rows.length === 0 ? (
+  1505→        <EmptyState title="No processes" hint="Define processes first (Processes tab)." icon={Wrench} />
+  1506→      ) : (
+  1507→        <>
+  1508→          <div className="flex flex-wrap items-center justify-between gap-2">
+  1509→            <p className="text-sm text-muted-foreground">
+  1510→              {rows.length} processes ·{' '}
+  1511→              <span className="font-medium text-foreground">{changedCount}</span> changed from defaults
+  1512→            </p>
+  1513→            <Button onClick={save} disabled={saving} className="h-11 gap-2">
+  1514→              {saving ? 'Saving…' : 'Save rates'}
+  1515→            </Button>
+  1516→          </div>
+  1517→          <div className="overflow-x-auto rounded-md border">
+  1518→            <Table>
+  1519→              <TableHeader>
+  1520→                <TableRow>
+  1521→                  <TableHead>Process</TableHead>
+  1522→                  <TableHead>Basis</TableHead>
+  1523→                  <TableHead className="text-right">Default Rate</TableHead>
+  1524→                  <TableHead className="text-right">Default Lot</TableHead>
+  1525→                  <TableHead className="w-32 text-right">Rate ₹</TableHead>
+  1526→                  <TableHead className="w-32 text-right">Lot ₹</TableHead>
+  1527→                  <TableHead>State</TableHead>
+  1528→                </TableRow>
+  1529→              </TableHeader>
+  1530→              <TableBody>
+  1531→                {rows.map((r) => {
+  1532→                  const overridden = r.rate !== r.defaultRate || r.lotCharge !== r.defaultLot
+  1533→                  return (
+  1534→                    <TableRow key={r.processId}>
+  1535→                      <TableCell>
+  1536→                        <span className="block font-medium">{r.name}</span>
+  1537→                        <span className="block font-mono text-xs text-muted-foreground">{r.code}</span>
+  1538→                      </TableCell>
+  1539→                      <TableCell>
+  1540→                        <Badge variant="secondary" className="text-[10px]">
+  1541→                          {r.basis === 'WEIGHT' ? 'per KG' : 'per piece'}
+  1542→                        </Badge>
+  1543→                      </TableCell>
+  1544→                      <TableCell className="text-right tabular-nums text-muted-foreground">₹ {money(r.defaultRate)}</TableCell>
+  1545→                      <TableCell className="text-right tabular-nums text-muted-foreground">₹ {money(r.defaultLot)}</TableCell>
+  1546→                      <TableCell>
+  1547→                        <Input
+  1548→                          type="number"
+  1549→                          min="0"
+  1550→                          step="any"
+  1551→                          value={r.rate}
+  1552→                          onChange={(e) => setRow(r.processId, { rate: num(e.target.value) })}
+  1553→                          className="h-11 text-right tabular-nums"
+  1554→                          aria-label={`Rate for ${r.name}`}
+  1555→                        />
+  1556→                      </TableCell>
+  1557→                      <TableCell>
+  1558→                        <Input
+  1559→                          type="number"
+  1560→                          min="0"
+  1561→                          step="any"
+  1562→                          value={r.lotCharge}
+  1563→                          onChange={(e) => setRow(r.processId, { lotCharge: num(e.target.value) })}
+  1564→                          className="h-11 text-right tabular-nums"
+  1565→                          aria-label={`Lot charge for ${r.name}`}
+  1566→                        />
+  1567→                      </TableCell>
+  1568→                      <TableCell>
+  1569→                        {overridden ? (
+  1570→                          <Badge className="gap-1 text-[10px]">
+  1571→                            <ListChecks className="size-3" aria-hidden /> OVERRIDDEN
+  1572→                          </Badge>
+  1573→                        ) : (
+  1574→                          <span className="text-xs text-muted-foreground">default</span>
+  1575→                        )}
+  1576→                      </TableCell>
+  1577→                    </TableRow>
+  1578→                  )
+  1579→                })}
+  1580→              </TableBody>
+  1581→            </Table>
+  1582→          </div>
+  1583→          <p className="text-xs text-muted-foreground">
+  1584→            Saving stores only the rows that differ from the process defaults (full-list replace) — clearing both
+  1585→            fields back to defaults removes the override.
+  1586→          </p>
+  1587→        </>
+  1588→      )}
+  1589→    </div>
+  1590→  )
+  1591→}
+  1592→
+  1593→// ===========================================================================
+  1594→// Company
+  1595→// ===========================================================================
+  1596→
+  1597→function CompanyTab() {
+  1598→  const comp = useApi<Company | null>('/api/masters/company')
+  1599→  const [name, setName] = useState('')
+  1600→  const [legalName, setLegalName] = useState('')
+  1601→  const [gstin, setGstin] = useState('')
+  1602→  const [stateCode, setStateCode] = useState('27')
+  1603→  const [address, setAddress] = useState('')
+  1604→  const [city, setCity] = useState('')
+  1605→  const [pincode, setPincode] = useState('')
+  1606→  const [phone, setPhone] = useState('')
+  1607→  const [email, setEmail] = useState('')
+  1608→  const [bankName, setBankName] = useState('')
+  1609→  const [bankAcct, setBankAcct] = useState('')
+  1610→  const [bankIfsc, setBankIfsc] = useState('')
+  1611→  const [upiId, setUpiId] = useState('')
+  1612→  const [saving, setSaving] = useState(false)
+  1613→  const [initialized, setInitialized] = useState(false)
+  1614→
+  1615→  useEffect(() => {
+  1616→    if (!initialized && !comp.loading) {
+  1617→      const c = comp.data
+  1618→      setName(c?.name ?? '')
+  1619→      setLegalName(c?.legalName ?? '')
+  1620→      setGstin(c?.gstin ?? '')
+  1621→      setStateCode(c?.stateCode ?? '27')
+  1622→      setAddress(c?.address ?? '')
+  1623→      setCity(c?.city ?? '')
+  1624→      setPincode(c?.pincode ?? '')
+  1625→      setPhone(c?.phone ?? '')
+  1626→      setEmail(c?.email ?? '')
+  1627→      setBankName(c?.bankName ?? '')
+  1628→      setBankAcct(c?.bankAcct ?? '')
+  1629→      setBankIfsc(c?.bankIfsc ?? '')
+  1630→      setUpiId(c?.upiId ?? '')
+  1631→      setInitialized(true)
+  1632→    }
+  1633→  }, [comp.data, comp.loading, initialized])
+  1634→
+  1635→  const submit = async () => {
+  1636→    if (!name.trim()) {
+  1637→      toast.error('Company name is required')
+  1638→      return
+  1639→    }
+  1640→    if (gstin.trim() && !gstinChecksumValid(gstin)) {
+  1641→      toast.error('GSTIN checksum failed — fix or clear the field')
+  1642→      return
+  1643→    }
+  1644→    setSaving(true)
+  1645→    try {
+  1646→      const res = await apiPut<Company>('/api/masters/company', {
+  1647→        name: name.trim(),
+  1648→        legalName: legalName.trim() || null,
+  1649→        gstin: gstin.trim() || null,
+  1650→        stateCode,
+  1651→        address: address.trim() || null,
+  1652→        city: city.trim() || null,
+  1653→        pincode: pincode.trim() || null,
+  1654→        phone: phone.trim() || null,
+  1655→        email: email.trim() || null,
+  1656→        bankName: bankName.trim() || null,
+  1657→        bankAcct: bankAcct.trim() || null,
+  1658→        bankIfsc: bankIfsc.trim() || null,
+  1659→        upiId: upiId.trim() || null,
+  1660→      })
+  1661→      toast.success(`${res.name} saved`, { description: 'Used on invoice prints and for the inter-state GST split.' })
+  1662→      comp.reload()
+  1663→    } catch (e) {
+  1664→      toastError(e)
+  1665→    } finally {
+  1666→      setSaving(false)
+  1667→    }
+  1668→  }
+  1669→
+  1670→  if (comp.loading) return <TableSkeleton rows={6} cols={2} />
+  1671→
+  1672→  return (
+  1673→    <Card className="mx-auto w-full max-w-3xl p-6">
+  1674→      <div className="flex items-center gap-2">
+  1675→        <span className="flex size-9 items-center justify-center rounded-md bg-primary text-primary-foreground">
+  1676→          <Database className="size-4" aria-hidden />
+  1677→        </span>
+  1678→        <div>
+  1679→          <p className="font-semibold">Company Profile</p>
+  1680→          <p className="text-xs text-muted-foreground">Printed on invoices; the state code drives IGST vs CGST+SGST.</p>
+  1681→        </div>
+  1682→      </div>
+  1683→
+  1684→      <div className="mt-6 grid gap-4 sm:grid-cols-2">
+  1685→        <div className="space-y-1.5 sm:col-span-2">
+  1686→          <Label htmlFor="c-name">Trade Name *</Label>
+  1687→          <Input id="c-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Shree Forge Industries" className="h-11" />
+  1688→        </div>
+  1689→        <div className="space-y-1.5">
+  1690→          <Label htmlFor="c-legal">Legal Name</Label>
+  1691→          <Input id="c-legal" value={legalName} onChange={(e) => setLegalName(e.target.value)} placeholder="Shree Forge Industries Pvt. Ltd." className="h-11" />
+  1692→        </div>
+  1693→        <div className="space-y-1.5">
+  1694→          <Label htmlFor="c-gstin">GSTIN</Label>
+  1695→          <Input
+  1696→            id="c-gstin"
+  1697→            value={gstin}
+  1698→            onChange={(e) => setGstin(e.target.value.toUpperCase())}
+  1699→            placeholder="27ABCDE1234F1Z5"
+  1700→            className="h-11 font-mono"
+  1701→            maxLength={15}
+  1702→          />
+  1703→          <GstinHint value={gstin} />
+  1704→        </div>
+  1705→        <div className="space-y-1.5">
+  1706→          <Label>State (Place of Business)</Label>
+  1707→          <Select value={stateCode} onValueChange={setStateCode}>
+  1708→            <SelectTrigger className="h-11 w-full">
+  1709→              <SelectValue />
+  1710→            </SelectTrigger>
+  1711→            <SelectContent className="max-h-64">
+  1712→              {INDIAN_STATES.map((s) => (
+  1713→                <SelectItem key={s.code} value={s.code}>
+  1714→                  {s.code}-{s.name}
+  1715→                </SelectItem>
+  1716→              ))}
+  1717→            </SelectContent>
+  1718→          </Select>
+  1719→        </div>
+  1720→        <div className="space-y-1.5">
+  1721→          <Label htmlFor="c-pin">Pincode</Label>
+  1722→          <Input id="c-pin" value={pincode} onChange={(e) => setPincode(e.target.value)} placeholder="411026" className="h-11" />
+  1723→        </div>
+  1724→        <div className="space-y-1.5 sm:col-span-2">
+  1725→          <Label htmlFor="c-addr">Address</Label>
+  1726→          <Input id="c-addr" value={address} onChange={(e) => setAddress(e.target.value)} placeholder="Plot 21, MIDC Bhosari…" className="h-11" />
+  1727→        </div>
+  1728→        <div className="space-y-1.5">
+  1729→          <Label htmlFor="c-city">City</Label>
+  1730→          <Input id="c-city" value={city} onChange={(e) => setCity(e.target.value)} placeholder="Pune" className="h-11" />
+  1731→        </div>
+  1732→        <div className="space-y-1.5">
+  1733→          <Label htmlFor="c-phone">Phone</Label>
+  1734→          <Input id="c-phone" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+91…" className="h-11" />
+  1735→        </div>
+  1736→        <div className="space-y-1.5 sm:col-span-2">
+  1737→          <Label htmlFor="c-email">Email</Label>
+  1738→          <Input id="c-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="accounts@shreeforge.in" className="h-11" />
+  1739→        </div>
+  1740→
+  1741→        <div className="space-y-1.5">
+  1742→          <Label htmlFor="c-bank">Bank Name</Label>
+  1743→          <Input id="c-bank" value={bankName} onChange={(e) => setBankName(e.target.value)} placeholder="HDFC Bank" className="h-11" />
+  1744→        </div>
+  1745→        <div className="space-y-1.5">
+  1746→          <Label htmlFor="c-acct">Bank A/c No</Label>
+  1747→          <Input id="c-acct" value={bankAcct} onChange={(e) => setBankAcct(e.target.value)} placeholder="50200012345678" className="h-11 font-mono" />
+  1748→        </div>
+  1749→        <div className="space-y-1.5">
+  1750→          <Label htmlFor="c-ifsc">IFSC</Label>
+  1751→          <Input id="c-ifsc" value={bankIfsc} onChange={(e) => setBankIfsc(e.target.value.toUpperCase())} placeholder="HDFC0000123" className="h-11 font-mono" maxLength={11} />
+  1752→        </div>
+  1753→        <div className="space-y-1.5">
+  1754→          <Label htmlFor="c-upi">UPI ID</Label>
+  1755→          <Input id="c-upi" value={upiId} onChange={(e) => setUpiId(e.target.value)} placeholder="shreeforge@upi" className="h-11" />
+  1756→        </div>
+  1757→      </div>
+  1758→
+  1759→      <div className="mt-6 flex justify-end">
+  1760→        <Button onClick={submit} disabled={saving} className="h-11">
+  1761→          {saving ? 'Saving…' : 'Save company profile'}
+  1762→        </Button>
+  1763→      </div>
+  1764→    </Card>
+  1765→  )
+  1766→}
+  1767→

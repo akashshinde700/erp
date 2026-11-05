@@ -1,7 +1,8 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
+import { PwaRegister } from "@/components/pwa-register";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -18,9 +19,31 @@ export const metadata: Metadata = {
   description:
     "Single-page module-registry ERP for manufacturing, jobwork chains, GST invoicing and double-entry accounting. Built from repository reverse-engineering intelligence.",
   keywords: ["ForgeERP", "ERP", "Manufacturing", "Jobwork", "GST", "Accounting", "Next.js"],
-  icons: {
-    icon: "https://z-cdn.chatglm.cn/z-ai/static/logo.svg",
+  applicationName: "ForgeERP",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "ForgeERP",
   },
+  icons: {
+    icon: [
+      { url: "/icons/icon-32.png", sizes: "32x32", type: "image/png" },
+      { url: "/icons/icon-192.png", sizes: "192x192", type: "image/png" },
+      { url: "/icons/icon-512.png", sizes: "512x512", type: "image/png" },
+    ],
+    apple: [{ url: "/icons/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+  },
+};
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f8f7f2" },
+    { media: "(prefers-color-scheme: dark)", color: "#1c1b19" },
+  ],
 };
 
 export default function RootLayout({
@@ -34,6 +57,7 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}
       >
         {children}
+        <PwaRegister />
         <Toaster richColors position="bottom-right" closeButton />
       </body>
     </html>

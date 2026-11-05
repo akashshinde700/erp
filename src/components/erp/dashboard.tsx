@@ -102,7 +102,7 @@ export function DashboardView() {
               <qa.icon className="size-4" aria-hidden />
             </span>
             <span className="min-w-0">
-              <span className="block truncate text-xs font-semibold">{qa.label}</span>
+              <span className="block text-xs font-semibold">{qa.label}</span>
               <span className="block truncate text-[10px] text-muted-foreground">{qa.hint}</span>
             </span>
             <Plus className="ml-auto size-3.5 shrink-0 text-muted-foreground/50 transition-colors group-hover:text-primary" aria-hidden />
@@ -203,7 +203,7 @@ export function DashboardView() {
           <CardTitle className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
             Recent Invoices
           </CardTitle>
-          <Button variant="ghost" size="sm" onClick={() => setView('sales')} className="gap-1">
+          <Button variant="ghost" size="sm" onClick={() => setView('sales')} className="h-10 gap-1">
             View all <ArrowUpRight className="size-4" aria-hidden />
           </Button>
         </CardHeader>

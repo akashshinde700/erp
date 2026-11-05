@@ -82,9 +82,9 @@ function Gstr1Tab() {
                   <TableHead className="text-right">Rate</TableHead>
                   <TableHead className="text-right">Invoices</TableHead>
                   <TableHead className="text-right">Taxable</TableHead>
-                  <TableHead className="text-right">CGST</TableHead>
-                  <TableHead className="text-right">SGST</TableHead>
-                  <TableHead className="text-right">IGST</TableHead>
+                  <TableHead className="hidden text-right md:table-cell">CGST</TableHead>
+                  <TableHead className="hidden text-right md:table-cell">SGST</TableHead>
+                  <TableHead className="hidden text-right md:table-cell">IGST</TableHead>
                   <TableHead className="text-right">Total Tax</TableHead>
                 </TableRow>
               </TableHeader>
@@ -96,13 +96,13 @@ function Gstr1Tab() {
                     <TableCell className="text-right tabular-nums">
                       <Money value={b.taxable} plain />
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">
+                    <TableCell className="hidden text-right tabular-nums md:table-cell">
                       <Money value={b.cgst} plain />
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">
+                    <TableCell className="hidden text-right tabular-nums md:table-cell">
                       <Money value={b.sgst} plain />
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">
+                    <TableCell className="hidden text-right tabular-nums md:table-cell">
                       <Money value={b.igst} plain />
                     </TableCell>
                     <TableCell className="text-right font-semibold tabular-nums">
@@ -116,13 +116,13 @@ function Gstr1Tab() {
                   <TableCell className="text-right tabular-nums">
                     <Money value={total.taxable} plain />
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">
+                  <TableCell className="hidden text-right tabular-nums md:table-cell">
                     <Money value={total.cgst} plain />
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">
+                  <TableCell className="hidden text-right tabular-nums md:table-cell">
                     <Money value={total.sgst} plain />
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">
+                  <TableCell className="hidden text-right tabular-nums md:table-cell">
                     <Money value={total.igst} plain />
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
@@ -239,7 +239,7 @@ function TrialBalanceTab() {
 
           <Card className="p-0">
             <CardContent className="p-0">
-              <div className="max-h-[62vh] overflow-auto erp-scroll">
+              <div className="max-h-[62dvh] overflow-auto erp-scroll [&_[data-slot=table-container]]:overflow-visible">
                 <Table>
                   <TableHeader className="sticky top-0 z-10 bg-card">
                     <TableRow>

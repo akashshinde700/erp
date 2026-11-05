@@ -168,7 +168,7 @@ function PaymentsTab({ preset, onPresetConsumed }: { preset: PaymentPreset | nul
               />
             </div>
           ) : (
-            <div className="max-h-[62vh] overflow-auto erp-scroll">
+            <div className="max-h-[62dvh] overflow-auto erp-scroll [&_[data-slot=table-container]]:overflow-visible">
               <Table>
                 <TableHeader className="sticky top-0 z-10 bg-card">
                   <TableRow>
@@ -177,8 +177,8 @@ function PaymentsTab({ preset, onPresetConsumed }: { preset: PaymentPreset | nul
                     <TableHead>Type</TableHead>
                     <TableHead>Party</TableHead>
                     <TableHead className="text-right">Amount</TableHead>
-                    <TableHead>Mode / Ref</TableHead>
-                    <TableHead className="text-right">Allocated</TableHead>
+                    <TableHead className="hidden md:table-cell">Mode / Ref</TableHead>
+                    <TableHead className="hidden text-right md:table-cell">Allocated</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="w-12" />
                   </TableRow>
@@ -200,11 +200,11 @@ function PaymentsTab({ preset, onPresetConsumed }: { preset: PaymentPreset | nul
                         <TableCell className="text-right font-semibold tabular-nums">
                           <Money value={p.amount} plain />
                         </TableCell>
-                        <TableCell className="text-xs">
+                        <TableCell className="hidden text-xs md:table-cell">
                           {p.mode ?? '—'}
                           {p.refNo ? <span className="block text-muted-foreground">{p.refNo}</span> : null}
                         </TableCell>
-                        <TableCell className="text-right text-xs tabular-nums text-muted-foreground">
+                        <TableCell className="hidden text-right text-xs tabular-nums text-muted-foreground md:table-cell">
                           {alloc > 0 ? money(alloc) : '—'}
                           {p.allocations && p.allocations.length > 0 ? (
                             <span className="block text-[10px]">{p.allocations.length} inv.</span>
@@ -394,7 +394,7 @@ function NewPaymentDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[92vh] w-full max-w-2xl flex-col overflow-hidden">
+      <DialogContent className="flex max-h-[92dvh] flex-col overflow-hidden sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>New Payment</DialogTitle>
           <DialogDescription>
@@ -499,7 +499,7 @@ function NewPaymentDialog({
                     <TableHeader>
                       <TableRow>
                         <TableHead>Invoice</TableHead>
-                        <TableHead>Date</TableHead>
+                        <TableHead className="hidden sm:table-cell">Date</TableHead>
                         <TableHead className="text-right">Outstanding</TableHead>
                         <TableHead className="w-32 text-right">Allocate ₹</TableHead>
                       </TableRow>
@@ -512,7 +512,7 @@ function NewPaymentDialog({
                         return (
                           <TableRow key={inv.id}>
                             <TableCell className="font-medium tabular-nums">{inv.invoiceNo}</TableCell>
-                            <TableCell className="whitespace-nowrap text-xs">{dateStr(inv.date)}</TableCell>
+                            <TableCell className="hidden whitespace-nowrap text-xs sm:table-cell">{dateStr(inv.date)}</TableCell>
                             <TableCell className="text-right tabular-nums">
                               <Money value={outstanding} plain />
                             </TableCell>
@@ -628,7 +628,7 @@ function PartyLedgerTab({ presetPartyId }: { presetPartyId?: string }) {
 
           <Card className="p-0">
             <CardContent className="p-0">
-              <div className="max-h-[62vh] overflow-auto erp-scroll">
+              <div className="max-h-[62dvh] overflow-auto erp-scroll [&_[data-slot=table-container]]:overflow-visible">
                 <Table>
                   <TableHeader className="sticky top-0 z-10 bg-card">
                     <TableRow>

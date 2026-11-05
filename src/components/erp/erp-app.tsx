@@ -6,7 +6,7 @@
  * view switch via zustand, sticky footer, first-boot setup screen.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import {
   BarChart3,
   BookOpenText,
@@ -35,18 +35,10 @@ import { CommandPalette, ShortcutsHelpDialog } from './palette'
 import { cn } from '@/lib/utils'
 import { fyCode, dateStr } from '@/lib/erp'
 
-import { DashboardView } from './dashboard'
-import { SalesDetailView, SalesView } from './sales'
-import { PurchaseDetailView, PurchaseView } from './purchase'
-import { InventoryView } from './inventory'
-import { JobworkDetailView, JobworkView } from './jobwork'
-import { AccountingView } from './accounting'
-import { ReportsView } from './reports'
-import { MastersView } from './masters'
-import { TallyView } from './tally'
-import { PlatformView } from './platform'
-import { AuditView } from './audit'
-import { DocsView } from './docs'
+// Module views are lazy-loaded: the initial payload carries only the shell +
+// dashboard, and each heavy module (masters, jobwork, invoice editor, charts)
+// arrives as its own chunk on first navigation. State lives in zustand, so
+// lazy mounting cannot lose user data. (Declarations below, after NavList.)
 
 // ---------- navigation registry ----------
 
@@ -123,6 +115,38 @@ function NavList({ onNavigate }: { onNavigate?: () => void }) {
         </div>
       ))}
     </nav>
+  )
+}
+
+// ---------- lazy module views (code splitting) ----------
+
+const DashboardView = lazy(() => import('./dashboard').then((m) => ({ default: m.DashboardView })))
+const SalesView = lazy(() => import('./sales').then((m) => ({ default: m.SalesView })))
+const SalesDetailView = lazy(() => import('./sales').then((m) => ({ default: m.SalesDetailView })))
+const PurchaseView = lazy(() => import('./purchase').then((m) => ({ default: m.PurchaseView })))
+const PurchaseDetailView = lazy(() => import('./purchase').then((m) => ({ default: m.PurchaseDetailView })))
+const InventoryView = lazy(() => import('./inventory').then((m) => ({ default: m.InventoryView })))
+const JobworkView = lazy(() => import('./jobwork').then((m) => ({ default: m.JobworkView })))
+const JobworkDetailView = lazy(() => import('./jobwork').then((m) => ({ default: m.JobworkDetailView })))
+const AccountingView = lazy(() => import('./accounting').then((m) => ({ default: m.AccountingView })))
+const ReportsView = lazy(() => import('./reports').then((m) => ({ default: m.ReportsView })))
+const MastersView = lazy(() => import('./masters').then((m) => ({ default: m.MastersView })))
+const TallyView = lazy(() => import('./tally').then((m) => ({ default: m.TallyView })))
+const PlatformView = lazy(() => import('./platform').then((m) => ({ default: m.PlatformView })))
+const AuditView = lazy(() => import('./audit').then((m) => ({ default: m.AuditView })))
+const DocsView = lazy(() => import('./docs').then((m) => ({ default: m.DocsView })))
+
+function ViewSkeleton() {
+  return (
+    <div className="space-y-4" aria-busy="true" aria-label="Loading module">
+      <Skeleton className="h-8 w-48" />
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <Skeleton key={i} className="h-24 rounded-xl" />
+        ))}
+      </div>
+      <Skeleton className="h-72 rounded-xl" />
+    </div>
   )
 }
 
@@ -448,7 +472,7 @@ export function ErpApp() {
                   Company not set up
                 </span>
               )}
-              <span className="max-w-40 truncate text-sm font-medium sm:max-w-none">
+              <span className="max-w-28 truncate text-sm font-medium sm:max-w-40 lg:max-w-none">
                 {company.data?.name ?? ''}
               </span>
             </div>
@@ -459,12 +483,14 @@ export function ErpApp() {
             footer always sits at the viewport bottom on short pages; the sidebar
             caps at viewport height and scrolls internally when needed. */}
         <div className="flex min-h-0 flex-1">
-          <aside className="sticky top-14 hidden h-auto max-h-[calc(100vh-3.5rem)] w-60 shrink-0 overflow-y-auto border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:block lg:w-64 erp-scroll-y">
+          <aside className="sticky top-14 hidden h-auto max-h-[calc(100dvh-3.5rem)] w-60 shrink-0 overflow-y-auto border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:block lg:w-64 erp-scroll-y">
             <NavList />
           </aside>
 
           <main className="min-w-0 flex-1 p-4 sm:p-6">
-            <div className="mx-auto w-full max-w-7xl">{content}</div>
+            <div className="mx-auto w-full max-w-7xl">
+              <Suspense fallback={<ViewSkeleton />}>{content}</Suspense>
+            </div>
           </main>
         </div>
 

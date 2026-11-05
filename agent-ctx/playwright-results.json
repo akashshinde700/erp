@@ -1,0 +1,252 @@
+{
+  "total": 49,
+  "failed": 0,
+  "results": [
+    {
+      "name": "App title",
+      "ok": true,
+      "note": "ForgeERP \u2014 Manufacturing \u00b7 Jobwork \u00b7 GST ERP"
+    },
+    {
+      "name": "No blank screen",
+      "ok": true,
+      "note": ""
+    },
+    {
+      "name": "Dashboard KPIs visible",
+      "ok": true,
+      "note": ""
+    },
+    {
+      "name": "Module: Dashboard",
+      "ok": true,
+      "note": "Dashboard"
+    },
+    {
+      "name": "Module: Sales",
+      "ok": true,
+      "note": "Sales Invoices"
+    },
+    {
+      "name": "Module: Purchase",
+      "ok": true,
+      "note": "Purchase Invoices"
+    },
+    {
+      "name": "Module: Jobwork",
+      "ok": true,
+      "note": "Jobwork"
+    },
+    {
+      "name": "Module: Inventory",
+      "ok": true,
+      "note": "Inventory"
+    },
+    {
+      "name": "Module: Accounting",
+      "ok": true,
+      "note": "Accounting"
+    },
+    {
+      "name": "Module: Reports",
+      "ok": true,
+      "note": "Reports"
+    },
+    {
+      "name": "Module: Masters",
+      "ok": true,
+      "note": "Masters"
+    },
+    {
+      "name": "Module: Tally Export",
+      "ok": true,
+      "note": "Tally Export & Connector"
+    },
+    {
+      "name": "Module: Audit Trail",
+      "ok": true,
+      "note": "Audit Trail"
+    },
+    {
+      "name": "Module: Platform Admin",
+      "ok": true,
+      "note": "Platform Admin"
+    },
+    {
+      "name": "Module: Docs",
+      "ok": true,
+      "note": "Reverse-Engineering Intelligence"
+    },
+    {
+      "name": "Sales list has rows",
+      "ok": true,
+      "note": "6 invoices"
+    },
+    {
+      "name": "INV-2627-005 (created in manual session) present",
+      "ok": true,
+      "note": ""
+    },
+    {
+      "name": "Menu item: Tally XML (import file)",
+      "ok": true,
+      "note": ""
+    },
+    {
+      "name": "Menu item: Tally JSON",
+      "ok": true,
+      "note": ""
+    },
+    {
+      "name": "Menu item: Tally Excel (CSV)",
+      "ok": true,
+      "note": ""
+    },
+    {
+      "name": "Menu item: Tally importer (.bat)",
+      "ok": true,
+      "note": ""
+    },
+    {
+      "name": "Menu item: Tally masters (XML)",
+      "ok": true,
+      "note": ""
+    },
+    {
+      "name": "Menu item: Mark as sent to Tally",
+      "ok": true,
+      "note": ""
+    },
+    {
+      "name": "Menu item: e-Invoice JSON (GST portal)",
+      "ok": true,
+      "note": ""
+    },
+    {
+      "name": "GET /api/sales-invoices",
+      "ok": true,
+      "note": "6 posted"
+    },
+    {
+      "name": "e-Invoice IRP JSON download",
+      "ok": true,
+      "note": "INV-2627-006_einvoice.json (1814 bytes)"
+    },
+    {
+      "name": "Bulk e-Invoice JSON (Version/BulkInvList)",
+      "ok": true,
+      "note": "forge-einvoice_2026-10-01_2026-11-30.json (10774 bytes)"
+    },
+    {
+      "name": "e-Invoice preview validation",
+      "ok": true,
+      "note": "docNo=INV-2627-006 totInvVal=36698"
+    },
+    {
+      "name": "Tally voucher XML",
+      "ok": true,
+      "note": "status=200"
+    },
+    {
+      "name": "Tally masters XML",
+      "ok": true,
+      "note": "status=200"
+    },
+    {
+      "name": "Jobwork inwards list",
+      "ok": true,
+      "note": ""
+    },
+    {
+      "name": "CERT-2627-002 (certificate created) visible",
+      "ok": true,
+      "note": ""
+    },
+    {
+      "name": "GET /api/jobwork/inwards",
+      "ok": true,
+      "note": "2 inwards"
+    },
+    {
+      "name": "Stock summary report",
+      "ok": true,
+      "note": "2 items"
+    },
+    {
+      "name": "Report tab: GSTR-1",
+      "ok": true,
+      "note": ""
+    },
+    {
+      "name": "Report tab: Trial Balance",
+      "ok": true,
+      "note": ""
+    },
+    {
+      "name": "Report tab: Outstanding",
+      "ok": true,
+      "note": ""
+    },
+    {
+      "name": "Payments list",
+      "ok": true,
+      "note": ""
+    },
+    {
+      "name": "Payment for INV-2627-005 recorded",
+      "ok": true,
+      "note": "4 payments"
+    },
+    {
+      "name": "New party CUST-004 Nashik Steel Traders exists",
+      "ok": true,
+      "note": "7 parties"
+    },
+    {
+      "name": "Search API (q=flange)",
+      "ok": true,
+      "note": ""
+    },
+    {
+      "name": "Command palette opens",
+      "ok": true,
+      "note": ""
+    },
+    {
+      "name": "Audit rows (this session's actions logged)",
+      "ok": true,
+      "note": ""
+    },
+    {
+      "name": "Key gate present",
+      "ok": true,
+      "note": ""
+    },
+    {
+      "name": "Console unlocks with key",
+      "ok": true,
+      "note": ""
+    },
+    {
+      "name": "No horizontal overflow at 390px",
+      "ok": true,
+      "note": ""
+    },
+    {
+      "name": "Mobile drawer button",
+      "ok": true,
+      "note": ""
+    },
+    {
+      "name": "Footer sticks to bottom (no gap)",
+      "ok": true,
+      "note": "gap=0px"
+    },
+    {
+      "name": "Zero console/page errors",
+      "ok": true,
+      "note": ""
+    }
+  ],
+  "console_errors": []
+}

@@ -382,14 +382,14 @@ function ConnectorCard() {
           <div className="space-y-2 rounded-lg border bg-muted/30 p-3 text-xs">
             <p className="font-medium">
               Pairing code (single-use, expires {new Date(code.expiresAt).toLocaleTimeString()}):{' '}
-              <button type="button" className="rounded bg-background px-2 py-0.5 font-mono text-sm tracking-widest underline-offset-2 hover:underline" onClick={() => copy(code.code)}>
+              <button type="button" className="inline-flex min-h-11 items-center rounded bg-background px-3 font-mono text-sm tracking-widest underline-offset-2 hover:underline" onClick={() => copy(code.code)}>
                 {code.code}
               </button>
             </p>
             <p className="text-muted-foreground">On the Tally machine (Node 18+):</p>
             <ol className="ml-4 list-decimal space-y-1 font-mono text-[11px] leading-relaxed">
               <li>
-                <button type="button" className="text-left underline-offset-2 hover:underline" onClick={() => copy(`node forge-tally-connector.mjs pair --server ${origin} --code ${code.code}`)}>
+                <button type="button" className="inline-flex min-h-11 w-full items-center break-all text-left text-xs underline-offset-2 hover:underline" onClick={() => copy(`node forge-tally-connector.mjs pair --server ${origin} --code ${code.code}`)}>
                   node forge-tally-connector.mjs pair --server {origin} --code {code.code}
                 </button>
               </li>
@@ -405,7 +405,7 @@ function ConnectorCard() {
           <a
             href="/downloads/tally/forge-tally-connector.mjs"
             download
-            className="inline-flex h-9 items-center gap-1.5 rounded-md border px-3 font-medium hover:bg-accent"
+            className="inline-flex h-10 items-center gap-1.5 rounded-md border px-3 font-medium hover:bg-accent"
           >
             <Download className="size-3.5" aria-hidden /> forge-tally-connector.mjs
           </a>
@@ -416,7 +416,7 @@ function ConnectorCard() {
         {status?.recent?.length ? (
           <div className="max-h-44 overflow-auto rounded-lg border erp-scroll">
             <Table>
-              <TableHeader className="sticky top-0 bg-card">
+              <TableHeader className="sticky top-0 z-10 bg-card">
                 <TableRow>
                   <TableHead>Document</TableHead>
                   <TableHead>Result</TableHead>
@@ -434,7 +434,7 @@ function ConnectorCard() {
                     <TableCell className="text-right tabular-nums">
                       {r.created} / {r.altered}
                     </TableCell>
-                    <TableCell className="max-w-64 truncate text-xs text-muted-foreground">{r.errorText || (r.errors ? `${r.errors} Tally error(s)` : 'OK')}</TableCell>
+                    <TableCell className="max-w-64 truncate text-xs text-muted-foreground" title={r.errorText || (r.errors ? `${r.errors} Tally error(s)` : 'OK')}>{r.errorText || (r.errors ? `${r.errors} Tally error(s)` : 'OK')}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>

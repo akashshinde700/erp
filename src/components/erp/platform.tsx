@@ -19,12 +19,19 @@ import {
   IndianRupee,
   KeyRound,
   Loader2,
+  MoreVertical,
   Plus,
   RefreshCw,
   Save,
   ShieldAlert,
   Trash2,
 } from 'lucide-react'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -187,7 +194,7 @@ function Console({ apiKey, onAuthLost }: { apiKey: string; onAuthLost: () => voi
         </div>
       ) : null}
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <Button variant={tab === 'orgs' ? 'default' : 'outline'} onClick={() => setTab('orgs')} className="h-11">
           Organizations ({data?.orgs.length ?? 0})
         </Button>
@@ -303,15 +310,15 @@ function OrgsTable({
               <Plus className="size-4" aria-hidden /> New organization
             </Button>
           </div>
-          <div className="max-h-[62vh] overflow-auto erp-scroll">
+          <div className="max-h-[62dvh] overflow-auto erp-scroll [&_[data-slot=table-container]]:overflow-visible">
             <Table>
               <TableHeader className="sticky top-0 z-10 bg-card">
                 <TableRow>
                   <TableHead>Organization</TableHead>
                   <TableHead>Plan</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Usage (operating org)</TableHead>
-                  <TableHead>Paid until / Trial until</TableHead>
+                  <TableHead className="hidden md:table-cell">Usage (operating org)</TableHead>
+                  <TableHead className="hidden md:table-cell">Paid until / Trial until</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -330,7 +337,7 @@ function OrgsTable({
                         value={o.plan?.id ?? 'none'}
                         onValueChange={(v) => void onAction(o.id, { action: 'setPlan', planId: v === 'none' ? null : v }, 'Plan updated')}
                       >
-                        <SelectTrigger className="h-9 w-40" aria-label={`Plan for ${o.name}`}>
+                        <SelectTrigger className="h-10 w-40" aria-label={`Plan for ${o.name}`}>
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -345,7 +352,7 @@ function OrgsTable({
                       {o.customized ? <span className="mt-1 block text-[11px] text-muted-foreground">custom limits</span> : null}
                     </TableCell>
                     <TableCell>{stateBadge(o)}</TableCell>
-                    <TableCell className="text-xs tabular-nums">
+                    <TableCell className="hidden text-xs tabular-nums md:table-cell">
                       {o.operating ? (
                         <>
                           {o.usage.parties}/{o.limits.parties || '∞'} parties · {o.usage.items}/{o.limits.items || '∞'} items ·{' '}
@@ -355,7 +362,7 @@ function OrgsTable({
                         <span className="text-muted-foreground">—</span>
                       )}
                     </TableCell>
-                    <TableCell className="text-xs tabular-nums">
+                    <TableCell className="hidden text-xs tabular-nums md:table-cell">
                       {o.paidUntil ? <span>Paid: {dateStr(o.paidUntil)}</span> : null}
                       {o.trialEndsAt ? (
                         <span className={o.paidUntil ? ' block' : ''}>Trial: {dateStr(o.trialEndsAt)}</span>
@@ -363,28 +370,65 @@ function OrgsTable({
                       {!o.paidUntil && !o.trialEndsAt ? <span className="text-muted-foreground">No expiry</span> : null}
                     </TableCell>
                     <TableCell>
-                      <div className="flex flex-wrap items-center justify-end gap-1.5">
-                        <Button size="sm" variant="outline" className="h-8" onClick={() => void onAction(o.id, { action: 'markPaid', cycle: 'MONTHLY' }, 'Marked paid +1 month')}>
-                          +1 mo
-                        </Button>
-                        <Button size="sm" variant="outline" className="h-8" onClick={() => void onAction(o.id, { action: 'markPaid', cycle: 'YEARLY' }, 'Marked paid +1 year')}>
-                          +1 yr
-                        </Button>
-                        <Button size="sm" variant="outline" className="h-8" onClick={() => void onAction(o.id, { action: 'extendTrial', days: 7 }, 'Trial extended +7 days')}>
-                          +7d trial
-                        </Button>
-                        {o.saasStatus === 'SUSPENDED' ? (
-                          <Button size="sm" className="h-8 gap-1" onClick={() => void onAction(o.id, { action: 'activate' }, 'Organization activated')}>
-                            <CheckCircle2 className="size-3.5" aria-hidden /> Activate
+                      <div className="flex items-center justify-end gap-1.5">
+                        {/* Mobile: billing actions in one overflow menu (40px trigger) */}
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-10 md:hidden"
+                              aria-label={`More actions for ${o.name}`}
+                            >
+                              <MoreVertical className="size-4" aria-hidden />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => void onAction(o.id, { action: 'markPaid', cycle: 'MONTHLY' }, 'Marked paid +1 month')}>
+                              Mark paid +1 month
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => void onAction(o.id, { action: 'markPaid', cycle: 'YEARLY' }, 'Marked paid +1 year')}>
+                              Mark paid +1 year
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => void onAction(o.id, { action: 'extendTrial', days: 7 }, 'Trial extended +7 days')}>
+                              Extend trial +7 days
+                            </DropdownMenuItem>
+                            {o.saasStatus === 'SUSPENDED' ? (
+                              <DropdownMenuItem onClick={() => void onAction(o.id, { action: 'activate' }, 'Organization activated')}>
+                                <CheckCircle2 className="size-4" aria-hidden /> Activate
+                              </DropdownMenuItem>
+                            ) : (
+                              <DropdownMenuItem onClick={() => void onAction(o.id, { action: 'suspend' }, 'Organization suspended — mutations now blocked')}>
+                                <ShieldAlert className="size-4" aria-hidden /> Suspend
+                              </DropdownMenuItem>
+                            )}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                        {/* Desktop: inline quick actions */}
+                        <div className="hidden items-center gap-1.5 md:flex">
+                          <Button size="sm" variant="outline" className="h-8" onClick={() => void onAction(o.id, { action: 'markPaid', cycle: 'MONTHLY' }, 'Marked paid +1 month')}>
+                            +1 mo
                           </Button>
-                        ) : (
-                          <Button size="sm" variant="destructive" className="h-8 gap-1" onClick={() => void onAction(o.id, { action: 'suspend' }, 'Organization suspended — mutations now blocked')}>
-                            <ShieldAlert className="size-3.5" aria-hidden /> Suspend
+                          <Button size="sm" variant="outline" className="h-8" onClick={() => void onAction(o.id, { action: 'markPaid', cycle: 'YEARLY' }, 'Marked paid +1 year')}>
+                            +1 yr
                           </Button>
-                        )}
+                          <Button size="sm" variant="outline" className="h-8" onClick={() => void onAction(o.id, { action: 'extendTrial', days: 7 }, 'Trial extended +7 days')}>
+                            +7d trial
+                          </Button>
+                          {o.saasStatus === 'SUSPENDED' ? (
+                            <Button size="sm" className="h-8 gap-1" onClick={() => void onAction(o.id, { action: 'activate' }, 'Organization activated')}>
+                              <CheckCircle2 className="size-3.5" aria-hidden /> Activate
+                            </Button>
+                          ) : (
+                            <Button size="sm" variant="destructive" className="h-8 gap-1" onClick={() => void onAction(o.id, { action: 'suspend' }, 'Organization suspended — mutations now blocked')}>
+                              <ShieldAlert className="size-3.5" aria-hidden /> Suspend
+                            </Button>
+                          )}
+                        </div>
+                        {/* Delete stays a guarded 40px button on every size */}
                         <AlertDialog>
                           <AlertDialogTrigger asChild>
-                            <Button size="sm" variant="ghost" className="h-8 text-destructive hover:text-destructive" aria-label={`Delete ${o.name}`}>
+                            <Button size="sm" variant="ghost" className="h-10 text-destructive hover:text-destructive md:h-8" aria-label={`Delete ${o.name}`}>
                               <Trash2 className="size-3.5" aria-hidden />
                             </Button>
                           </AlertDialogTrigger>
@@ -576,12 +620,12 @@ function PlansTable({ plans, apiKey, reload }: { plans: Plan[]; apiKey: string; 
                     <TableCell className="text-right tabular-nums">{p._count?.companies ?? 0}</TableCell>
                     <TableCell>
                       <div className="flex items-center justify-end gap-1.5">
-                        <Button size="sm" variant="outline" className="h-8" onClick={() => openEdit(p)}>
+                        <Button size="sm" variant="outline" className="h-10 md:h-8" onClick={() => openEdit(p)}>
                           Edit
                         </Button>
                         <AlertDialog>
                           <AlertDialogTrigger asChild>
-                            <Button size="sm" variant="ghost" className="h-8 text-destructive hover:text-destructive" disabled={(p._count?.companies ?? 0) > 0}>
+                            <Button size="sm" variant="ghost" className="h-10 text-destructive hover:text-destructive md:h-8" disabled={(p._count?.companies ?? 0) > 0}>
                               <Trash2 className="size-3.5" aria-hidden />
                             </Button>
                           </AlertDialogTrigger>

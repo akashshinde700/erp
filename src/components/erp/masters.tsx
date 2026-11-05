@@ -183,17 +183,17 @@ function PartiesTab() {
               <EmptyState title="No parties" hint="Create customers, suppliers and jobworkers here." icon={Building2} />
             </div>
           ) : (
-            <div className="max-h-[62vh] overflow-auto erp-scroll">
+            <div className="max-h-[62dvh] overflow-auto erp-scroll [&_[data-slot=table-container]]:overflow-visible">
               <Table>
                 <TableHeader className="sticky top-0 z-10 bg-card">
                   <TableRow>
                     <TableHead>Code</TableHead>
                     <TableHead>Name</TableHead>
-                    <TableHead>Types</TableHead>
+                    <TableHead className="hidden sm:table-cell">Types</TableHead>
                     <TableHead>GSTIN</TableHead>
-                    <TableHead>State</TableHead>
-                    <TableHead>City</TableHead>
-                    <TableHead className="text-right">Opening Bal</TableHead>
+                    <TableHead className="hidden sm:table-cell">State</TableHead>
+                    <TableHead className="hidden sm:table-cell">City</TableHead>
+                    <TableHead className="hidden text-right sm:table-cell">Opening Bal</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="w-36" />
                   </TableRow>
@@ -203,7 +203,7 @@ function PartiesTab() {
                     <TableRow key={p.id} className="cursor-pointer" onClick={() => setViewing(p)}>
                       <TableCell className="font-mono text-xs font-medium">{p.code}</TableCell>
                       <TableCell className="max-w-44 truncate font-medium">{p.name}</TableCell>
-                      <TableCell>
+                      <TableCell className="hidden sm:table-cell">
                         <div className="flex flex-wrap gap-1">
                           {p.types.split(',').filter(Boolean).map((t) => (
                             <Badge key={t} variant={t === 'CUSTOMER' ? 'default' : t === 'SUPPLIER' ? 'secondary' : 'outline'} className="text-[10px]">
@@ -213,9 +213,9 @@ function PartiesTab() {
                         </div>
                       </TableCell>
                       <TableCell className="font-mono text-xs tabular-nums">{p.gstin ?? '—'}</TableCell>
-                      <TableCell className="text-xs">{stateName(p.stateCode)}</TableCell>
-                      <TableCell className="text-xs">{p.city ?? '—'}</TableCell>
-                      <TableCell className="text-right tabular-nums">
+                      <TableCell className="hidden text-xs sm:table-cell">{stateName(p.stateCode)}</TableCell>
+                      <TableCell className="hidden text-xs sm:table-cell">{p.city ?? '—'}</TableCell>
+                      <TableCell className="hidden text-right tabular-nums sm:table-cell">
                         <Money value={p.openingBal} plain />
                       </TableCell>
                       <TableCell>
@@ -356,7 +356,7 @@ function PartyViewDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden sm:max-w-3xl">
+      <DialogContent className="flex max-h-[92dvh] flex-col overflow-hidden sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle className="flex flex-wrap items-center gap-2">
             {party.name}
@@ -404,15 +404,15 @@ function PartyViewDialog({
         </div>
 
         <div className="grid grid-cols-3 gap-2">
-          <div className="rounded-md border bg-muted/30 p-2.5 text-center">
+          <div className="min-w-0 rounded-md border bg-muted/30 p-2.5 text-center">
             <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Receivable</p>
-            <p className="text-sm font-semibold tabular-nums text-primary">₹ {money(Math.max(0, receivable))}</p>
+            <p className="truncate text-sm font-semibold tabular-nums text-primary" title={`₹ ${money(Math.max(0, receivable))}`}>₹ {money(Math.max(0, receivable))}</p>
           </div>
-          <div className="rounded-md border bg-muted/30 p-2.5 text-center">
+          <div className="min-w-0 rounded-md border bg-muted/30 p-2.5 text-center">
             <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Payable</p>
-            <p className="text-sm font-semibold tabular-nums text-destructive">₹ {money(Math.max(0, payable))}</p>
+            <p className="truncate text-sm font-semibold tabular-nums text-destructive" title={`₹ ${money(Math.max(0, payable))}`}>₹ {money(Math.max(0, payable))}</p>
           </div>
-          <div className="rounded-md border bg-muted/30 p-2.5 text-center">
+          <div className="min-w-0 rounded-md border bg-muted/30 p-2.5 text-center">
             <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">Vouchers</p>
             <p className="text-sm font-semibold tabular-nums">{salesRows.length + purchaseRows.length + paymentRows.length}</p>
           </div>
@@ -420,10 +420,10 @@ function PartyViewDialog({
 
         <div className="min-h-0 flex-1 overflow-hidden">
           <Tabs defaultValue={isCustomer ? 'sales' : 'purchases'}>
-            <TabsList className="h-9">
-              {isCustomer ? <TabsTrigger value="sales" className="h-7 text-xs">Sales ({salesRows.length})</TabsTrigger> : null}
-              {isSupplier ? <TabsTrigger value="purchases" className="h-7 text-xs">Purchases ({purchaseRows.length})</TabsTrigger> : null}
-              <TabsTrigger value="payments" className="h-7 text-xs">Payments ({paymentRows.length})</TabsTrigger>
+            <TabsList className="h-11 w-full justify-start overflow-x-auto sm:w-auto">
+              {isCustomer ? <TabsTrigger value="sales" className="h-9 text-xs">Sales ({salesRows.length})</TabsTrigger> : null}
+              {isSupplier ? <TabsTrigger value="purchases" className="h-9 text-xs">Purchases ({purchaseRows.length})</TabsTrigger> : null}
+              <TabsTrigger value="payments" className="h-9 text-xs">Payments ({paymentRows.length})</TabsTrigger>
             </TabsList>
             {isCustomer ? (
               <TabsContent value="sales" className="mt-2">
@@ -608,7 +608,7 @@ function PartyDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[92vh] w-full max-w-2xl overflow-y-auto erp-scroll-y">
+      <DialogContent className="max-h-[92dvh] overflow-y-auto erp-scroll-y sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{party ? `Edit ${party.code}` : 'New Party'}</DialogTitle>
           <DialogDescription>Customers, suppliers and jobworkers — GSTIN is checksum-validated live.</DialogDescription>
@@ -689,7 +689,7 @@ function PartyDialog({
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="p-phone">Phone</Label>
-            <Input id="p-phone" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+91…" className="h-11" />
+            <Input id="p-phone" type="tel" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+91…" className="h-11" />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="p-email">Email</Label>
@@ -782,20 +782,20 @@ function ItemsTab() {
               <EmptyState title="No items" hint="Create finished goods, raw materials and services." icon={Package} />
             </div>
           ) : (
-            <div className="max-h-[62vh] overflow-auto erp-scroll">
+            <div className="max-h-[62dvh] overflow-auto erp-scroll [&_[data-slot=table-container]]:overflow-visible">
               <Table>
                 <TableHeader className="sticky top-0 z-10 bg-card">
                   <TableRow>
                     <TableHead>Code</TableHead>
                     <TableHead>Name</TableHead>
-                    <TableHead>Group</TableHead>
-                    <TableHead>HSN</TableHead>
+                    <TableHead className="hidden sm:table-cell">Group</TableHead>
+                    <TableHead className="hidden sm:table-cell">HSN</TableHead>
                     <TableHead>UOM</TableHead>
                     <TableHead className="text-right">GST %</TableHead>
                     <TableHead className="text-right">Sale Rate</TableHead>
-                    <TableHead className="text-right">Cost Rate</TableHead>
-                    <TableHead className="text-right">Reorder</TableHead>
-                    <TableHead>Flags</TableHead>
+                    <TableHead className="hidden text-right sm:table-cell">Cost Rate</TableHead>
+                    <TableHead className="hidden text-right sm:table-cell">Reorder</TableHead>
+                    <TableHead className="hidden sm:table-cell">Flags</TableHead>
                     <TableHead className="w-36" />
                   </TableRow>
                 </TableHeader>
@@ -804,18 +804,18 @@ function ItemsTab() {
                     <TableRow key={it.id}>
                       <TableCell className="font-mono text-xs font-medium">{it.code}</TableCell>
                       <TableCell className="max-w-44 truncate font-medium">{it.name}</TableCell>
-                      <TableCell className="text-xs">{it.groupName}</TableCell>
-                      <TableCell className="font-mono text-xs tabular-nums">{it.hsn ?? '—'}</TableCell>
+                      <TableCell className="hidden text-xs sm:table-cell">{it.groupName}</TableCell>
+                      <TableCell className="hidden font-mono text-xs tabular-nums sm:table-cell">{it.hsn ?? '—'}</TableCell>
                       <TableCell className="text-xs">{it.uom}</TableCell>
                       <TableCell className="text-right tabular-nums">{it.gstRate}%</TableCell>
                       <TableCell className="text-right tabular-nums">
                         <Money value={it.saleRate} plain />
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">
+                      <TableCell className="hidden text-right tabular-nums sm:table-cell">
                         <Money value={it.costRate} plain />
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">{it.reorderLevel}</TableCell>
-                      <TableCell>
+                      <TableCell className="hidden text-right tabular-nums sm:table-cell">{it.reorderLevel}</TableCell>
+                      <TableCell className="hidden sm:table-cell">
                         <div className="flex flex-wrap gap-1">
                           {it.isService ? <Badge variant="outline" className="text-[10px]">SERVICE</Badge> : null}
                           {it.isStockItem ? <Badge variant="secondary" className="text-[10px]">STOCK</Badge> : null}
@@ -927,7 +927,7 @@ function ItemDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[92vh] w-full max-w-2xl overflow-y-auto erp-scroll-y">
+      <DialogContent className="max-h-[92dvh] overflow-y-auto erp-scroll-y sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{item ? `Edit ${item.code}` : 'New Item'}</DialogTitle>
           <DialogDescription>Finished goods, raw material or service — services skip the stock ledger.</DialogDescription>
@@ -1052,7 +1052,7 @@ function WarehousesTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-wrap items-start justify-between gap-2">
         <p className="text-sm text-muted-foreground">Stock locations — every ledger row carries a warehouse.</p>
         <Button
           onClick={() => {
@@ -1173,7 +1173,7 @@ function WarehouseDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-full max-w-md">
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{warehouse ? `Edit ${warehouse.code}` : 'New Warehouse'}</DialogTitle>
           <DialogDescription>A physical stock location.</DialogDescription>
@@ -1226,7 +1226,7 @@ function ProcessesTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-wrap items-start justify-between gap-2">
         <p className="text-sm text-muted-foreground">Jobwork routing — rate per KG (WEIGHT) or per piece (QTY).</p>
         <Button
           onClick={() => {
@@ -1373,7 +1373,7 @@ function ProcessDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-full max-w-md">
+      <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{process ? `Edit ${process.code}` : 'New Process'}</DialogTitle>
           <DialogDescription>A jobwork treatment step with its default rate.</DialogDescription>
@@ -1719,7 +1719,7 @@ function CompanyTab() {
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="c-pin">Pincode</Label>
-          <Input id="c-pin" value={pincode} onChange={(e) => setPincode(e.target.value)} placeholder="411026" className="h-11" />
+          <Input id="c-pin" value={pincode} onChange={(e) => setPincode(e.target.value.replace(/[^0-9]/g, ''))} placeholder="411026" className="h-11" inputMode="numeric" pattern="[0-9]{6}" maxLength={6} />
         </div>
         <div className="space-y-1.5 sm:col-span-2">
           <Label htmlFor="c-addr">Address</Label>
@@ -1731,7 +1731,7 @@ function CompanyTab() {
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="c-phone">Phone</Label>
-          <Input id="c-phone" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+91…" className="h-11" />
+          <Input id="c-phone" type="tel" inputMode="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+91…" className="h-11" />
         </div>
         <div className="space-y-1.5 sm:col-span-2">
           <Label htmlFor="c-email">Email</Label>
@@ -1757,7 +1757,7 @@ function CompanyTab() {
       </div>
 
       <div className="mt-6 flex justify-end">
-        <Button onClick={submit} disabled={saving} className="h-11">
+        <Button onClick={submit} disabled={saving} className="h-11 w-full sm:w-auto">
           {saving ? 'Saving…' : 'Save company profile'}
         </Button>
       </div>

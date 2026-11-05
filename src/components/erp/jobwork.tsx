@@ -130,7 +130,7 @@ function InwardsTab() {
               />
             </div>
           ) : (
-            <div className="max-h-[62vh] overflow-auto erp-scroll">
+            <div className="max-h-[62dvh] overflow-auto erp-scroll [&_[data-slot=table-container]]:overflow-visible">
               <Table>
                 <TableHeader className="sticky top-0 z-10 bg-card">
                   <TableRow>
@@ -152,7 +152,7 @@ function InwardsTab() {
                         <TableCell className="whitespace-nowrap">{dateStr(iw.date)}</TableCell>
                         <TableCell>
                           <span className="block max-w-40 truncate">{iw.party?.name ?? '—'}</span>
-                          <span className="block text-xs text-muted-foreground">{iw.challanNo ? `Challan ${iw.challanNo}` : '—'}</span>
+                          <span className="block max-w-40 truncate text-xs text-muted-foreground">{iw.challanNo ? `Challan ${iw.challanNo}` : '—'}</span>
                         </TableCell>
                         <TableCell className="text-right tabular-nums">{iw.items.length}</TableCell>
                         <TableCell>
@@ -259,7 +259,7 @@ function NewInwardDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden">
+      <DialogContent className="flex max-h-[92dvh] flex-col overflow-hidden sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>New Jobwork Inward</DialogTitle>
           <DialogDescription>
@@ -463,7 +463,7 @@ function PendingTab() {
                   {r.items.map((it, idx) => (
                     <TableRow key={`${it.item.id}-${it.batchNo ?? ''}-${idx}`}>
                       <TableCell>
-                        <span className="block font-medium">{it.item.name}</span>
+                        <span className="block max-w-40 truncate font-medium">{it.item.name}</span>
                         <span className="block text-xs text-muted-foreground">{it.item.code}</span>
                       </TableCell>
                       <TableCell className="text-xs">{it.batchNo ?? '—'}</TableCell>
@@ -691,7 +691,7 @@ export function JobworkDetailView({ id }: { id: string }) {
                   return (
                     <TableRow key={it.id}>
                       <TableCell>
-                        <span className="block font-medium">{it.item?.name ?? it.itemId}</span>
+                        <span className="block max-w-40 truncate font-medium">{it.item?.name ?? it.itemId}</span>
                         <span className="block text-xs text-muted-foreground">{it.item?.code}</span>
                       </TableCell>
                       <TableCell className="text-xs">{it.batchNo ?? '—'}</TableCell>
@@ -784,7 +784,7 @@ export function JobworkDetailView({ id }: { id: string }) {
                         return (
                           <TableRow key={p.id}>
                             <TableCell>
-                              <span className="font-medium">{p.process?.name ?? p.processId}</span>
+                              <span className="block max-w-40 truncate font-medium">{p.process?.name ?? p.processId}</span>
                               <span className="block text-xs text-muted-foreground">
                                 {p.process?.code}
                                 {item ? ` · ${item.item?.code ?? ''}${item.batchNo ? ` / ${item.batchNo}` : ''}` : ''}
@@ -1023,7 +1023,7 @@ function NewJobCardDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden">
+      <DialogContent className="flex max-h-[92dvh] flex-col overflow-hidden sm:max-w-3xl">
         <DialogHeader>
           <DialogTitle>New Job Card — {inward.inwardNo}</DialogTitle>
           <DialogDescription>
@@ -1064,16 +1064,18 @@ function NewJobCardDialog({
                   return (
                     <TableRow key={it.id} className={disabled ? 'opacity-50' : ''}>
                       <TableCell>
-                        <Checkbox
-                          checked={st.included}
-                          disabled={disabled}
-                          onCheckedChange={(v) => setLine(it.id, { included: v === true })}
-                          aria-label={`Include ${it.item?.name ?? 'item'}`}
-                          className="size-5"
-                        />
+                        <label className="flex size-11 cursor-pointer items-center justify-center">
+                          <Checkbox
+                            checked={st.included}
+                            disabled={disabled}
+                            onCheckedChange={(v) => setLine(it.id, { included: v === true })}
+                            aria-label={`Include ${it.item?.name ?? 'item'}`}
+                            className="size-5"
+                          />
+                        </label>
                       </TableCell>
                       <TableCell>
-                        <span className="block font-medium">{it.item?.name ?? it.itemId}</span>
+                        <span className="block max-w-40 truncate font-medium">{it.item?.name ?? it.itemId}</span>
                         <span className="block text-xs text-muted-foreground">
                           {it.item?.code}
                           {it.batchNo ? ` · batch ${it.batchNo}` : ''}

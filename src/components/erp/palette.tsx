@@ -224,12 +224,12 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           <CommandItem onSelect={newSales} value="new sales invoice create bill">
             <ReceiptText className="size-4 shrink-0" aria-hidden />
             New Sales Invoice
-            <span className="ml-auto text-xs text-muted-foreground">Alt+S</span>
+            <span className="ml-auto hidden text-xs text-muted-foreground sm:inline">Alt+S</span>
           </CommandItem>
           <CommandItem onSelect={newPurchase} value="new purchase invoice supplier bill">
             <ShoppingCart className="size-4 shrink-0" aria-hidden />
             New Purchase Invoice
-            <span className="ml-auto text-xs text-muted-foreground">Alt+P</span>
+            <span className="ml-auto hidden text-xs text-muted-foreground sm:inline">Alt+P</span>
           </CommandItem>
           <CommandItem onSelect={newReceipt} value="new receipt payment receive money in customer">
             <ArrowDownCircle className="size-4 shrink-0" aria-hidden />
@@ -262,7 +262,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
               <m.icon className="size-4 shrink-0" aria-hidden />
               {m.label}
               {GOTO_KEYS[Object.keys(GOTO_KEYS).find((k) => GOTO_KEYS[k].view === m.view) ?? ''] ? (
-                <span className="ml-auto text-xs text-muted-foreground">
+                <span className="ml-auto hidden text-xs text-muted-foreground sm:inline">
                   g {Object.keys(GOTO_KEYS).find((k) => GOTO_KEYS[k].view === m.view)}
                 </span>
               ) : null}

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>ForgeERP — Offline</title>
+  <style>
+    :root { color-scheme: light dark; }
+    * { box-sizing: border-box; margin: 0; }
+    body {
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+      background: #f8f7f2;
+      color: #2a2723;
+      min-height: 100dvh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 2rem 1.25rem;
+      padding-bottom: calc(2rem + env(safe-area-inset-bottom));
+    }
+    .card {
+      max-width: 26rem;
+      text-align: center;
+      background: #fff;
+      border: 1px solid #e5e1d8;
+      border-radius: 0.75rem;
+      padding: 2rem 1.5rem;
+      box-shadow: 0 4px 16px rgba(42, 39, 35, 0.06);
+    }
+    .mark {
+      width: 3.5rem; height: 3.5rem; border-radius: 0.75rem;
+      background: linear-gradient(135deg, #0b8f6d, #045c47);
+      color: #fff; display: flex; align-items: center; justify-content: center;
+      margin: 0 auto 1rem;
+    }
+    .mark svg { width: 1.75rem; height: 1.75rem; }
+    h1 { font-size: 1.125rem; font-weight: 650; margin-bottom: 0.5rem; }
+    p { font-size: 0.875rem; line-height: 1.5; color: #6b675f; margin-bottom: 1rem; }
+    a.retry {
+      display: inline-flex; align-items: center; justify-content: center;
+      min-height: 2.75rem; padding: 0 1.25rem;
+      background: #00785c; color: #fff; border-radius: 0.5rem;
+      font-size: 0.875rem; font-weight: 600; text-decoration: none;
+    }
+    a.retry:active { background: #045c47; }
+    @media (prefers-color-scheme: dark) {
+      body { background: #1c1b19; color: #ecebe8; }
+      .card { background: #25231f; border-color: #38352f; }
+      p { color: #a09c93; }
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2 22V10l5 3.33V10l5 3.33V10l5 3.33V6.5L22 10v12z"/>
+        <path d="M2 22h20"/>
+      </svg>
+    </div>
+    <h1>You&rsquo;re offline</h1>
+    <p>ForgeERP needs a live connection for inventory, invoices, jobwork and payments &mdash; those are never served from cache. Reconnect to continue where you left off.</p>
+    <a class="retry" href="/">Try again</a>
+  </main>
+</body>
+</html>

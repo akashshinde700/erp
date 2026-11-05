@@ -81,12 +81,12 @@ export function AuditView() {
       />
 
       <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-52 flex-1">
+        <div className="relative min-w-44 flex-1">
           <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
           <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search entity / details…" className="h-11 pl-8" aria-label="Search audit log" />
         </div>
         <Select value={entity} onValueChange={setEntity}>
-          <SelectTrigger className="h-11 w-44" aria-label="Filter by entity">
+          <SelectTrigger className="h-11 w-full sm:w-44" aria-label="Filter by entity">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -99,7 +99,7 @@ export function AuditView() {
           </SelectContent>
         </Select>
         <Select value={action} onValueChange={setAction}>
-          <SelectTrigger className="h-11 w-40" aria-label="Filter by action">
+          <SelectTrigger className="h-11 w-full sm:w-40" aria-label="Filter by action">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -123,7 +123,7 @@ export function AuditView() {
               <EmptyState title="No audit entries" hint="Post an invoice or edit a master — every mutation lands here." />
             </div>
           ) : (
-            <div className="max-h-[68vh] overflow-auto erp-scroll">
+            <div className="max-h-[68dvh] overflow-auto erp-scroll [&_[data-slot=table-container]]:overflow-visible">
               <Table>
                 <TableHeader className="sticky top-0 z-10 bg-card">
                   <TableRow>
@@ -146,7 +146,7 @@ export function AuditView() {
                         <Badge variant={ACTION_TONE[r.action] ?? 'secondary'}>{r.action}</Badge>
                       </TableCell>
                       <TableCell className="font-medium">{r.entity}</TableCell>
-                      <TableCell className="max-w-96 text-xs text-muted-foreground">{r.details ?? '—'}</TableCell>
+                      <TableCell className="max-w-56 truncate text-xs text-muted-foreground sm:max-w-96" title={r.details ?? undefined}>{r.details ?? '—'}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

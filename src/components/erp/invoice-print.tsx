@@ -219,7 +219,7 @@ export function InvoicePrint({ kind, invoice, items }: InvoicePrintProps) {
             <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
               Tax Summary (by rate)
             </p>
-            <table className="mt-1 w-full min-w-72 border-collapse text-xs">
+            <table className="mt-1 w-full min-w-0 border-collapse text-xs sm:min-w-72">
               <thead>
                 <tr>
                   <th className={th}>Rate</th>
@@ -246,7 +246,7 @@ export function InvoicePrint({ kind, invoice, items }: InvoicePrintProps) {
             <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
               HSN Summary
             </p>
-            <table className="mt-1 w-full min-w-72 border-collapse text-xs">
+            <table className="mt-1 w-full min-w-0 border-collapse text-xs sm:min-w-72">
               <thead>
                 <tr>
                   <th className={th}>HSN</th>

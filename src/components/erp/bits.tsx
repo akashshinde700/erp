@@ -128,7 +128,11 @@ export function KpiCard({
           <Icon className="size-4" aria-hidden />
         </span>
       </div>
-      <span className={cn('text-xl font-semibold tabular-nums sm:text-2xl', toneCls)}>{value}</span>
+      {/* Money values are unbreakable numbers — size them to the CARD, not the
+          viewport (container queries), so ₹ amounts never overflow their track. */}
+      <span className={cn('font-semibold tabular-nums text-base @min-[200px]:text-lg @min-[260px]:text-xl @min-[320px]:text-2xl', toneCls)} title={value}>
+        {value}
+      </span>
       {hint ? <span className="text-xs text-muted-foreground">{hint}</span> : null}
     </CardContent>
   )
@@ -137,7 +141,7 @@ export function KpiCard({
       <button
         type="button"
         onClick={onClick}
-        className="w-full rounded-lg text-left transition-colors hover:border-primary/50 hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="@container w-full rounded-lg text-left transition-colors hover:border-primary/50 hover:bg-accent/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         aria-label={`${title}: ${value}${hint ? ` — ${hint}` : ''} — open module`}
       >
         <Card className="border-transparent p-4 shadow-none transition-colors hover:border-primary/50">{body}</Card>
@@ -145,7 +149,9 @@ export function KpiCard({
     )
   }
   return (
-    <Card className="p-4">{body}</Card>
+    <div className="@container">
+      <Card className="p-4">{body}</Card>
+    </div>
   )
 }
 

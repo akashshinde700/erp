@@ -1,0 +1,1070 @@
+     1→'use client'
+     2→
+     3→/**
+     4→ * ForgeERP — shared invoice module (sales & purchase mirrors).
+     5→ * List + filters, create dialog with live GST preview via the shared pure
+     6→ * engine (`computeInvoiceTotals` from `@/lib/erp`), detail view with the
+     7→ * GST print layout and cancel (reversal) flow.
+     8→ */
+     9→
+    10→import { useEffect, useMemo, useState } from 'react'
+    11→import { toast } from 'sonner'
+    12→import {
+    13→  ArrowLeft,
+    14→  Braces,
+    15→  Copy,
+    16→  Eye,
+    17→  FileCode2,
+    18→  FileDown,
+    19→  FileSpreadsheet,
+    20→  HandCoins,
+    21→  Loader2,
+    22→  Plus,
+    23→  Printer,
+    24→  RefreshCw,
+    25→  ScrollText,
+    26→  Search,
+    27→  Terminal,
+    28→  Trash2,
+    29→  XCircle,
+    30→} from 'lucide-react'
+    31→import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
+    32→import { Badge } from '@/components/ui/badge'
+    33→import { Button } from '@/components/ui/button'
+    34→import { Card, CardContent } from '@/components/ui/card'
+    35→import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+    36→import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+    37→import { Input } from '@/components/ui/input'
+    38→import { Label } from '@/components/ui/label'
+    39→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+    40→import { Switch } from '@/components/ui/switch'
+    41→import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+    42→import {
+    43→  apiDelete,
+    44→  apiGet,
+    45→  apiPost,
+    46→  downloadCsv,
+    47→  downloadUrl,
+    48→  num,
+    49→  partyTypes,
+    50→  toastError,
+    51→  todayISO,
+    52→  useApi,
+    53→  useMasters,
+    54→  type Item,
+    55→  type Party,
+    56→  type PurchaseInvoice,
+    57→  type SalesInvoice,
+    58→} from './api'
+    59→import { useCompany } from './company'
+    60→import { EmptyState, Money, SectionHeading, SourceBadge, StatusBadge, TableSkeleton } from './bits'
+    61→import { useErpUi } from './store'
+    62→import { onPreset, setCreatePreset, takeCreatePreset } from './nav'
+    63→import { computeInvoiceTotals, dateStr, INDIAN_STATES, money, r2, stateName } from '@/lib/erp'
+    64→import { InvoicePrint } from './invoice-print'
+    65→import { exportEInvoiceJson, exportTallyVoucher, markTallySent, queueForConnector } from './tally'
+    66→
+    67→export type InvoiceKind = 'SALES' | 'PURCHASE'
+    68→
+    69→type AnyInvoice = SalesInvoice | PurchaseInvoice
+    70→
+    71→let lineSeq = 0
+    72→const newKey = (): string => `line-${++lineSeq}`
+    73→
+    74→interface LineDraft {
+    75→  key: string
+    76→  itemId: string
+    77→  detail: string
+    78→  qty: string
+    79→  rate: string
+    80→  discPct: string
+    81→}
+    82→
+    83→const emptyLine = (): LineDraft => ({ key: newKey(), itemId: '', detail: '', qty: '', rate: '', discPct: '' })
+    84→
+    85→// ===========================================================================
+    86→// List view
+    87→// ===========================================================================
+    88→
+    89→export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
+    90→  const setView = useErpUi((s) => s.setView)
+    91→  const isSales = kind === 'SALES'
+    92→  const path = isSales ? '/api/sales-invoices' : '/api/purchase-invoices'
+    93→  const list = useApi<AnyInvoice[]>(path)
+    94→  const [search, setSearch] = useState('')
+    95→  const [statusFilter, setStatusFilter] = useState<'ALL' | 'POSTED' | 'CANCELLED'>('ALL')
+    96→  const [createOpen, setCreateOpen] = useState(false)
+    97→  const [presetPartyId, setPresetPartyId] = useState('')
+    98→  const [prefill, setPrefill] = useState<AnyInvoice | null>(null)
+    99→  const [reloadTick, setReloadTick] = useState(0)
+   100→
+   101→  // Cross-module create preset (dashboard / palette / party view / Alt+S) —
+   102→  // opens the create dialog prefilled with the party.
+   103→  useEffect(() => {
+   104→    const apply = (p: { type?: string; partyId?: string }) => {
+   105→      if (p.type !== (isSales ? 'sales-invoice' : 'purchase-invoice')) return
+   106→      setPrefill(null)
+   107→      setPresetPartyId(p.partyId ?? '')
+   108→      setCreateOpen(true)
+   109→    }
+   110→    // Preset may have been written a moment before mount (sessionStorage).
+   111→    const pending = takeCreatePreset()
+   112→    if (pending) apply(pending)
+   113→    return onPreset(apply)
+   114→  }, [])
+   115→
+   116→  const invoices = useMemo(() => {
+   117→    const q = search.trim().toLowerCase()
+   118→    return (list.data ?? []).filter((inv) => {
+   119→      if (statusFilter !== 'ALL' && inv.status !== statusFilter) return false
+   120→      if (!q) return true
+   121→      return (
+   122→        inv.invoiceNo.toLowerCase().includes(q) ||
+   123→        (inv.party?.name ?? '').toLowerCase().includes(q) ||
+   124→        (inv.party?.code ?? '').toLowerCase().includes(q)
+   125→      )
+   126→    })
+   127→  }, [list.data, search, statusFilter])
+   128→
+   129→  const totals = useMemo(() => {
+   130→    const posted = invoices.filter((i) => i.status === 'POSTED')
+   131→    const grand = posted.reduce((s, i) => s + i.grandTotal, 0)
+   132→    const paid = posted.reduce((s, i) => s + i.paidAmount, 0)
+   133→    return { count: posted.length, grand, paid, outstanding: grand - paid }
+   134→  }, [invoices])
+   135→
+   136→  const duplicate = async (inv: AnyInvoice) => {
+   137→    try {
+   138→      const full = await apiGet<AnyInvoice>(isSales ? `/api/sales-invoices/${inv.id}` : `/api/purchase-invoices/${inv.id}`)
+   139→      setPrefill(full)
+   140→      setCreateOpen(true)
+   141→    } catch (e) {
+   142→      toastError(e)
+   143→    }
+   144→  }
+   145→
+   146→  const exportCsv = () => {
+   147→    const rows: (string | number)[][] = [
+   148→      ['Invoice No', 'Date', 'Party', 'Taxable', 'CGST', 'SGST', 'IGST', 'Grand Total', 'Paid', 'Status', 'Source'],
+   149→      ...invoices.map((i) => [
+   150→        i.invoiceNo,
+   151→        dateStr(i.date),
+   152→        i.party?.name ?? '',
+   153→        i.taxable,
+   154→        i.cgst,
+   155→        i.sgst,
+   156→        i.igst,
+   157→        i.grandTotal,
+   158→        i.paidAmount,
+   159→        i.status,
+   160→        isSales ? (i as SalesInvoice).source : '',
+   161→      ]),
+   162→    ]
+   163→    downloadCsv(`${isSales ? 'sales' : 'purchase'}-invoices-${todayISO()}.csv`, rows)
+   164→  }
+   165→
+   166→  return (
+   167→    <div className="space-y-4">
+   168→      <SectionHeading
+   169→        title={isSales ? 'Sales Invoices' : 'Purchase Invoices'}
+   170→        description={
+   171→          isSales
+   172→            ? 'GST tax invoices — posted atomically with stock ledger and double-entry GL.'
+   173→            : 'Supplier purchase invoices — input GST, stock inward @ cost, GL in one transaction.'
+   174→        }
+   175→        actions={
+   176→          <div className="flex flex-wrap items-center gap-2">
+   177→            <Button variant="outline" onClick={() => list.reload()} className="h-11 gap-2">
+   178→              <RefreshCw className="size-4" aria-hidden /> Refresh
+   179→            </Button>
+   180→            <Button variant="outline" onClick={exportCsv} disabled={invoices.length === 0} className="h-11 gap-2">
+   181→              <FileDown className="size-4" aria-hidden /> CSV
+   182→            </Button>
+   183→            <Button onClick={() => { setPrefill(null); setCreateOpen(true) }} className="h-11 gap-2">
+   184→              <Plus className="size-4" aria-hidden />
+   185→              New {isSales ? 'Invoice' : 'Purchase'}
+   186→            </Button>
+   187→          </div>
+   188→        }
+   189→      />
+   190→
+   191→      <div className="flex flex-wrap items-center gap-2">
+   192→        <div className="relative min-w-52 flex-1">
+   193→          <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+   194→          <Input
+   195→            value={search}
+   196→            onChange={(e) => setSearch(e.target.value)}
+   197→            placeholder="Search invoice no / party…"
+   198→            className="h-11 pl-8"
+   199→            aria-label="Search invoices"
+   200→          />
+   201→        </div>
+   202→        <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as typeof statusFilter)}>
+   203→          <SelectTrigger className="h-11 w-36" aria-label="Filter by status">
+   204→            <SelectValue />
+   205→          </SelectTrigger>
+   206→          <SelectContent>
+   207→            <SelectItem value="ALL">All statuses</SelectItem>
+   208→            <SelectItem value="POSTED">Posted</SelectItem>
+   209→            <SelectItem value="CANCELLED">Cancelled</SelectItem>
+   210→          </SelectContent>
+   211→        </Select>
+   212→        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+   213→          <Badge variant="secondary" className="tabular-nums">{totals.count} posted</Badge>
+   214→          <span className="tabular-nums">Σ ₹ {money(totals.grand)}</span>
+   215→          <span className="tabular-nums">outstanding ₹ {money(totals.outstanding)}</span>
+   216→        </div>
+   217→      </div>
+   218→
+   219→      <Card className="p-0">
+   220→        <CardContent className="p-0">
+   221→          {list.loading ? (
+   222→            <TableSkeleton rows={6} cols={7} />
+   223→          ) : invoices.length === 0 ? (
+   224→            <div className="p-6">
+   225→              <EmptyState
+   226→                title="No invoices found"
+   227→                hint={isSales ? 'Post your first sales invoice to see it here.' : 'Record your first purchase invoice.'}
+   228→                action={
+   229→                  <Button variant="outline" onClick={() => setCreateOpen(true)} className="mt-2 h-11 gap-2">
+   230→                    <Plus className="size-4" aria-hidden /> New {isSales ? 'Invoice' : 'Purchase'}
+   231→                  </Button>
+   232→                }
+   233→              />
+   234→            </div>
+   235→          ) : (
+   236→            <div className="max-h-[62vh] overflow-auto erp-scroll">
+   237→              <Table>
+   238→                <TableHeader className="sticky top-0 z-10 bg-card">
+   239→                  <TableRow>
+   240→                    <TableHead>Invoice No</TableHead>
+   241→                    <TableHead>Date</TableHead>
+   242→                    <TableHead>Party</TableHead>
+   243→                    <TableHead className="text-right">Taxable</TableHead>
+   244→                    <TableHead className="text-right">GST</TableHead>
+   245→                    <TableHead className="text-right">Grand Total</TableHead>
+   246→                    <TableHead className="text-right">Paid</TableHead>
+   247→                    <TableHead className="text-right">Balance</TableHead>
+   248→                    {isSales ? <TableHead>Source</TableHead> : null}
+   249→                    <TableHead>Status</TableHead>
+   250→                    <TableHead className="text-right">Actions</TableHead>
+   251→                  </TableRow>
+   252→                </TableHeader>
+   253→                <TableBody>
+   254→                  {invoices.map((inv) => (
+   255→                    <TableRow
+   256→                      key={inv.id}
+   257→                      className="cursor-pointer"
+   258→                      onClick={() => setView(isSales ? 'sales-detail' : 'purchase-detail', { id: inv.id })}
+   259→                    >
+   260→                      <TableCell className="font-medium tabular-nums">{inv.invoiceNo}</TableCell>
+   261→                      <TableCell className="whitespace-nowrap">{dateStr(inv.date)}</TableCell>
+   262→                      <TableCell className="max-w-44 truncate">
+   263→                        <span className="block truncate">{inv.party?.name ?? '—'}</span>
+   264→                        <span className="block text-xs text-muted-foreground">{inv.party?.code}</span>
+   265→                      </TableCell>
+   266→                      <TableCell className="text-right tabular-nums">
+   267→                        <Money value={inv.taxable} plain />
+   268→                      </TableCell>
+   269→                      <TableCell className="text-right tabular-nums">
+   270→                        <Money value={inv.cgst + inv.sgst + inv.igst} plain />
+   271→                      </TableCell>
+   272→                      <TableCell className="text-right font-semibold tabular-nums">
+   273→                        <Money value={inv.grandTotal} plain />
+   274→                      </TableCell>
+   275→                      <TableCell className="text-right tabular-nums">
+   276→                        <Money value={inv.paidAmount} plain />
+   277→                      </TableCell>
+   278→                      <TableCell className="text-right tabular-nums">
+   279→                        <Money value={inv.grandTotal - inv.paidAmount} plain />
+   280→                      </TableCell>
+   281→                      {isSales ? (
+   282→                        <TableCell>
+   283→                          <SourceBadge source={(inv as SalesInvoice).source} />
+   284→                        </TableCell>
+   285→                      ) : null}
+   286→                      <TableCell>
+   287→                        <StatusBadge status={inv.status} />
+   288→                      </TableCell>
+   289→                      <TableCell>
+   290→                        <div
+   291→                          className="flex items-center justify-end gap-0.5"
+   292→                          onClick={(e) => e.stopPropagation()}
+   293→                          onKeyDown={(e) => e.stopPropagation()}
+   294→                        >
+   295→                          <Button
+   296→                            variant="ghost"
+   297→                            size="icon"
+   298→                            className="size-9 text-muted-foreground hover:text-foreground md:size-8"
+   299→                            onClick={() => setView(isSales ? 'sales-detail' : 'purchase-detail', { id: inv.id })}
+   300→                            aria-label={`View ${inv.invoiceNo}`}
+   301→                            title="View detail"
+   302→                          >
+   303→                            <Eye className="size-4" aria-hidden />
+   304→                          </Button>
+   305→                          <Button
+   306→                            variant="ghost"
+   307→                            size="icon"
+   308→                            className="size-9 text-muted-foreground hover:text-foreground md:size-8"
+   309→                            onClick={() => void duplicate(inv)}
+   310→                            disabled={inv.status === 'CANCELLED'}
+   311→                            aria-label={`Duplicate ${inv.invoiceNo}`}
+   312→                            title="Duplicate as new draft"
+   313→                          >
+   314→                            <Copy className="size-4" aria-hidden />
+   315→                          </Button>
+   316→                          <DropdownMenu>
+   317→                            <DropdownMenuTrigger asChild>
+   318→                              <Button
+   319→                                variant="ghost"
+   320→                                size="icon"
+   321→                                className="size-9 text-muted-foreground hover:text-foreground md:size-8"
+   322→                                disabled={inv.status === 'CANCELLED'}
+   323→                                aria-label={`Tally export ${inv.invoiceNo}`}
+   324→                                title="Tally export"
+   325→                              >
+   326→                                <FileDown className="size-4" aria-hidden />
+   327→                              </Button>
+   328→                            </DropdownMenuTrigger>
+   329→                            <DropdownMenuContent align="end">
+   330→                              <DropdownMenuItem onClick={() => void exportTallyVoucher(isSales ? 'SALES' : 'PURCHASE', inv.id, 'xml')}>
+   331→                                <FileCode2 className="size-4" aria-hidden /> Tally XML (import file)
+   332→                              </DropdownMenuItem>
+   333→                              <DropdownMenuItem onClick={() => void exportTallyVoucher(isSales ? 'SALES' : 'PURCHASE', inv.id, 'json')}>
+   334→                                <Braces className="size-4" aria-hidden /> Tally JSON
+   335→                              </DropdownMenuItem>
+   336→                              <DropdownMenuItem onClick={() => void exportTallyVoucher(isSales ? 'SALES' : 'PURCHASE', inv.id, 'csv')}>
+   337→                                <FileSpreadsheet className="size-4" aria-hidden /> Tally Excel (CSV)
+   338→                              </DropdownMenuItem>
+   339→                              <DropdownMenuSeparator />
+   340→                              <DropdownMenuItem onClick={() => downloadUrl('/downloads/tally/Tally-Import.bat')}>
+   341→                                <Terminal className="size-4" aria-hidden /> Tally importer (.bat)
+   342→                              </DropdownMenuItem>
+   343→                              <DropdownMenuItem onClick={() => downloadUrl('/api/tally/masters?parties=1')}>
+   344→                                <FileDown className="size-4" aria-hidden /> Tally masters (XML)
+   345→                              </DropdownMenuItem>
+   346→                              <DropdownMenuSeparator />
+   347→                              <DropdownMenuItem onClick={() => void queueForConnector(isSales ? 'SALES' : 'PURCHASE', inv.id)}>
+   348→                                Queue for Tally connector
+   349→                              </DropdownMenuItem>
+   350→                              <DropdownMenuItem onClick={() => void markTallySent(isSales ? 'SALES' : 'PURCHASE', inv.id, true)}>
+   351→                                Mark as sent to Tally
+   352→                              </DropdownMenuItem>
+   353→                              {isSales ? (
+   354→                                <>
+   355→                                  <DropdownMenuSeparator />
+   356→                                  <DropdownMenuItem onClick={() => void exportEInvoiceJson(inv.id)}>
+   357→                                    <ScrollText className="size-4" aria-hidden /> e-Invoice JSON (GST portal)
+   358→                                  </DropdownMenuItem>
+   359→                                </>
+   360→                              ) : null}
+   361→                            </DropdownMenuContent>
+   362→                          </DropdownMenu>
+   363→                        </div>
+   364→                      </TableCell>
+   365→                    </TableRow>
+   366→                  ))}
+   367→                </TableBody>
+   368→              </Table>
+   369→            </div>
+   370→          )}
+   371→        </CardContent>
+   372→      </Card>
+   373→
+   374→      <CreateInvoiceDialog
+   375→        kind={kind}
+   376→        open={createOpen}
+   377→        prefill={prefill}
+   378→        presetPartyId={presetPartyId}
+   379→        onOpenChange={(o) => {
+   380→          setCreateOpen(o)
+   381→          if (!o) {
+   382→            setPrefill(null)
+   383→            setPresetPartyId('')
+   384→            setReloadTick((t) => t + 1)
+   385→          }
+   386→        }}
+   387→        onCreated={() => {
+   388→          list.reload()
+   389→        }}
+   390→        key={`create-${reloadTick}`}
+   391→      />
+   392→    </div>
+   393→  )
+   394→}
+   395→
+   396→// ===========================================================================
+   397→// Create dialog with live GST preview
+   398→// ===========================================================================
+   399→
+   400→function CreateInvoiceDialog({
+   401→  kind,
+   402→  open,
+   403→  prefill,
+   404→  presetPartyId,
+   405→  onOpenChange,
+   406→  onCreated,
+   407→}: {
+   408→  kind: InvoiceKind
+   409→  open: boolean
+   410→  prefill: AnyInvoice | null
+   411→  presetPartyId?: string
+   412→  onOpenChange: (o: boolean) => void
+   413→  onCreated: () => void
+   414→}) {
+   415→  const isSales = kind === 'SALES'
+   416→  const setView = useErpUi((s) => s.setView)
+   417→  const { parties, items, warehouses } = useMasters()
+   418→  const company = useCompany()
+   419→  const itemMap = useMemo(() => new Map<string, Item>(items.map((i) => [i.id, i])), [items])
+   420→
+   421→  const eligibleParties = parties.filter(
+   422→    (p) => p.active && partyTypes(p).includes(isSales ? 'CUSTOMER' : 'SUPPLIER')
+   423→  )
+   424→
+   425→  const [partyId, setPartyId] = useState('')
+   426→  const [date, setDate] = useState(todayISO())
+   427→  const [pos, setPos] = useState('')
+   428→  const [taxInclusive, setTaxInclusive] = useState(false)
+   429→  const [poNo, setPoNo] = useState('')
+   430→  const [remarks, setRemarks] = useState('')
+   431→  const [warehouseId, setWarehouseId] = useState('')
+   432→  const [lines, setLines] = useState<LineDraft[]>([emptyLine()])
+   433→  const [saving, setSaving] = useState(false)
+   434→
+   435→  // Duplicate prefill: populate from an existing invoice (new number is assigned server-side).
+   436→  useEffect(() => {
+   437→    if (!open || !prefill) return
+   438→    setPartyId(prefill.partyId)
+   439→    setDate(String(prefill.date).slice(0, 10))
+   440→    setPoNo(prefill.poNo ?? '')
+   441→    setRemarks(prefill.remarks ?? '')
+   442→    setTaxInclusive(prefill.taxInclusive)
+   443→    if (isSales) setPos((prefill as SalesInvoice).pos ?? '')
+   444→    const items = prefill.items ?? []
+   445→    if (items.length > 0) {
+   446→      setLines(
+   447→        items.map((l) => ({
+   448→          key: newKey(),
+   449→          itemId: l.itemId,
+   450→          detail: l.detail ?? '',
+   451→          qty: String(l.qty),
+   452→          rate: String(l.rate),
+   453→          discPct: String(l.discPct ?? ''),
+   454→        }))
+   455→      )
+   456→    }
+   457→  }, [open, prefill, isSales])
+   458→
+   459→  // Cross-module preset: just the party (e.g. "New invoice for this customer").
+   460→  useEffect(() => {
+   461→    if (!open) return
+   462→    if (presetPartyId) {
+   463→      setPartyId(presetPartyId)
+   464→      const p = parties.find((x) => x.id === presetPartyId)
+   465→      if (isSales && p) setPos(p.stateCode)
+   466→    }
+   467→  }, [open, presetPartyId, parties, isSales])
+   468→
+   469→  const party: Party | undefined = parties.find((p) => p.id === partyId)
+   470→  const companyState = company?.stateCode ?? '27'
+   471→
+   472→  const onPartyChange = (id: string) => {
+   473→    setPartyId(id)
+   474→    const p = parties.find((x) => x.id === id)
+   475→    if (isSales && p) setPos(p.stateCode) // PoS defaults to the party's state
+   476→  }
+   477→
+   478→  const interState = isSales
+   479→    ? pos !== '' && pos !== companyState
+   480→    : !!party && party.stateCode !== companyState
+   481→
+   482→  const validLines = lines.filter((l) => l.itemId && num(l.qty) > 0)
+   483→
+   484→  const taxLines = validLines.map((l) => ({
+   485→    qty: num(l.qty),
+   486→    rate: num(l.rate),
+   487→    discPct: num(l.discPct) || 0,
+   488→    gstRate: itemMap.get(l.itemId)?.gstRate ?? 0,
+   489→  }))
+   490→
+   491→  // Live preview — same pure engine as the server (cheap, no memo needed)
+   492→  const totals = computeInvoiceTotals(taxLines, { taxInclusive, interState })
+   493→
+   494→  const setLine = (key: string, patch: Partial<LineDraft>) =>
+   495→    setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...patch } : l)))
+   496→
+   497→  const onItemPick = (key: string, itemId: string) => {
+   498→    const it = itemMap.get(itemId)
+   499→    setLine(key, {
+   500→      itemId,
+   501→      rate: it ? String(isSales ? it.saleRate : it.costRate) : '',
+   502→    })
+   503→  }
+   504→
+   505→  const linePreview = (l: LineDraft): { taxable: number; total: number } => {
+   506→    if (!l.itemId || num(l.qty) <= 0) return { taxable: 0, total: 0 }
+   507→    const t = computeInvoiceTotals(
+   508→      [{ qty: num(l.qty), rate: num(l.rate), discPct: num(l.discPct) || 0, gstRate: itemMap.get(l.itemId)?.gstRate ?? 0 }],
+   509→      { taxInclusive, interState }
+   510→    )
+   511→    return { taxable: t.lines[0].taxable, total: t.lines[0].total }
+   512→  }
+   513→
+   514→  const submit = async () => {
+   515→    if (!partyId) {
+   516→      toast.error('Select a party first')
+   517→      return
+   518→    }
+   519→    if (validLines.length === 0) {
+   520→      toast.error('Add at least one line item with quantity > 0')
+   521→      return
+   522→    }
+   523→    if (validLines.some((l) => num(l.rate) < 0)) {
+   524→      toast.error('Rate cannot be negative')
+   525→      return
+   526→    }
+   527→    setSaving(true)
+   528→    try {
+   529→      const payload: Record<string, unknown> = {
+   530→        partyId,
+   531→        date,
+   532→        taxInclusive,
+   533→        poNo: poNo.trim() || undefined,
+   534→        remarks: remarks.trim() || undefined,
+   535→        warehouseId: warehouseId || undefined,
+   536→        lines: validLines.map((l) => ({
+   537→          itemId: l.itemId,
+   538→          detail: l.detail.trim() || undefined,
+   539→          qty: num(l.qty),
+   540→          rate: num(l.rate),
+   541→          discPct: num(l.discPct) || undefined,
+   542→        })),
+   543→      }
+   544→      if (isSales) payload.pos = pos || party?.stateCode || companyState
+   545→      const res = await apiPost<AnyInvoice>(isSales ? '/api/sales-invoices' : '/api/purchase-invoices', payload)
+   546→      toast.success(`${res.invoiceNo} posted`, {
+   547→        description: `Grand total ₹ ${money(res.grandTotal)} — stock ledger + GL entries committed atomically.`,
+   548→        action: {
+   549→          label: 'View',
+   550→          onClick: () => setView(isSales ? 'sales-detail' : 'purchase-detail', { id: res.id }),
+   551→        },
+   552→      })
+   553→      onCreated()
+   554→      onOpenChange(false)
+   555→    } catch (e) {
+   556→      toastError(e)
+   557→    } finally {
+   558→      setSaving(false)
+   559→    }
+   560→  }
+   561→
+   562→  const partyInfo = party ? (
+   563→    <p className="text-xs text-muted-foreground">
+   564→      {party.gstin ? `${party.gstin} · ` : 'Unregistered · '}
+   565→      {stateName(party.stateCode)}
+   566→      {party.stateCode !== companyState ? ' (inter-state)' : ' (intra-state)'}
+   567→    </p>
+   568→  ) : null
+   569→
+   570→  return (
+   571→    <Dialog open={open} onOpenChange={onOpenChange}>
+   572→      <DialogContent className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden sm:max-w-5xl">
+   573→        <DialogHeader>
+   574→          <DialogTitle>{prefill ? `Duplicate ${prefill.invoiceNo} as new ${isSales ? 'invoice' : 'purchase'}` : `New ${isSales ? 'Sales Invoice' : 'Purchase Invoice'}`}</DialogTitle>
+   575→          <DialogDescription>
+   576→            {prefill
+   577→              ? 'Copied from the original — a fresh gapless number is assigned when you post.'
+   578→              : isSales
+   579→                ? 'Totals preview live via the shared GST engine — identical to what the server will post.'
+   580→                : 'Inter-state (IGST) is derived automatically from the supplier state vs company state.'}
+   581→          </DialogDescription>
+   582→        </DialogHeader>
+   583→
+   584→        <div className="min-h-0 flex-1 overflow-y-auto erp-scroll-y pr-1">
+   585→          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+   586→            <div className="space-y-1.5">
+   587→              <Label htmlFor="inv-party">{isSales ? 'Customer' : 'Supplier'}</Label>
+   588→              <Select value={partyId} onValueChange={onPartyChange}>
+   589→                <SelectTrigger id="inv-party" className="h-11 w-full">
+   590→                  <SelectValue placeholder="Select party…" />
+   591→                </SelectTrigger>
+   592→                <SelectContent>
+   593→                  {eligibleParties.map((p) => (
+   594→                    <SelectItem key={p.id} value={p.id}>
+   595→                      {p.code} — {p.name}
+   596→                    </SelectItem>
+   597→                  ))}
+   598→                </SelectContent>
+   599→              </Select>
+   600→              {partyInfo}
+   601→            </div>
+   602→            <div className="space-y-1.5">
+   603→              <Label htmlFor="inv-date">Date</Label>
+   604→              <Input id="inv-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-11" />
+   605→            </div>
+   606→            {isSales ? (
+   607→              <div className="space-y-1.5">
+   608→                <Label htmlFor="inv-pos">Place of Supply</Label>
+   609→                <Select value={pos || undefined} onValueChange={setPos}>
+   610→                  <SelectTrigger id="inv-pos" className="h-11 w-full">
+   611→                    <SelectValue placeholder="Select state…" />
+   612→                  </SelectTrigger>
+   613→                  <SelectContent className="max-h-64">
+   614→                    {INDIAN_STATES.map((s) => (
+   615→                      <SelectItem key={s.code} value={s.code}>
+   616→                        {s.code}-{s.name}
+   617→                      </SelectItem>
+   618→                    ))}
+   619→                  </SelectContent>
+   620→                </Select>
+   621→                <p className="text-xs text-muted-foreground">
+   622→                  {pos ? (interState ? 'Inter-state → IGST' : 'Intra-state → CGST + SGST') : 'Defaults to party state'}
+   623→                </p>
+   624→              </div>
+   625→            ) : (
+   626→              <div className="space-y-1.5">
+   627→                <Label>Tax split</Label>
+   628→                <div className="flex h-11 items-center rounded-md border bg-muted/40 px-3 text-sm text-muted-foreground">
+   629→                  {interState ? 'IGST (inter-state, auto)' : 'CGST + SGST (intra-state, auto)'}
+   630→                </div>
+   631→              </div>
+   632→            )}
+   633→            <div className="space-y-1.5">
+   634→              <Label htmlFor="inv-po">PO / Challan No</Label>
+   635→              <Input id="inv-po" value={poNo} onChange={(e) => setPoNo(e.target.value)} placeholder="Optional" className="h-11" />
+   636→              <div className="flex items-center gap-2 pt-1">
+   637→                <Switch id="inv-taxinc" checked={taxInclusive} onCheckedChange={setTaxInclusive} aria-label="Tax inclusive" />
+   638→                <Label htmlFor="inv-taxinc" className="text-xs font-normal text-muted-foreground">
+   639→                  Rates are tax-inclusive
+   640→                </Label>
+   641→              </div>
+   642→            </div>
+   643→            <div className="space-y-1.5 sm:col-span-2 lg:col-span-4">
+   644→              <Label>Stock From</Label>
+   645→              <Select value={warehouseId || 'DEFAULT'} onValueChange={(v) => setWarehouseId(v === 'DEFAULT' ? '' : v)}>
+   646→                <SelectTrigger className="h-11 w-full sm:max-w-64">
+   647→                  <SelectValue />
+   648→                </SelectTrigger>
+   649→                <SelectContent>
+   650→                  <SelectItem value="DEFAULT">Default warehouse (MAIN)</SelectItem>
+   651→                  {warehouses.map((w) => (
+   652→                    <SelectItem key={w.id} value={w.id}>
+   653→                      {w.code} — {w.name}
+   654→                    </SelectItem>
+   655→                  ))}
+   656→                </SelectContent>
+   657→              </Select>
+   658→              <p className="text-xs text-muted-foreground">
+   659→                Availability is checked per warehouse — finished goods from jobwork sit in the JW store.
+   660→              </p>
+   661→            </div>
+   662→          </div>
+   663→
+   664→          <div className="mt-4 space-y-1.5">
+   665→            <Label>Line Items</Label>
+   666→            <div className="overflow-x-auto rounded-md border">
+   667→              <Table>
+   668→                <TableHeader>
+   669→                  <TableRow>
+   670→                    <TableHead className="min-w-44">Item</TableHead>
+   671→                    <TableHead className="min-w-32">Detail</TableHead>
+   672→                    <TableHead className="w-20 text-right">Qty</TableHead>
+   673→                    <TableHead className="w-24 text-right">Rate ₹</TableHead>
+   674→                    <TableHead className="w-20 text-right">Disc %</TableHead>
+   675→                    <TableHead className="w-24 text-right">Taxable</TableHead>
+   676→                    <TableHead className="w-24 text-right">Total</TableHead>
+   677→                    <TableHead className="w-12" />
+   678→                  </TableRow>
+   679→                </TableHeader>
+   680→                <TableBody>
+   681→                  {lines.map((l) => {
+   682→                    const it = itemMap.get(l.itemId)
+   683→                    const pv = linePreview(l)
+   684→                    return (
+   685→                      <TableRow key={l.key}>
+   686→                        <TableCell>
+   687→                          <Select value={l.itemId || undefined} onValueChange={(v) => onItemPick(l.key, v)}>
+   688→                            <SelectTrigger className="h-11 w-full min-w-40">
+   689→                              <SelectValue placeholder="Pick item…" />
+   690→                            </SelectTrigger>
+   691→                            <SelectContent className="max-h-64">
+   692→                              {items
+   693→                                .filter((i) => i.active)
+   694→                                .map((i) => (
+   695→                                  <SelectItem key={i.id} value={i.id}>
+   696→                                    {i.code} — {i.name}
+   697→                                  </SelectItem>
+   698→                                ))}
+   699→                            </SelectContent>
+   700→                          </Select>
+   701→                          {it ? (
+   702→                            <p className="mt-1 text-[10px] text-muted-foreground">
+   703→                              {it.uom} · {it.hsn ?? 'no HSN'} · GST {it.gstRate}%
+   704→                            </p>
+   705→                          ) : null}
+   706→                        </TableCell>
+   707→                        <TableCell>
+   708→                          <Input
+   709→                            value={l.detail}
+   710→                            onChange={(e) => setLine(l.key, { detail: e.target.value })}
+   711→                            placeholder="Optional"
+   712→                            className="h-11"
+   713→                            aria-label="Line detail"
+   714→                          />
+   715→                        </TableCell>
+   716→                        <TableCell>
+   717→                          <Input
+   718→                            type="number"
+   719→                            min="0"
+   720→                            step="any"
+   721→                            value={l.qty}
+   722→                            onChange={(e) => setLine(l.key, { qty: e.target.value })}
+   723→                            placeholder="0"
+   724→                            className="h-11 text-right tabular-nums"
+   725→                            aria-label="Quantity"
+   726→                          />
+   727→                        </TableCell>
+   728→                        <TableCell>
+   729→                          <Input
+   730→                            type="number"
+   731→                            min="0"
+   732→                            step="any"
+   733→                            value={l.rate}
+   734→                            onChange={(e) => setLine(l.key, { rate: e.target.value })}
+   735→                            placeholder="0"
+   736→                            className="h-11 text-right tabular-nums"
+   737→                            aria-label="Rate"
+   738→                          />
+   739→                        </TableCell>
+   740→                        <TableCell>
+   741→                          <Input
+   742→                            type="number"
+   743→                            min="0"
+   744→                            max="100"
+   745→                            step="any"
+   746→                            value={l.discPct}
+   747→                            onChange={(e) => setLine(l.key, { discPct: e.target.value })}
+   748→                            placeholder="0"
+   749→                            className="h-11 text-right tabular-nums"
+   750→                            aria-label="Discount percent"
+   751→                          />
+   752→                        </TableCell>
+   753→                        <TableCell className="text-right text-xs tabular-nums text-muted-foreground">
+   754→                          {money(pv.taxable)}
+   755→                        </TableCell>
+   756→                        <TableCell className="text-right text-xs font-medium tabular-nums">
+   757→                          {money(pv.total)}
+   758→                        </TableCell>
+   759→                        <TableCell>
+   760→                          <Button
+   761→                            variant="ghost"
+   762→                            size="icon"
+   763→                            className="size-11 text-muted-foreground hover:text-destructive md:size-9"
+   764→                            onClick={() => setLines((ls) => (ls.length > 1 ? ls.filter((x) => x.key !== l.key) : ls))}
+   765→                            disabled={lines.length === 1}
+   766→                            aria-label={`Remove line ${l.key}`}
+   767→                          >
+   768→                            <Trash2 className="size-4" aria-hidden />
+   769→                          </Button>
+   770→                        </TableCell>
+   771→                      </TableRow>
+   772→                    )
+   773→                  })}
+   774→                </TableBody>
+   775→              </Table>
+   776→            </div>
+   777→            <Button
+   778→              variant="outline"
+   779→              onClick={() => setLines((ls) => [...ls, emptyLine()])}
+   780→              className="h-11 gap-2"
+   781→            >
+   782→              <Plus className="size-4" aria-hidden /> Add line
+   783→            </Button>
+   784→          </div>
+   785→
+   786→          <div className="mt-4">
+   787→            <Label htmlFor="inv-remarks">Remarks</Label>
+   788→            <Input
+   789→              id="inv-remarks"
+   790→              value={remarks}
+   791→              onChange={(e) => setRemarks(e.target.value)}
+   792→              placeholder="Optional notes printed on the invoice"
+   793→              className="mt-1.5 h-11"
+   794→            />
+   795→          </div>
+   796→
+   797→          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+   798→            <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+   799→              <p className="font-medium text-foreground">Live GST preview</p>
+   800→              <p className="mt-1">
+   801→                Computed client-side by <span className="font-mono">computeInvoiceTotals</span> — the same pure
+   802→                engine the server uses, so preview ≡ posted totals.
+   803→                {taxInclusive ? ' Tax-inclusive: taxable back-solved from gross.' : ''}
+   804→              </p>
+   805→            </div>
+   806→            <div className="rounded-md border bg-muted/30 p-3">
+   807→              <dl className="space-y-1 text-sm">
+   808→                <div className="flex justify-between">
+   809→                  <dt className="text-muted-foreground">Taxable</dt>
+   810→                  <dd className="tabular-nums">₹ {money(totals.taxable)}</dd>
+   811→                </div>
+   812→                {totals.discount > 0 ? (
+   813→                  <div className="flex justify-between">
+   814→                    <dt className="text-muted-foreground">Discount</dt>
+   815→                    <dd className="tabular-nums">− ₹ {money(totals.discount)}</dd>
+   816→                  </div>
+   817→                ) : null}
+   818→                {interState ? (
+   819→                  <div className="flex justify-between">
+   820→                    <dt className="text-muted-foreground">IGST</dt>
+   821→                    <dd className="tabular-nums">₹ {money(totals.igst)}</dd>
+   822→                  </div>
+   823→                ) : (
+   824→                  <>
+   825→                    <div className="flex justify-between">
+   826→                      <dt className="text-muted-foreground">CGST</dt>
+   827→                      <dd className="tabular-nums">₹ {money(totals.cgst)}</dd>
+   828→                    </div>
+   829→                    <div className="flex justify-between">
+   830→                      <dt className="text-muted-foreground">SGST</dt>
+   831→                      <dd className="tabular-nums">₹ {money(totals.sgst)}</dd>
+   832→                    </div>
+   833→                  </>
+   834→                )}
+   835→                <div className="flex justify-between">
+   836→                  <dt className="text-muted-foreground">Round off</dt>
+   837→                  <dd className="tabular-nums">
+   838→                    {totals.roundOff >= 0 ? '+ ' : '− '}
+   839→                    ₹ {money(Math.abs(totals.roundOff))}
+   840→                  </dd>
+   841→                </div>
+   842→                <div className="flex justify-between border-t pt-1 text-base font-bold">
+   843→                  <dt>Grand Total</dt>
+   844→                  <dd className="tabular-nums">₹ {money(totals.grandTotal)}</dd>
+   845→                </div>
+   846→              </dl>
+   847→            </div>
+   848→          </div>
+   849→        </div>
+   850→
+   851→        <DialogFooter className="gap-2 border-t pt-3">
+   852→          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving} className="h-11">
+   853→            Cancel
+   854→          </Button>
+   855→          <Button onClick={submit} disabled={saving} className="h-11 gap-2">
+   856→            {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+   857→            {saving ? 'Posting…' : `Post ${isSales ? 'Invoice' : 'Purchase'}`}
+   858→          </Button>
+   859→        </DialogFooter>
+   860→      </DialogContent>
+   861→    </Dialog>
+   862→  )
+   863→}
+   864→
+   865→// ===========================================================================
+   866→// Detail view (print + cancel)
+   867→// ===========================================================================
+   868→
+   869→export function InvoiceDetail({ kind, id }: { kind: InvoiceKind; id: string }) {
+   870→  const setView = useErpUi((s) => s.setView)
+   871→  const isSales = kind === 'SALES'
+   872→  const inv = useApi<AnyInvoice | null>(isSales ? `/api/sales-invoices/${id}` : `/api/purchase-invoices/${id}`)
+   873→  const { items } = useMasters()
+   874→  const [cancelling, setCancelling] = useState(false)
+   875→  const [prefill, setPrefill] = useState<AnyInvoice | null>(null)
+   876→  const [dupOpen, setDupOpen] = useState(false)
+   877→
+   878→  if (inv.loading) {
+   879→    return (
+   880→      <div className="space-y-4">
+   881→        <TableSkeleton rows={8} cols={6} />
+   882→      </div>
+   883→    )
+   884→  }
+   885→  if (inv.error || !inv.data) {
+   886→    return <EmptyState title="Invoice not found" hint={inv.error ?? 'Unknown invoice.'} icon={XCircle} />
+   887→  }
+   888→  const invoice = inv.data
+   889→  const cancelled = invoice.status === 'CANCELLED'
+   890→
+   891→  const cancel = async () => {
+   892→    setCancelling(true)
+   893→    try {
+   894→      await apiDelete(isSales ? `/api/sales-invoices/${id}` : `/api/purchase-invoices/${id}`)
+   895→      toast.success(`${invoice.invoiceNo} cancelled`, {
+   896→        description: 'Stock and GL reversal entries posted — the number stays reserved (gapless audit trail).',
+   897→      })
+   898→      inv.reload()
+   899→    } catch (e) {
+   900→      toastError(e)
+   901→    } finally {
+   902→      setCancelling(false)
+   903→    }
+   904→  }
+   905→
+   906→  // One button, the whole next step: open the payment dialog on the Accounting
+   907→  // module, prefilled with this party and the balance allocated to THIS invoice.
+   908→  const payNow = () => {
+   909→    const balance = Math.max(0, r2(invoice.grandTotal - invoice.paidAmount))
+   910→    if (balance <= 0) {
+   911→      toast.info('This invoice is fully paid')
+   912→      return
+   913→    }
+   914→    setCreatePreset({
+   915→      type: 'payment',
+   916→      partyId: invoice.partyId,
+   917→      paymentType: isSales ? 'RECEIPT' : 'PAYMENT',
+   918→      amount: balance,
+   919→      allocations: [{ invoiceNo: invoice.invoiceNo, amount: balance }],
+   920→    })
+   921→    setView('accounting')
+   922→  }
+   923→
+   924→  return (
+   925→    <div className="space-y-4">
+   926→      <div className="print-hide flex flex-wrap items-center justify-between gap-2">
+   927→        <div className="flex items-center gap-2">
+   928→          <Button variant="ghost" size="icon" className="size-11" onClick={() => setView(isSales ? 'sales' : 'purchase')} aria-label="Back to list">
+   929→            <ArrowLeft className="size-5" aria-hidden />
+   930→          </Button>
+   931→          <div>
+   932→            <p className="mb-1 flex items-center gap-1.5 text-xs text-muted-foreground" aria-label="Breadcrumb">
+   933→              <button type="button" className="underline-offset-2 hover:text-foreground hover:underline" onClick={() => setView(isSales ? 'sales' : 'purchase')}>
+   934→                {isSales ? 'Sales' : 'Purchase'}
+   935→              </button>
+   936→              <span aria-hidden>/</span>
+   937→              <span className="tabular-nums">{invoice.invoiceNo}</span>
+   938→            </p>
+   939→            <h2 className="text-lg font-semibold tabular-nums">{invoice.invoiceNo}</h2>
+   940→            <div className="mt-0.5 flex flex-wrap items-center gap-2">
+   941→              <StatusBadge status={invoice.status} />
+   942→              {isSales ? <SourceBadge source={(invoice as SalesInvoice).source} /> : null}
+   943→              {(invoice as SalesInvoice).tallySentAt ? (
+   944→                <Badge variant="outline" className="gap-1 border-primary/40 text-primary">
+   945→                  <FileDown className="size-3" aria-hidden /> In Tally
+   946→                </Badge>
+   947→              ) : null}
+   948→              <span className="text-xs text-muted-foreground">
+   949→                {invoice.party?.name} · {dateStr(invoice.date)}
+   950→              </span>
+   951→            </div>
+   952→          </div>
+   953→        </div>
+   954→        <div className="flex flex-wrap items-center gap-2">
+   955→          <Button
+   956→            onClick={payNow}
+   957→            disabled={cancelled || invoice.paidAmount >= invoice.grandTotal - 0.004}
+   958→            className="h-11 gap-2"
+   959→          >
+   960→            <HandCoins className="size-4" aria-hidden />
+   961→            {isSales ? 'Receive Payment' : 'Make Payment'}
+   962→            {!cancelled && invoice.grandTotal - invoice.paidAmount > 0.004 ? (
+   963→              <span className="rounded bg-primary-foreground/15 px-1.5 py-0.5 text-xs tabular-nums">
+   964→                ₹ {money(invoice.grandTotal - invoice.paidAmount)}
+   965→              </span>
+   966→            ) : null}
+   967→          </Button>
+   968→          <Button variant="outline" onClick={() => { setPrefill(invoice); setDupOpen(true) }} disabled={cancelled} className="h-11 gap-2">
+   969→            <Copy className="size-4" aria-hidden /> Duplicate
+   970→          </Button>
+   971→          <DropdownMenu>
+   972→            <DropdownMenuTrigger asChild>
+   973→              <Button variant="outline" disabled={cancelled} className="h-11 gap-2">
+   974→                <FileDown className="size-4" aria-hidden /> Tally
+   975→              </Button>
+   976→            </DropdownMenuTrigger>
+   977→            <DropdownMenuContent align="end">
+   978→              <DropdownMenuItem onClick={() => void exportTallyVoucher(isSales ? 'SALES' : 'PURCHASE', id, 'xml')}>
+   979→                <FileCode2 className="size-4" aria-hidden /> Tally XML (import file)
+   980→              </DropdownMenuItem>
+   981→              <DropdownMenuItem onClick={() => void exportTallyVoucher(isSales ? 'SALES' : 'PURCHASE', id, 'json')}>
+   982→                <Braces className="size-4" aria-hidden /> Tally JSON
+   983→              </DropdownMenuItem>
+   984→              <DropdownMenuItem onClick={() => void exportTallyVoucher(isSales ? 'SALES' : 'PURCHASE', id, 'csv')}>
+   985→                <FileSpreadsheet className="size-4" aria-hidden /> Tally Excel (CSV)
+   986→              </DropdownMenuItem>
+   987→              <DropdownMenuSeparator />
+   988→              <DropdownMenuItem onClick={() => downloadUrl('/downloads/tally/Tally-Import.bat')}>
+   989→                <Terminal className="size-4" aria-hidden /> Tally importer (.bat)
+   990→              </DropdownMenuItem>
+   991→              <DropdownMenuItem onClick={() => downloadUrl('/api/tally/masters?parties=1')}>
+   992→                <FileDown className="size-4" aria-hidden /> Tally masters (XML)
+   993→              </DropdownMenuItem>
+   994→              <DropdownMenuSeparator />
+   995→              <DropdownMenuItem onClick={() => void queueForConnector(isSales ? 'SALES' : 'PURCHASE', id)}>
+   996→                Queue for Tally connector
+   997→              </DropdownMenuItem>
+   998→              <DropdownMenuItem
+   999→                onClick={() =>
+  1000→                  void markTallySent(isSales ? 'SALES' : 'PURCHASE', id, !(invoice as SalesInvoice).tallySentAt).then(() => inv.reload())
+  1001→                }
+  1002→              >
+  1003→                {(invoice as SalesInvoice).tallySentAt ? 'Clear "sent to Tally"' : 'Mark as sent to Tally'}
+  1004→              </DropdownMenuItem>
+  1005→              {isSales ? (
+  1006→                <>
+  1007→                  <DropdownMenuSeparator />
+  1008→                  <DropdownMenuItem onClick={() => void exportEInvoiceJson(id)}>
+  1009→                    <ScrollText className="size-4" aria-hidden /> e-Invoice JSON (GST portal)
+  1010→                  </DropdownMenuItem>
+  1011→                </>
+  1012→              ) : null}
+  1013→            </DropdownMenuContent>
+  1014→          </DropdownMenu>
+  1015→          <Button variant="outline" onClick={() => window.print()} className="h-11 gap-2">
+  1016→            <Printer className="size-4" aria-hidden /> Print
+  1017→          </Button>
+  1018→          <AlertDialog>
+  1019→            <AlertDialogTrigger asChild>
+  1020→              <Button variant="destructive" disabled={cancelled || cancelling} className="h-11 gap-2">
+  1021→                {cancelling ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <XCircle className="size-4" aria-hidden />}
+  1022→                Cancel invoice
+  1023→              </Button>
+  1024→            </AlertDialogTrigger>
+  1025→            <AlertDialogContent>
+  1026→              <AlertDialogHeader>
+  1027→                <AlertDialogTitle>Cancel {invoice.invoiceNo}?</AlertDialogTitle>
+  1028→                <AlertDialogDescription>
+  1029→                  Cancellation posts reversal entries to the stock ledger and general ledger — the document is
+  1030→                  never deleted. Blocked if payments were allocated against this invoice.
+  1031→                </AlertDialogDescription>
+  1032→              </AlertDialogHeader>
+  1033→              <AlertDialogFooter>
+  1034→                <AlertDialogCancel className="h-11">Keep invoice</AlertDialogCancel>
+  1035→                <AlertDialogAction onClick={cancel} className="h-11" disabled={cancelling}>
+  1036→                  {cancelling ? 'Cancelling…' : 'Cancel invoice'}
+  1037→                </AlertDialogAction>
+  1038→              </AlertDialogFooter>
+  1039→            </AlertDialogContent>
+  1040→          </AlertDialog>
+  1041→        </div>
+  1042→      </div>
+  1043→
+  1044→      {cancelled ? (
+  1045→        <div className="print-hide rounded-md border border-destructive/40 bg-destructive/10 px-4 py-2 text-sm text-destructive">
+  1046→          This invoice is cancelled — reversal entries have been posted. Shown for audit only.
+  1047→        </div>
+  1048→      ) : null}
+  1049→
+  1050→      <InvoicePrint kind={kind} invoice={invoice} items={items} />
+  1051→
+  1052→      {/* Duplicate dialog — prefilled from this invoice */}
+  1053→      <CreateInvoiceDialog
+  1054→        kind={kind}
+  1055→        open={dupOpen}
+  1056→        prefill={prefill}
+  1057→        onOpenChange={(o) => {
+  1058→          setDupOpen(o)
+  1059→          if (!o) setPrefill(null)
+  1060→        }}
+  1061→        onCreated={() => {
+  1062→          toast.info('Duplicated invoice posted — find it in the list')
+  1063→          setView(isSales ? 'sales' : 'purchase')
+  1064→        }}
+  1065→        key={`dup-${invoice.id}`}
+  1066→      />
+  1067→    </div>
+  1068→  )
+  1069→}
+  1070→

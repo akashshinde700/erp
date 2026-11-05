@@ -233,19 +233,19 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
               />
             </div>
           ) : (
-            <div className="max-h-[62vh] overflow-auto erp-scroll">
+            <div className="max-h-[62dvh] overflow-auto erp-scroll [&_[data-slot=table-container]]:overflow-visible">
               <Table>
                 <TableHeader className="sticky top-0 z-10 bg-card">
                   <TableRow>
                     <TableHead>Invoice No</TableHead>
                     <TableHead>Date</TableHead>
                     <TableHead>Party</TableHead>
-                    <TableHead className="text-right">Taxable</TableHead>
-                    <TableHead className="text-right">GST</TableHead>
+                    <TableHead className="hidden text-right md:table-cell">Taxable</TableHead>
+                    <TableHead className="hidden text-right md:table-cell">GST</TableHead>
                     <TableHead className="text-right">Grand Total</TableHead>
-                    <TableHead className="text-right">Paid</TableHead>
-                    <TableHead className="text-right">Balance</TableHead>
-                    {isSales ? <TableHead>Source</TableHead> : null}
+                    <TableHead className="hidden text-right md:table-cell">Paid</TableHead>
+                    <TableHead className="hidden text-right md:table-cell">Balance</TableHead>
+                    {isSales ? <TableHead className="hidden lg:table-cell">Source</TableHead> : null}
                     <TableHead>Status</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
@@ -263,23 +263,23 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
                         <span className="block truncate">{inv.party?.name ?? '—'}</span>
                         <span className="block text-xs text-muted-foreground">{inv.party?.code}</span>
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">
+                      <TableCell className="hidden text-right tabular-nums md:table-cell">
                         <Money value={inv.taxable} plain />
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">
+                      <TableCell className="hidden text-right tabular-nums md:table-cell">
                         <Money value={inv.cgst + inv.sgst + inv.igst} plain />
                       </TableCell>
                       <TableCell className="text-right font-semibold tabular-nums">
                         <Money value={inv.grandTotal} plain />
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">
+                      <TableCell className="hidden text-right tabular-nums md:table-cell">
                         <Money value={inv.paidAmount} plain />
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">
+                      <TableCell className="hidden text-right tabular-nums md:table-cell">
                         <Money value={inv.grandTotal - inv.paidAmount} plain />
                       </TableCell>
                       {isSales ? (
-                        <TableCell>
+                        <TableCell className="hidden lg:table-cell">
                           <SourceBadge source={(inv as SalesInvoice).source} />
                         </TableCell>
                       ) : null}
@@ -295,7 +295,7 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="size-9 text-muted-foreground hover:text-foreground md:size-8"
+                            className="hidden size-9 text-muted-foreground hover:text-foreground md:inline-flex md:size-8"
                             onClick={() => setView(isSales ? 'sales-detail' : 'purchase-detail', { id: inv.id })}
                             aria-label={`View ${inv.invoiceNo}`}
                             title="View detail"
@@ -569,7 +569,7 @@ function CreateInvoiceDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden sm:max-w-5xl">
+      <DialogContent className="flex max-h-[92dvh] flex-col overflow-hidden sm:max-w-4xl lg:max-w-5xl">
         <DialogHeader>
           <DialogTitle>{prefill ? `Duplicate ${prefill.invoiceNo} as new ${isSales ? 'invoice' : 'purchase'}` : `New ${isSales ? 'Sales Invoice' : 'Purchase Invoice'}`}</DialogTitle>
           <DialogDescription>
@@ -663,7 +663,109 @@ function CreateInvoiceDialog({
 
           <div className="mt-4 space-y-1.5">
             <Label>Line Items</Label>
-            <div className="overflow-x-auto rounded-md border">
+            {/* Mobile (below sm): stacked cards — every field full-width, no nested
+                horizontal scroller inside the dialog. Same handlers as the table. */}
+            <div className="space-y-3 sm:hidden">
+              {lines.map((l) => {
+                const it = itemMap.get(l.itemId)
+                const pv = linePreview(l)
+                return (
+                  <div key={l.key} className="space-y-3 rounded-md border p-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1 space-y-1">
+                        <Select value={l.itemId || undefined} onValueChange={(v) => onItemPick(l.key, v)}>
+                          <SelectTrigger className="h-11 w-full" aria-label={`Item for line ${l.key}`}>
+                            <SelectValue placeholder="Pick item…" />
+                          </SelectTrigger>
+                          <SelectContent className="max-h-64">
+                            {items
+                              .filter((i) => i.active)
+                              .map((i) => (
+                                <SelectItem key={i.id} value={i.id}>
+                                  {i.code} — {i.name}
+                                </SelectItem>
+                              ))}
+                          </SelectContent>
+                        </Select>
+                        {it ? (
+                          <p className="text-xs text-muted-foreground">
+                            {it.uom} · {it.hsn ?? 'no HSN'} · GST {it.gstRate}%
+                          </p>
+                        ) : null}
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="size-11 shrink-0 text-muted-foreground hover:text-destructive"
+                        onClick={() => setLines((ls) => (ls.length > 1 ? ls.filter((x) => x.key !== l.key) : ls))}
+                        disabled={lines.length === 1}
+                        aria-label={`Remove line ${l.key}`}
+                      >
+                        <Trash2 className="size-4" aria-hidden />
+                      </Button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="space-y-1">
+                        <Label htmlFor={`mline-qty-${l.key}`} className="text-xs text-muted-foreground">Qty</Label>
+                        <Input
+                          id={`mline-qty-${l.key}`}
+                          type="number"
+                          min="0"
+                          step="any"
+                          value={l.qty}
+                          onChange={(e) => setLine(l.key, { qty: e.target.value })}
+                          placeholder="0"
+                          className="h-11 text-right tabular-nums"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label htmlFor={`mline-rate-${l.key}`} className="text-xs text-muted-foreground">Rate ₹</Label>
+                        <Input
+                          id={`mline-rate-${l.key}`}
+                          type="number"
+                          min="0"
+                          step="any"
+                          value={l.rate}
+                          onChange={(e) => setLine(l.key, { rate: e.target.value })}
+                          placeholder="0"
+                          className="h-11 text-right tabular-nums"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label htmlFor={`mline-disc-${l.key}`} className="text-xs text-muted-foreground">Disc %</Label>
+                        <Input
+                          id={`mline-disc-${l.key}`}
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="any"
+                          value={l.discPct}
+                          onChange={(e) => setLine(l.key, { discPct: e.target.value })}
+                          placeholder="0"
+                          className="h-11 text-right tabular-nums"
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <Label htmlFor={`mline-detail-${l.key}`} className="text-xs text-muted-foreground">Detail</Label>
+                        <Input
+                          id={`mline-detail-${l.key}`}
+                          value={l.detail}
+                          onChange={(e) => setLine(l.key, { detail: e.target.value })}
+                          placeholder="Optional"
+                          className="h-11"
+                        />
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 border-t pt-2 text-xs text-muted-foreground">
+                      <span className="tabular-nums">Taxable ₹ {money(pv.taxable)}</span>
+                      <span className="font-medium tabular-nums text-foreground">Total ₹ {money(pv.total)}</span>
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+            {/* Desktop (sm+): classic row editor */}
+            <div className="hidden overflow-x-auto rounded-md border sm:block">
               <Table>
                 <TableHeader>
                   <TableRow>
@@ -699,7 +801,7 @@ function CreateInvoiceDialog({
                             </SelectContent>
                           </Select>
                           {it ? (
-                            <p className="mt-1 text-[10px] text-muted-foreground">
+                            <p className="mt-1 text-xs text-muted-foreground">
                               {it.uom} · {it.hsn ?? 'no HSN'} · GST {it.gstRate}%
                             </p>
                           ) : null}

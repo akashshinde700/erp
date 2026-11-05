@@ -90,9 +90,9 @@ export function JobworkView() {
 
 function InwardsTab() {
   const setView = useErpUi((s) => s.setView)
-  const { data, loading } = useApi<JobworkInward[]>('/api/jobwork/inwards')
+  const list = useApi<JobworkInward[]>('/api/jobwork/inwards')
   const [createOpen, setCreateOpen] = useState(false)
-  const inwards = data ?? []
+  const inwards = list.data ?? []
 
   const progressOf = (iw: JobworkInward) => {
     const total = iw.items.reduce((s, i) => s + i.qty, 0)
@@ -114,7 +114,7 @@ function InwardsTab() {
 
       <Card className="p-0">
         <CardContent className="p-0">
-          {loading ? (
+          {list.loading ? (
             <TableSkeleton rows={5} cols={6} />
           ) : inwards.length === 0 ? (
             <div className="p-6">

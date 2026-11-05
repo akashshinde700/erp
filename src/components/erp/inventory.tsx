@@ -27,7 +27,7 @@ import {
   type StockSummaryRow,
 } from './api'
 import { EmptyState, Money, SectionHeading, TableSkeleton, VoucherBadge } from './bits'
-import { dateStr, money, qty as qtyFmt } from '@/lib/erp'
+import { dateStr, money, qty as qtyFmt, DEFAULT_WAREHOUSE_CODE } from '@/lib/erp'
 
 export function InventoryView() {
   return (
@@ -103,6 +103,13 @@ function StockSummaryTab() {
                   <TableCell>
                     <span className="block max-w-40 truncate font-medium">{r.item.name}</span>
                     <span className="block text-xs text-muted-foreground">{r.item.code}</span>
+                    {r.warehouses &&
+                    r.warehouses.length > 0 &&
+                    (r.warehouses.length > 1 || r.warehouses[0].code !== DEFAULT_WAREHOUSE_CODE) ? (
+                      <span className="block text-[11px] text-muted-foreground/80">
+                        {r.warehouses.map((w) => `${w.code}: ${qtyFmt(w.closing)}`).join(' · ')}
+                      </span>
+                    ) : null}
                   </TableCell>
                   <TableCell className="tabular-nums">{r.item.hsn ?? '—'}</TableCell>
                   <TableCell>{r.item.uom}</TableCell>

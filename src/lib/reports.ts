@@ -42,18 +42,24 @@ export async function stockLedgerReport(filter: {
 
 export async function stockSummaryReport() {
   const items = await db.item.findMany({ where: { isStockItem: true }, orderBy: { code: 'asc' } })
+  const warehouses = await db.warehouse.findMany({ orderBy: { code: 'asc' } })
+  const whCode = new Map(warehouses.map((w) => [w.id, w.code]))
   const led = await db.stockLedger.findMany({ where: { isCancelled: false } })
-  const byItem = new Map<string, { inQty: number; outQty: number; inValue: number }>()
+  const byItem = new Map<
+    string,
+    { inQty: number; outQty: number; inValue: number; byWh: Map<string, number> }
+  >()
   for (const l of led) {
-    const prev = byItem.get(l.itemId) ?? { inQty: 0, outQty: 0, inValue: 0 }
+    const prev = byItem.get(l.itemId) ?? { inQty: 0, outQty: 0, inValue: 0, byWh: new Map<string, number>() }
     byItem.set(l.itemId, {
       inQty: r2(prev.inQty + l.qtyIn),
       outQty: r2(prev.outQty + l.qtyOut),
       inValue: r2(prev.inValue + l.qtyIn * l.rate),
+      byWh: prev.byWh.set(l.warehouseId, r2((prev.byWh.get(l.warehouseId) ?? 0) + l.qtyIn - l.qtyOut)),
     })
   }
   return items.map((it) => {
-    const s = byItem.get(it.id) ?? { inQty: 0, outQty: 0, inValue: 0 }
+    const s = byItem.get(it.id) ?? { inQty: 0, outQty: 0, inValue: 0, byWh: new Map<string, number>() }
     const closing = r2(s.inQty - s.outQty)
     const avgCost = s.inQty > 0 ? r2(s.inValue / s.inQty) : 0
     return {
@@ -64,6 +70,13 @@ export async function stockSummaryReport() {
       avgCost,
       closingValue: r2(closing * avgCost),
       lowStock: it.reorderLevel > 0 && closing < it.reorderLevel,
+      // Per-warehouse closing split — sales guards check the chosen warehouse,
+      // so the summary must show where stock actually lives (JW material is
+      // customer-owned and not sellable from MAIN).
+      warehouses: [...s.byWh.entries()]
+        .map(([id, qty]) => ({ code: whCode.get(id) ?? id, closing: qty }))
+        .filter((w) => Math.abs(w.closing) > 0.0001)
+        .sort((a, b) => a.code.localeCompare(b.code)),
     }
   })
 }

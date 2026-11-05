@@ -127,6 +127,49 @@ function NavList({ onNavigate }: { onNavigate?: () => void }) {
   )
 }
 
+// ---------- mobile bottom navigation (frequent modules only) ----------
+
+const BOTTOM_NAV: { view: ErpView; label: string; icon: typeof LayoutDashboard }[] = [
+  { view: 'dashboard', label: 'Home', icon: LayoutDashboard },
+  { view: 'sales', label: 'Sales', icon: ReceiptText },
+  { view: 'purchase', label: 'Purchase', icon: ShoppingCart },
+  { view: 'jobwork', label: 'Jobwork', icon: Factory },
+  { view: 'inventory', label: 'Stock', icon: Boxes },
+]
+
+function BottomNav() {
+  const { view, setView } = useErpUi()
+  return (
+    <nav
+      aria-label="Frequent modules"
+      className="fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/90 md:hidden"
+    >
+      <div className="mx-auto grid max-w-md grid-cols-5 pb-[env(safe-area-inset-bottom)]">
+        {BOTTOM_NAV.map((e) => {
+          const active = view === e.view || view === `${e.view}-detail`
+          return (
+            <button
+              key={e.view}
+              type="button"
+              onClick={() => setView(e.view)}
+              aria-current={active ? 'page' : undefined}
+              aria-label={e.label}
+              className={cn(
+                'flex min-h-14 flex-col items-center justify-center gap-0.5 px-1 py-1.5 text-[10px] font-medium transition-colors',
+                active ? 'text-primary' : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              <e.icon className="size-5 shrink-0" aria-hidden />
+              <span className="truncate">{e.label}</span>
+              {active ? <span className="sr-only">(current)</span> : null}
+            </button>
+          )
+        })}
+      </div>
+    </nav>
+  )
+}
+
 // ---------- lazy module views (code splitting) ----------
 
 const DashboardView = lazy(() => import('./dashboard').then((m) => ({ default: m.DashboardView })))
@@ -557,13 +600,15 @@ export function ErpApp() {
             <button
               type="button"
               onClick={() => setView('dashboard')}
-              className="flex items-center gap-2 rounded-md px-1 py-1 text-left"
+              className="flex min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left"
               aria-label="ForgeERP home"
             >
-              <span className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
+              <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
                 <Factory className="size-4" aria-hidden />
               </span>
-              <span className="text-sm font-semibold tracking-tight sm:text-base">ForgeERP</span>
+              {/* Wordmark hidden on the narrowest phones so the header never
+                  overflows 320px viewports (menu button + company + avatar fit). */}
+              <span className="hidden text-sm font-semibold tracking-tight sm:inline sm:text-base">ForgeERP</span>
             </button>
 
             <div className="ml-auto flex items-center gap-2">
@@ -602,7 +647,7 @@ export function ErpApp() {
                   Company not set up
                 </span>
               )}
-              <span className="max-w-28 truncate text-sm font-medium sm:max-w-40 lg:max-w-none">
+              <span className="max-w-36 truncate text-sm font-medium min-[380px]:max-w-40 sm:max-w-40 lg:max-w-none">
                 {company.data?.name ?? ''}
               </span>
               <UserMenu session={session} onLogout={() => void logout()} />
@@ -641,6 +686,12 @@ export function ErpApp() {
             Append-only ledgers · FY-aware gapless numbering · one shared GST engine (report ≡ print ≡ invoice)
           </div>
         </footer>
+
+        {/* Mobile bottom nav (frequent modules) + spacer so it never covers the
+            footer — h-14 + nav border + safe-area inset keeps the last content
+            fully visible above the fixed bar at scroll-bottom. */}
+        <div aria-hidden className="h-[calc(3.5rem+1px+env(safe-area-inset-bottom))] shrink-0 md:hidden" />
+        <BottomNav />
 
         <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
         <ShortcutsHelpDialog open={helpOpen} onOpenChange={setHelpOpen} />

@@ -103,7 +103,7 @@ export function DashboardView() {
             </span>
             <span className="min-w-0">
               <span className="block text-xs font-semibold">{qa.label}</span>
-              <span className="block truncate text-[10px] text-muted-foreground">{qa.hint}</span>
+              <span className="block text-[10px] leading-tight text-muted-foreground line-clamp-2">{qa.hint}</span>
             </span>
             <Plus className="ml-auto size-3.5 shrink-0 text-muted-foreground/50 transition-colors group-hover:text-primary" aria-hidden />
           </button>
@@ -219,11 +219,10 @@ export function DashboardView() {
                   <TableRow>
                     <TableHead>Invoice</TableHead>
                     <TableHead>Date</TableHead>
-                    <TableHead>Party</TableHead>
                     <TableHead className="text-right">Grand Total</TableHead>
-                    <TableHead className="text-right">Paid</TableHead>
+                    <TableHead className="hidden text-right sm:table-cell">Paid</TableHead>
                     <TableHead className="text-right">Balance</TableHead>
-                    <TableHead>Source</TableHead>
+                    <TableHead className="hidden sm:table-cell">Source</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -233,19 +232,21 @@ export function DashboardView() {
                       className="cursor-pointer"
                       onClick={() => setView('sales-detail', { id: inv.id })}
                     >
-                      <TableCell className="font-medium tabular-nums">{inv.invoiceNo}</TableCell>
-                      <TableCell>{dateStr(inv.date)}</TableCell>
-                      <TableCell className="max-w-48 truncate">{inv.party}</TableCell>
+                      <TableCell>
+                        <span className="block font-medium tabular-nums">{inv.invoiceNo}</span>
+                        <span className="block max-w-40 truncate text-xs text-muted-foreground">{inv.party}</span>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">{dateStr(inv.date)}</TableCell>
                       <TableCell className="text-right font-semibold">
                         <Money value={inv.grandTotal} plain />
                       </TableCell>
-                      <TableCell className="text-right tabular-nums">
+                      <TableCell className="hidden text-right tabular-nums sm:table-cell">
                         <Money value={inv.paidAmount} plain />
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
                         <Money value={inv.grandTotal - inv.paidAmount} plain />
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="hidden sm:table-cell">
                         <SourceBadge source={inv.source} />
                       </TableCell>
                     </TableRow>

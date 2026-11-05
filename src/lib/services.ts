@@ -8,12 +8,12 @@
  */
 import { db } from './db'
 import { Prisma } from '@prisma/client'
-import { r2, fyCode, computeInvoiceTotals, EPS } from './erp'
+import { r2, fyCode, computeInvoiceTotals, EPS, DEFAULT_WAREHOUSE_CODE } from './erp'
 import { BusinessError, AccountCode, postGl, cancelGlForVoucher } from './accounting'
 
 type Tx = Prisma.TransactionClient
 
-export const DEFAULT_WAREHOUSE_CODE = 'MAIN'
+export { DEFAULT_WAREHOUSE_CODE }
 
 // ---------- helpers ----------
 

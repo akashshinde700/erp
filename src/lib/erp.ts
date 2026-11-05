@@ -15,6 +15,11 @@ export const r2 = (n: number): number => Math.round((n + Number.EPSILON) * 100) 
 
 export const EPS = 1e-9
 
+/** Default warehouse code — shared by server services and client views so
+ *  stock summaries can flag items whose stock lives outside the default
+ *  warehouse (e.g. customer-owned JW material). Pure value: client-safe. */
+export const DEFAULT_WAREHOUSE_CODE = 'MAIN'
+
 // ---------- Indian GST state codes ----------
 
 export interface StateInfo { code: string; name: string; ut: boolean }

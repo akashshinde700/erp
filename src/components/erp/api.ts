@@ -349,6 +349,8 @@ export interface StockSummaryRow {
   avgCost: number
   closingValue: number
   lowStock: boolean
+  /** Per-warehouse closing split (non-zero only). */
+  warehouses?: { code: string; closing: number }[]
 }
 
 export interface Gstr1Bucket {

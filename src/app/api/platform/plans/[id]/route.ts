@@ -1,13 +1,13 @@
 import { handleError, ok } from '@/lib/api'
 import { db } from '@/lib/db'
 import { logAudit } from '@/lib/audit'
-import { requirePlatformKey, planOut, PLAN_FEATURE_KEYS } from '@/lib/platform'
+import { requirePlatformAdmin, planOut, PLAN_FEATURE_KEYS } from '@/lib/platform'
 import { z } from 'zod'
 
 /** PATCH /api/platform/plans/[id] — update fields (undefined = unchanged). */
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    requirePlatformKey(req)
+    await requirePlatformAdmin(req)
     const { id } = await params
     const schema = z.object({
       name: z.string().min(1).max(60).optional(),

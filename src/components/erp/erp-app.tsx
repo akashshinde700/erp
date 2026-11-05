@@ -245,6 +245,7 @@ export function ErpApp() {
   // ---------- organization login (SaaS) ----------
   // undefined = session probe in flight · null = signed out · info = signed in.
   // Platform Admin is a SEPARATE console (platformMode) — never inside the ERP.
+  // A SUPER_ADMIN session opens the console directly (like the reference SaaS).
   const [session, setSession] = useState<SessionInfo | null | undefined>(undefined)
   const [platformMode, setPlatformMode] = useState(false)
 
@@ -382,8 +383,30 @@ export function ErpApp() {
   }
 
   // Platform Admin — SEPARATE console (own header + pill nav), opened from the
-  // login screen only; never inside an organization's ERP.
-  if (platformMode) {
+  // login screen or a SUPER_ADMIN sign-in; never inside an organization's ERP.
+  // Exiting while a SUPER_ADMIN session is active signs the admin out — the
+  // console is their home, not the org ERP.
+  const exitPlatform = async () => {
+    const wasSuperAdmin = !!session && session.user.role === 'SUPER_ADMIN'
+    setPlatformMode(false)
+    if (wasSuperAdmin) {
+      try {
+        await apiPost('/api/auth/logout', {})
+      } catch {
+        /* best effort — the console may already have logged out */
+      }
+      setSession(null)
+      return
+    }
+    // Key-mode exit: stay honest about the cookie the console may have swapped.
+    api<SessionInfo | null>('/api/auth/session')
+      .then((s) => setSession(s))
+      .catch(() => setSession(null))
+  }
+
+  const platformConsole = platformMode || (!!session && session.user.role === 'SUPER_ADMIN')
+
+  if (platformConsole) {
     return (
       <Suspense
         fallback={
@@ -392,14 +415,31 @@ export function ErpApp() {
           </div>
         }
       >
-        <PlatformView onExit={() => setPlatformMode(false)} />
+        <PlatformView
+          onExit={() => void exitPlatform()}
+          onLoginAs={(s) => {
+            // Impersonation handover: the console set the session cookie for the
+            // target org's owner — hand the browser to their workspace.
+            setSession(s)
+            setPlatformMode(false)
+          }}
+        />
       </Suspense>
     )
   }
 
   // Not signed in → organization login screen (SaaS entry).
   if (!session) {
-    return <LoginView onLogin={(s) => setSession(s)} onOpenPlatform={() => setPlatformMode(true)} />
+    return (
+      <LoginView
+        onLogin={(s) => setSession(s)}
+        onOpenPlatform={() => setPlatformMode(true)}
+        onPlatformLogin={(s) => {
+          setSession(s)
+          setPlatformMode(true)
+        }}
+      />
+    )
   }
 
   // Signed in to an org that is NOT the operating org → honest org portal

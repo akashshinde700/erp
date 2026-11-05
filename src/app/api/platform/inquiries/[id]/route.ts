@@ -1,7 +1,7 @@
 import { handleError, ok, fail } from '@/lib/api'
 import { db } from '@/lib/db'
 import { logAudit } from '@/lib/audit'
-import { requirePlatformKey } from '@/lib/platform'
+import { requirePlatformAdmin } from '@/lib/platform'
 import { z } from 'zod'
 
 /**
@@ -10,7 +10,7 @@ import { z } from 'zod'
  */
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    requirePlatformKey(req)
+    await requirePlatformAdmin(req)
     const { id } = await params
     const inquiry = await db.platformInquiry.findUnique({ where: { id } })
     if (!inquiry) return fail('Inquiry not found', 404)
@@ -33,7 +33,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    requirePlatformKey(req)
+    await requirePlatformAdmin(req)
     const { id } = await params
     const inquiry = await db.platformInquiry.findUnique({ where: { id } })
     if (!inquiry) return fail('Inquiry not found', 404)

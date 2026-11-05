@@ -46,7 +46,9 @@ export async function PUT(req: Request) {
     if (body.gstin && !gstinChecksumValid(body.gstin)) {
       return fail('Invalid GSTIN — checksum failed (format: 27ABCDE1234F1Z5)')
     }
-    const existing = await db.company.findFirst({ orderBy: { createdAt: 'asc' } })
+    // Create/update the OPERATING org (first non-platform company; the
+    // platform company is never the ERP workspace).
+    const existing = await db.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } })
     const company = existing
       ? await db.company.update({ where: { id: existing.id }, data: body })
       : await db.company.create({ data: body })

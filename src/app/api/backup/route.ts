@@ -1,7 +1,7 @@
 import { handleError, ok } from '@/lib/api'
 import { db } from '@/lib/db'
 import { logAudit } from '@/lib/audit'
-import { requirePlatformKey } from '@/lib/platform'
+import { requirePlatformAdmin } from '@/lib/platform'
 
 /**
  * GET /api/backup — full JSON snapshot of every table (download).
@@ -11,7 +11,7 @@ import { requirePlatformKey } from '@/lib/platform'
 
 export async function GET(req: Request) {
   try {
-    requirePlatformKey(req)
+    await requirePlatformAdmin(req)
     const [
       company,
       plans,

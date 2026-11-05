@@ -1,7 +1,7 @@
 import { handleError, ok } from '@/lib/api'
 import { db } from '@/lib/db'
 import { logAudit } from '@/lib/audit'
-import { requirePlatformKey } from '@/lib/platform'
+import { requirePlatformAdmin } from '@/lib/platform'
 import { z } from 'zod'
 
 /**
@@ -10,7 +10,7 @@ import { z } from 'zod'
  */
 export async function GET(req: Request) {
   try {
-    requirePlatformKey(req)
+    await requirePlatformAdmin(req)
     const inquiries = await db.platformInquiry.findMany({
       orderBy: { createdAt: 'desc' },
       include: { followUps: { orderBy: { createdAt: 'desc' } } },
@@ -34,7 +34,7 @@ const inquirySchema = z.object({
 
 export async function POST(req: Request) {
   try {
-    requirePlatformKey(req)
+    await requirePlatformAdmin(req)
     const body = inquirySchema.parse(await req.json())
     const inquiry = await db.platformInquiry.create({
       data: {

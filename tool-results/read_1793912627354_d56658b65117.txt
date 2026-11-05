@@ -1,0 +1,588 @@
+     1→'use client'
+     2→
+     3→import * as React from 'react'
+     4→import { toast } from 'sonner'
+     5→import { Check, Copy, Factory, Loader2, Plus } from 'lucide-react'
+     6→import { Button } from '@/components/ui/button'
+     7→import { Card } from '@/components/ui/card'
+     8→import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+     9→import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+    10→import { ConfirmAction, Field, FormDialog, SelectInput, TextInput } from '@/components/erp/kit'
+    11→import LoginScreen, { type LoginUser } from '@/components/erp/login-screen'
+    12→import { api, apiDelete, apiGet, apiPatch, apiPost, useList, UNAUTHORIZED_EVENT } from '@/lib/use-api'
+    13→import { cn } from '@/lib/utils'
+    14→
+    15→// ---------------- types (mirror src/lib/platform.ts orgRow) ----------------
+    16→
+    17→interface OrgRow {
+    18→  id: string
+    19→  name: string
+    20→  slug: string | null
+    21→  city: string | null
+    22→  gstin: string | null
+    23→  admin: { id: string; name: string; email: string; active: boolean } | null
+    24→  plan: { id: string; name: string } | null
+    25→  customized: boolean
+    26→  limits: { users: number; warehouses: number; items: number }
+    27→  overrides: { maxUsers: number | null; maxWarehouses: number | null; maxItems: number | null }
+    28→  usage: { users: number; warehouses: number; items: number; customers: number }
+    29→  status: string
+    30→  state_: 'active' | 'trial' | 'expired' | 'suspended'
+    31→  billingCycle: 'MONTHLY' | 'YEARLY'
+    32→  paidUntil: string | null
+    33→  trialEndsAt: string | null
+    34→  /** List endpoint only: number of firms (other orgs) this org's users also run */
+    35→  linkedFirms?: number
+    36→  /** List endpoint only: the parent org when this org is a firm of another one */
+    37→  firmOf?: { id: string; name: string | null } | null
+    38→}
+    39→
+    40→interface PlanRow {
+    41→  id: string
+    42→  name: string
+    43→  priceMonthly: number
+    44→  priceYearly: number
+    45→  maxUsers: number
+    46→  maxWarehouses: number
+    47→  maxItems: number
+    48→  active: boolean
+    49→  orgCount: number
+    50→}
+    51→
+    52→interface Me { user: LoginUser; company: { id: string; name: string } }
+    53→
+    54→const fmtDate = (d: string | null) => {
+    55→  if (!d) return '—'
+    56→  const x = new Date(d)
+    57→  return `${String(x.getDate()).padStart(2, '0')}/${String(x.getMonth() + 1).padStart(2, '0')}/${x.getFullYear()}`
+    58→}
+    59→const lim = (used: number, max: number) => `${used}/${max || '∞'}`
+    60→const inr = (n: number) => `₹${n.toLocaleString('en-IN')}`
+    61→
+    62→const STATE_STYLE: Record<OrgRow['state_'], string> = {
+    63→  active: 'bg-success-soft text-success ring-1 ring-inset ring-success-border',
+    64→  trial: 'bg-info-soft text-info ring-1 ring-inset ring-info-border',
+    65→  expired: 'bg-warning-soft text-warning ring-1 ring-inset ring-warning-border',
+    66→  suspended: 'bg-danger-soft text-destructive ring-1 ring-inset ring-danger-border',
+    67→}
+    68→
+    69→function CopyChip({ text }: { text: string }) {
+    70→  const [done, setDone] = React.useState(false)
+    71→  return (
+    72→    <button
+    73→      type="button"
+    74→      onClick={() => { void navigator.clipboard.writeText(text).then(() => { setDone(true); setTimeout(() => setDone(false), 1200) }) }}
+    75→      className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2 py-0.5 font-mono text-xs hover:bg-muted/70"
+    76→      title="Copy"
+    77→    >
+    78→      {text}
+    79→      {done ? <Check className="h-3 w-3 text-success" /> : <Copy className="h-3 w-3 text-muted-foreground" />}
+    80→    </button>
+    81→  )
+    82→}
+    83→
+    84→// ---------------- page shell ----------------
+    85→
+    86→export default function PlatformAdmin() {
+    87→  const [me, setMe] = React.useState<Me | null>(null)
+    88→  const [booting, setBooting] = React.useState(true)
+    89→  const [tab, setTab] = React.useState<'orgs' | 'plans'>('orgs')
+    90→
+    91→  React.useEffect(() => {
+    92→    apiGet<Me>('/api/auth/me').then(setMe).catch(() => setMe(null)).finally(() => setBooting(false))
+    93→    const onUnauthorized = () => setMe(null)
+    94→    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
+    95→    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized)
+    96→  }, [])
+    97→
+    98→  async function logout() {
+    99→    try { await apiPost('/api/auth/logout', {}) } catch { /* best effort */ }
+   100→    try { window.localStorage.removeItem('erp_user') } catch { /* ignore */ }
+   101→    setMe(null)
+   102→  }
+   103→
+   104→  if (booting) {
+   105→    return <div className="flex min-h-screen-safe items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
+   106→  }
+   107→  if (!me) {
+   108→    return (
+   109→      <LoginScreen
+   110→        onLogin={(user, company) => {
+   111→          if (user.role !== 'SUPER_ADMIN') {
+   112→            toast.error('This console is for the platform administrator only')
+   113→            window.location.href = '/'
+   114→            return
+   115→          }
+   116→          window.localStorage.setItem('erp_user', JSON.stringify({ user, company }))
+   117→          setMe({ user, company })
+   118→        }}
+   119→      />
+   120→    )
+   121→  }
+   122→  if (me.user.role !== 'SUPER_ADMIN') {
+   123→    return (
+   124→      <div className="flex min-h-screen-safe flex-col items-center justify-center gap-3 p-6 text-center">
+   125→        <p className="text-lg font-semibold">Platform administrator access required</p>
+   126→        <p className="text-sm text-muted-foreground">You are signed in as {me.user.email}.</p>
+   127→        <Button onClick={() => { window.location.href = '/' }}>Go to ERP</Button>
+   128→      </div>
+   129→    )
+   130→  }
+   131→
+   132→  const navBtn = (key: 'orgs' | 'plans', label: string) => (
+   133→    <Button variant={tab === key ? 'default' : 'outline'} size="sm" className={cn('rounded-full', tab === key && 'bg-primary hover:bg-primary/90')} onClick={() => setTab(key)}>
+   134→      {label}
+   135→    </Button>
+   136→  )
+   137→
+   138→  return (
+   139→    <div className="min-h-screen-safe bg-muted/40">
+   140→      <header className="border-b bg-background">
+   141→        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-4 sm:px-6">
+   142→          <div className="flex items-center gap-3">
+   143→            <div className="rounded-lg bg-success-soft p-2 text-success"><Factory className="h-5 w-5" /></div>
+   144→            <div>
+   145→              <h1 className="text-lg font-semibold leading-tight">Platform Admin</h1>
+   146→              <p className="text-xs text-muted-foreground">{me.user.name} · {me.user.email}</p>
+   147→            </div>
+   148→          </div>
+   149→          <nav className="flex flex-wrap items-center gap-2">
+   150→            {navBtn('orgs', 'Organizations')}
+   151→            {navBtn('plans', 'Plans')}
+   152→            <Button variant="outline" size="sm" className="rounded-full" onClick={() => { window.location.href = '/' }}>Open ERP</Button>
+   153→            <Button variant="outline" size="sm" className="rounded-full" onClick={() => void logout()}>Logout</Button>
+   154→          </nav>
+   155→        </div>
+   156→      </header>
+   157→      <main className="mx-auto max-w-7xl px-4 py-6 sm:px-6">
+   158→        {tab === 'orgs' ? <Organizations /> : <Plans />}
+   159→      </main>
+   160→    </div>
+   161→  )
+   162→}
+   163→
+   164→// ---------------- Organizations ----------------
+   165→
+   166→interface CreateForm {
+   167→  name: string; gstin: string; city: string; state: string; stateCode: string; phone: string
+   168→  adminName: string; adminEmail: string; password: string; planId: string; billingCycle: string; trialDays: string
+   169→}
+   170→const EMPTY_CREATE: CreateForm = {
+   171→  name: '', gstin: '', city: '', state: '', stateCode: '', phone: '',
+   172→  adminName: '', adminEmail: '', password: '', planId: '', billingCycle: 'MONTHLY', trialDays: '14',
+   173→}
+   174→
+   175→function Organizations() {
+   176→  const orgs = useList<{ items: OrgRow[] }>('/api/platform/orgs')
+   177→  const plans = useList<{ items: PlanRow[] }>('/api/platform/plans')
+   178→  const allRows = orgs.data?.items ?? []
+   179→  const [hideFirms, setHideFirms] = React.useState(false)
+   180→  const firmCount = allRows.filter((r) => r.firmOf).length
+   181→  const rows = hideFirms ? allRows.filter((r) => !r.firmOf) : allRows
+   182→  const planOpts = [{ value: '', label: '— No plan (unlimited) —' }, ...(plans.data?.items ?? []).map((p) => ({ value: p.id, label: p.name }))]
+   183→
+   184→  // Passwords generated this session (shown until the page is reloaded; never stored server-side in plain text)
+   185→  const [shownPw, setShownPw] = React.useState<Record<string, string>>({})
+   186→  const [creds, setCreds] = React.useState<{ org: string; email: string; password: string } | null>(null)
+   187→
+   188→  const [createOpen, setCreateOpen] = React.useState(false)
+   189→  const [form, setForm] = React.useState<CreateForm>(EMPTY_CREATE)
+   190→  const [saving, setSaving] = React.useState(false)
+   191→  const setF = (k: keyof CreateForm) => (v: string) => setForm((f) => ({ ...f, [k]: v }))
+   192→
+   193→  const [customOrg, setCustomOrg] = React.useState<OrgRow | null>(null)
+   194→  const [custom, setCustom] = React.useState({ maxUsers: '', maxWarehouses: '', maxItems: '' })
+   195→  const [paidOrg, setPaidOrg] = React.useState<OrgRow | null>(null)
+   196→  const [paidCycle, setPaidCycle] = React.useState('MONTHLY')
+   197→  const [deleteOrg, setDeleteOrg] = React.useState<OrgRow | null>(null)
+   198→  const [deleteName, setDeleteName] = React.useState('')
+   199→  const [busy, setBusy] = React.useState<string | null>(null)
+   200→
+   201→  function replaceRow(org: OrgRow) {
+   202→    // PATCH returns the plain org row — keep the list-only firm fields (linkedFirms / firmOf)
+   203→    orgs.setData((d) => (d ? { items: d.items.map((r) => (r.id === org.id ? { ...r, ...org, linkedFirms: org.linkedFirms ?? r.linkedFirms, firmOf: org.firmOf !== undefined ? org.firmOf : r.firmOf } : r)) } : d))
+   204→  }
+   205→
+   206→  async function act(row: OrgRow, body: Record<string, unknown>, msg?: string) {
+   207→    setBusy(row.id + String(body.action))
+   208→    try {
+   209→      const d = await apiPatch<{ org: OrgRow; password?: string; email?: string }>(`/api/platform/orgs/${row.id}`, body)
+   210→      replaceRow(d.org)
+   211→      if (d.password && d.email) {
+   212→        setShownPw((m) => ({ ...m, [row.id]: d.password! }))
+   213→        setCreds({ org: row.name, email: d.email, password: d.password })
+   214→      } else if (msg) toast.success(msg)
+   215→      return true
+   216→    } catch (e) {
+   217→      toast.error(e instanceof Error ? e.message : 'Action failed')
+   218→      return false
+   219→    } finally {
+   220→      setBusy(null)
+   221→    }
+   222→  }
+   223→
+   224→  async function create() {
+   225→    if (!form.name.trim() || !form.adminEmail.trim()) { toast.error('Company name and admin email are required'); return }
+   226→    if (form.password && form.password.length < 8) { toast.error('Password must be at least 8 characters (or leave blank to generate)'); return }
+   227→    setSaving(true)
+   228→    try {
+   229→      const d = await apiPost<{ org: OrgRow; password: string }>('/api/platform/orgs', { ...form, trialDays: Number(form.trialDays || 0) })
+   230→      orgs.setData((prev) => ({ items: [d.org, ...(prev?.items ?? [])] }))
+   231→      setShownPw((m) => ({ ...m, [d.org.id]: d.password }))
+   232→      setCreds({ org: d.org.name, email: d.org.admin?.email || form.adminEmail, password: d.password })
+   233→      setCreateOpen(false)
+   234→      setForm(EMPTY_CREATE)
+   235→    } catch (e) {
+   236→      toast.error(e instanceof Error ? e.message : 'Failed to create organization')
+   237→    } finally {
+   238→      setSaving(false)
+   239→    }
+   240→  }
+   241→
+   242→  async function loginAs(row: OrgRow) {
+   243→    if (!(await act(row, { action: 'loginAs' }))) return
+   244→    window.localStorage.setItem('erp_company_id', row.id)
+   245→    window.location.href = '/'
+   246→  }
+   247→
+   248→  async function saveCustom() {
+   249→    if (!customOrg) return
+   250→    const ok = await act(customOrg, {
+   251→      action: 'customize',
+   252→      maxUsers: custom.maxUsers === '' ? null : Number(custom.maxUsers),
+   253→      maxWarehouses: custom.maxWarehouses === '' ? null : Number(custom.maxWarehouses),
+   254→      maxItems: custom.maxItems === '' ? null : Number(custom.maxItems),
+   255→    }, 'Custom limits saved')
+   256→    if (ok) setCustomOrg(null)
+   257→  }
+   258→
+   259→  async function remove() {
+   260→    if (!deleteOrg) return
+   261→    setBusy(deleteOrg.id + 'delete')
+   262→    try {
+   263→      // apiDelete() sends no body; the org delete needs the typed confirmation.
+   264→      await api(`/api/platform/orgs/${deleteOrg.id}`, { method: 'DELETE', body: JSON.stringify({ confirmName: deleteName }) })
+   265→      orgs.setData((d) => (d ? { items: d.items.filter((r) => r.id !== deleteOrg.id) } : d))
+   266→      toast.success(`${deleteOrg.name} deleted`)
+   267→      setDeleteOrg(null)
+   268→    } catch (e) {
+   269→      toast.error(e instanceof Error ? e.message : 'Delete failed')
+   270→    } finally {
+   271→      setBusy(null)
+   272→    }
+   273→  }
+   274→
+   275→  const actBtn = 'h-8 rounded-full px-3 text-xs'
+   276→
+   277→  return (
+   278→    <div>
+   279→      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+   280→        <div className="flex flex-wrap items-center gap-3">
+   281→          <h2 className="text-xl font-semibold">Organizations ({rows.length}{hideFirms && firmCount ? ` of ${allRows.length}` : ''})</h2>
+   282→          <Button
+   283→            variant={hideFirms ? 'default' : 'outline'} size="sm"
+   284→            className={cn('h-8 rounded-full px-3 text-xs', hideFirms && 'bg-primary hover:bg-primary/90')}
+   285→            onClick={() => setHideFirms((v) => !v)}
+   286→            title="Hide organizations that are firms of another organization"
+   287→          >
+   288→            {hideFirms ? 'Firms hidden' : 'Hide firms'}{firmCount ? ` (${firmCount})` : ''}
+   289→          </Button>
+   290→        </div>
+   291→        <Button className="rounded-full bg-primary hover:bg-primary/90" onClick={() => { setForm(EMPTY_CREATE); setCreateOpen(true) }}>
+   292→          <Plus className="mr-1.5 h-4 w-4" />Create organization
+   293→        </Button>
+   294→      </div>
+   295→
+   296→      <Card className="overflow-hidden p-0">
+   297→        <Table>
+   298→          <TableHeader>
+   299→            <TableRow>
+   300→              <TableHead className="min-w-40">Company</TableHead>
+   301→              <TableHead className="min-w-52">Login</TableHead>
+   302→              <TableHead className="min-w-44">Plan</TableHead>
+   303→              <TableHead>Status</TableHead>
+   304→              <TableHead className="min-w-36">Usage</TableHead>
+   305→              <TableHead className="min-w-40">Period / Trial</TableHead>
+   306→              <TableHead className="min-w-80">Actions</TableHead>
+   307→            </TableRow>
+   308→          </TableHeader>
+   309→          <TableBody>
+   310→            {orgs.loading && !rows.length && (
+   311→              <TableRow><TableCell colSpan={7} className="py-10 text-center text-muted-foreground"><Loader2 className="mx-auto h-5 w-5 animate-spin" /></TableCell></TableRow>
+   312→            )}
+   313→            {!orgs.loading && !rows.length && (
+   314→              <TableRow><TableCell colSpan={7} className="py-10 text-center text-muted-foreground">{allRows.length ? 'All organizations are firms — turn off "Hide firms" to see them.' : 'No organizations yet — create the first one.'}</TableCell></TableRow>
+   315→            )}
+   316→            {rows.map((r) => (
+   317→              <TableRow key={r.id} className="align-top">
+   318→                <TableCell>
+   319→                  <div className="flex flex-wrap items-center gap-1.5">
+   320→                    <p className="font-medium">{r.name}</p>
+   321→                    {!!r.linkedFirms && (
+   322→                      <span className="rounded-full bg-info-soft px-2 py-0.5 text-[10px] font-medium text-info" title="Other organizations run by this organization's users">
+   323→                        +{r.linkedFirms} {r.linkedFirms === 1 ? 'firm' : 'firms'}
+   324→                      </span>
+   325→                    )}
+   326→                  </div>
+   327→                  {r.firmOf && <p className="text-xs text-info">Firm of: {r.firmOf.name || '—'}</p>}
+   328→                  <p className="text-xs text-muted-foreground">{r.slug}{r.city ? ` · ${r.city}` : ''}</p>
+   329→                </TableCell>
+   330→                <TableCell>
+   331→                  <p className="text-sm">{r.admin?.email || <span className="text-muted-foreground">no admin</span>}</p>
+   332→                  {shownPw[r.id] && <div className="mt-1"><CopyChip text={shownPw[r.id]} /></div>}
+   333→                </TableCell>
+   334→                <TableCell>
+   335→                  <SelectInput value={r.plan?.id || ''} options={planOpts} onChange={(v) => void act(r, { action: 'setPlan', planId: v || null }, 'Plan updated')} />
+   336→                  {r.customized && <p className="mt-1 text-xs text-info">Custom limits</p>}
+   337→                </TableCell>
+   338→                <TableCell>
+   339→                  <span className={cn('rounded-full px-2.5 py-0.5 text-xs font-medium', STATE_STYLE[r.state_])}>{r.state_}</span>
+   340→                </TableCell>
+   341→                <TableCell className="text-sm leading-6">
+   342→                  <div>{lim(r.usage.users, r.limits.users)} users</div>
+   343→                  <div>{lim(r.usage.warehouses, r.limits.warehouses)} warehouses</div>
+   344→                  <div>{lim(r.usage.items, r.limits.items)} items</div>
+   345→                  <div className="text-muted-foreground">{r.usage.customers} customers</div>
+   346→                </TableCell>
+   347→                <TableCell className="text-sm">
+   348→                  {r.paidUntil && <div>Paid until {fmtDate(r.paidUntil)} <span className="ml-1 rounded bg-muted px-1.5 py-0.5 text-[10px] uppercase text-muted-foreground">{r.billingCycle}</span></div>}
+   349→                  {r.trialEndsAt && <div className="text-muted-foreground">Trial until {fmtDate(r.trialEndsAt)}</div>}
+   350→                  {!r.paidUntil && !r.trialEndsAt && <span className="text-muted-foreground">No expiry</span>}
+   351→                </TableCell>
+   352→                <TableCell>
+   353→                  <div className="flex flex-wrap gap-1.5">
+   354→                    <Button variant="outline" size="sm" className={actBtn} onClick={() => { setPaidCycle(r.billingCycle); setPaidOrg(r) }}>Mark paid</Button>
+   355→                    <Button variant="outline" size="sm" className={actBtn} disabled={busy === r.id + 'extendTrial'} onClick={() => void act(r, { action: 'extendTrial', days: 7 }, 'Trial extended by 7 days')}>+7d trial</Button>
+   356→                    {r.status === 'SUSPENDED' ? (
+   357→                      <Button variant="outline" size="sm" className={cn(actBtn, 'text-success')} onClick={() => void act(r, { action: 'activate' }, 'Organization re-activated')}>Activate</Button>
+   358→                    ) : (
+   359→                      <ConfirmAction
+   360→                        trigger={<Button variant="outline" size="sm" className={actBtn}>Suspend</Button>}
+   361→                        title={`Suspend ${r.name}?`} message="Its users will be signed out and cannot log in until you activate it again. No data is deleted."
+   362→                        tone="destructive" onConfirm={() => void act(r, { action: 'suspend' }, 'Organization suspended')}
+   363→                      />
+   364→                    )}
+   365→                    <Button variant="outline" size="sm" className={actBtn} onClick={() => {
+   366→                      setCustom({
+   367→                        maxUsers: r.overrides.maxUsers?.toString() ?? '',
+   368→                        maxWarehouses: r.overrides.maxWarehouses?.toString() ?? '',
+   369→                        maxItems: r.overrides.maxItems?.toString() ?? '',
+   370→                      })
+   371→                      setCustomOrg(r)
+   372→                    }}>Customize plan</Button>
+   373→                    <ConfirmAction
+   374→                      trigger={<Button variant="outline" size="sm" className={actBtn}>Reset pwd</Button>}
+   375→                      title="Reset admin password?" message={`A new password will be generated for ${r.admin?.email || 'the tenant admin'}. The old one stops working immediately.`}
+   376→                      onConfirm={() => void act(r, { action: 'resetPassword' })}
+   377→                    />
+   378→                    <Button variant="outline" size="sm" className={actBtn} onClick={() => void loginAs(r)}>Login as</Button>
+   379→                    <Button variant="outline" size="sm" className={cn(actBtn, 'border-danger-border text-destructive hover:text-destructive')} onClick={() => { setDeleteName(''); setDeleteOrg(r) }}>Delete</Button>
+   380→                  </div>
+   381→                </TableCell>
+   382→              </TableRow>
+   383→            ))}
+   384→          </TableBody>
+   385→        </Table>
+   386→      </Card>
+   387→
+   388→      {/* Create */}
+   389→      <FormDialog open={createOpen} onOpenChange={setCreateOpen} title="Create organization" description="Creates the manufacturing company, its default warehouses (RM / FG / General) and the admin login." onSubmit={create} submitLabel="Create" loading={saving} wide>
+   390→        <div className="grid gap-4 sm:grid-cols-2">
+   391→          <Field label="Company name" required className="sm:col-span-2"><TextInput value={form.name} onChange={(e) => setF('name')(e.target.value)} placeholder="Acme Precision Pvt Ltd" /></Field>
+   392→          <Field label="GSTIN"><TextInput value={form.gstin} onChange={(e) => setF('gstin')(e.target.value)} maxLength={15} className="font-mono" placeholder="27ABCDE1234F1Z9" /></Field>
+   393→          <Field label="Phone"><TextInput value={form.phone} onChange={(e) => setF('phone')(e.target.value)} /></Field>
+   394→          <Field label="City"><TextInput value={form.city} onChange={(e) => setF('city')(e.target.value)} /></Field>
+   395→          <Field label="State"><TextInput value={form.state} onChange={(e) => setF('state')(e.target.value)} placeholder="Maharashtra" /></Field>
+   396→          <Field label="GST state code"><TextInput value={form.stateCode} onChange={(e) => setF('stateCode')(e.target.value)} maxLength={2} placeholder="27" /></Field>
+   397→        </div>
+   398→        <div className="grid gap-4 rounded-lg border bg-muted/40 p-4 sm:grid-cols-2">
+   399→          <Field label="Admin name"><TextInput value={form.adminName} onChange={(e) => setF('adminName')(e.target.value)} placeholder="Rajesh Kumar" /></Field>
+   400→          <Field label="Admin email (login)" required><TextInput type="email" value={form.adminEmail} onChange={(e) => setF('adminEmail')(e.target.value)} placeholder="owner@company.in" /></Field>
+   401→          <Field label="Password" className="sm:col-span-2">
+   402→            <TextInput type="text" autoComplete="off" value={form.password} onChange={(e) => setF('password')(e.target.value)} placeholder="Leave blank to generate a strong password" />
+   403→          </Field>
+   404→        </div>
+   405→        <div className="grid gap-4 sm:grid-cols-3">
+   406→          <Field label="Plan"><SelectInput value={form.planId} options={planOpts} onChange={setF('planId')} /></Field>
+   407→          <Field label="Billing cycle"><SelectInput value={form.billingCycle} options={[{ value: 'MONTHLY', label: 'Monthly' }, { value: 'YEARLY', label: 'Yearly' }]} onChange={setF('billingCycle')} /></Field>
+   408→          <Field label="Free trial (days)"><TextInput type="number" min={0} max={365} value={form.trialDays} onChange={(e) => setF('trialDays')(e.target.value)} /></Field>
+   409→        </div>
+   410→      </FormDialog>
+   411→
+   412→      {/* Credentials after create / reset */}
+   413→      <Dialog open={!!creds} onOpenChange={(o) => { if (!o) setCreds(null) }}>
+   414→        <DialogContent>
+   415→          <DialogHeader>
+   416→            <DialogTitle>Login details — {creds?.org}</DialogTitle>
+   417→            <DialogDescription>Copy and share these with the organization admin now. For security the password is not stored and won&apos;t be shown again after you reload this page.</DialogDescription>
+   418→          </DialogHeader>
+   419→          {creds && (
+   420→            <div className="grid gap-2 text-sm">
+   421→              <div className="flex items-center justify-between gap-2"><span className="text-muted-foreground">URL</span><CopyChip text={typeof window !== 'undefined' ? window.location.origin : ''} /></div>
+   422→              <div className="flex items-center justify-between gap-2"><span className="text-muted-foreground">Email</span><CopyChip text={creds.email} /></div>
+   423→              <div className="flex items-center justify-between gap-2"><span className="text-muted-foreground">Password</span><CopyChip text={creds.password} /></div>
+   424→            </div>
+   425→          )}
+   426→          <DialogFooter><Button onClick={() => setCreds(null)}>Done</Button></DialogFooter>
+   427→        </DialogContent>
+   428→      </Dialog>
+   429→
+   430→      {/* Mark paid */}
+   431→      <FormDialog open={!!paidOrg} onOpenChange={(o) => { if (!o) setPaidOrg(null) }} title={`Record payment — ${paidOrg?.name ?? ''}`}
+   432→        description={paidOrg?.paidUntil && new Date(paidOrg.paidUntil) > new Date() ? `Extends from the current paid-until date (${fmtDate(paidOrg.paidUntil)}).` : 'Starts today.'}
+   433→        submitLabel="Mark paid" onSubmit={async () => { if (paidOrg && (await act(paidOrg, { action: 'markPaid', cycle: paidCycle }, 'Payment recorded'))) setPaidOrg(null) }}>
+   434→        <Field label="Period"><SelectInput value={paidCycle} options={[{ value: 'MONTHLY', label: '1 month' }, { value: 'YEARLY', label: '1 year' }]} onChange={setPaidCycle} /></Field>
+   435→      </FormDialog>
+   436→
+   437→      {/* Customize limits */}
+   438→      <FormDialog open={!!customOrg} onOpenChange={(o) => { if (!o) setCustomOrg(null) }} title={`Customize plan — ${customOrg?.name ?? ''}`}
+   439→        description={`Overrides the ${customOrg?.plan?.name ? `"${customOrg.plan.name}"` : ''} plan limits for this organization only. Leave blank to use the plan limit; 0 = unlimited.`}
+   440→        submitLabel="Save limits" onSubmit={saveCustom}>
+   441→        <div className="grid gap-4 sm:grid-cols-3">
+   442→          <Field label="Max users"><TextInput type="number" min={0} value={custom.maxUsers} onChange={(e) => setCustom((c) => ({ ...c, maxUsers: e.target.value }))} placeholder="plan" /></Field>
+   443→          <Field label="Max warehouses"><TextInput type="number" min={0} value={custom.maxWarehouses} onChange={(e) => setCustom((c) => ({ ...c, maxWarehouses: e.target.value }))} placeholder="plan" /></Field>
+   444→          <Field label="Max items"><TextInput type="number" min={0} value={custom.maxItems} onChange={(e) => setCustom((c) => ({ ...c, maxItems: e.target.value }))} placeholder="plan" /></Field>
+   445→        </div>
+   446→        {customOrg?.customized && (
+   447→          <Button type="button" variant="link" className="h-auto p-0 text-xs" onClick={async () => { if (customOrg && (await act(customOrg, { action: 'resetCustom' }, 'Back to plan limits'))) setCustomOrg(null) }}>
+   448→            Remove custom limits
+   449→          </Button>
+   450→        )}
+   451→      </FormDialog>
+   452→
+   453→      {/* Delete */}
+   454→      <Dialog open={!!deleteOrg} onOpenChange={(o) => { if (!o) setDeleteOrg(null) }}>
+   455→        <DialogContent>
+   456→          <DialogHeader>
+   457→            <DialogTitle className="text-destructive">Delete {deleteOrg?.name}?</DialogTitle>
+   458→            <DialogDescription>This permanently deletes the organization with all its users, items, documents, stock and audit history. It cannot be undone. Consider “Suspend” instead.</DialogDescription>
+   459→          </DialogHeader>
+   460→          <Field label={`Type "${deleteOrg?.name ?? ''}" to confirm`}>
+   461→            <TextInput value={deleteName} onChange={(e) => setDeleteName(e.target.value)} autoComplete="off" />
+   462→          </Field>
+   463→          <DialogFooter>
+   464→            <Button variant="outline" onClick={() => setDeleteOrg(null)}>Cancel</Button>
+   465→            <Button variant="destructive" disabled={deleteName !== deleteOrg?.name || busy === (deleteOrg?.id ?? '') + 'delete'} onClick={() => void remove()}>
+   466→              Delete permanently
+   467→            </Button>
+   468→          </DialogFooter>
+   469→        </DialogContent>
+   470→      </Dialog>
+   471→    </div>
+   472→  )
+   473→}
+   474→
+   475→// ---------------- Plans ----------------
+   476→
+   477→interface PlanForm { name: string; priceMonthly: string; priceYearly: string; maxUsers: string; maxWarehouses: string; maxItems: string }
+   478→const EMPTY_PLAN: PlanForm = { name: '', priceMonthly: '0', priceYearly: '0', maxUsers: '0', maxWarehouses: '0', maxItems: '0' }
+   479→
+   480→function Plans() {
+   481→  const plans = useList<{ items: PlanRow[] }>('/api/platform/plans')
+   482→  const rows = plans.data?.items ?? []
+   483→  const [open, setOpen] = React.useState(false)
+   484→  const [editId, setEditId] = React.useState<string | null>(null)
+   485→  const [form, setForm] = React.useState<PlanForm>(EMPTY_PLAN)
+   486→  const [saving, setSaving] = React.useState(false)
+   487→  const setF = (k: keyof PlanForm) => (e: React.ChangeEvent<HTMLInputElement>) => setForm((f) => ({ ...f, [k]: e.target.value }))
+   488→
+   489→  async function save() {
+   490→    if (!form.name.trim()) { toast.error('Plan name is required'); return }
+   491→    setSaving(true)
+   492→    try {
+   493→      const body = { ...form, name: form.name.trim() }
+   494→      if (editId) await apiPatch(`/api/platform/plans/${editId}`, body)
+   495→      else await apiPost('/api/platform/plans', body)
+   496→      toast.success(editId ? 'Plan updated' : 'Plan created')
+   497→      setOpen(false)
+   498→      await plans.refetch()
+   499→    } catch (e) {
+   500→      toast.error(e instanceof Error ? e.message : 'Failed to save plan')
+   501→    } finally {
+   502→      setSaving(false)
+   503→    }
+   504→  }
+   505→
+   506→  async function remove(p: PlanRow) {
+   507→    try {
+   508→      await apiDelete(`/api/platform/plans/${p.id}`)
+   509→      toast.success('Plan deleted')
+   510→      await plans.refetch()
+   511→    } catch (e) {
+   512→      toast.error(e instanceof Error ? e.message : 'Failed to delete plan')
+   513→    }
+   514→  }
+   515→
+   516→  return (
+   517→    <div>
+   518→      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+   519→        <div>
+   520→          <h2 className="text-xl font-semibold">Plans ({rows.length})</h2>
+   521→          <p className="text-sm text-muted-foreground">Limits apply to every organization on the plan unless customized. 0 = unlimited.</p>
+   522→        </div>
+   523→        <Button className="rounded-full bg-primary hover:bg-primary/90" onClick={() => { setEditId(null); setForm(EMPTY_PLAN); setOpen(true) }}>
+   524→          <Plus className="mr-1.5 h-4 w-4" />Plan
+   525→        </Button>
+   526→      </div>
+   527→      <Card className="overflow-hidden p-0">
+   528→        <Table>
+   529→          <TableHeader>
+   530→            <TableRow>
+   531→              <TableHead>Plan</TableHead>
+   532→              <TableHead className="text-right">Monthly</TableHead>
+   533→              <TableHead className="text-right">Yearly</TableHead>
+   534→              <TableHead className="text-right">Users</TableHead>
+   535→              <TableHead className="text-right">Warehouses</TableHead>
+   536→              <TableHead className="text-right">Items</TableHead>
+   537→              <TableHead className="text-right">Organizations</TableHead>
+   538→              <TableHead>Actions</TableHead>
+   539→            </TableRow>
+   540→          </TableHeader>
+   541→          <TableBody>
+   542→            {!plans.loading && !rows.length && (
+   543→              <TableRow><TableCell colSpan={8} className="py-10 text-center text-muted-foreground">No plans yet — create Basic / Standard / Premium with your prices and limits.</TableCell></TableRow>
+   544→            )}
+   545→            {rows.map((p) => (
+   546→              <TableRow key={p.id}>
+   547→                <TableCell className="font-medium">{p.name}</TableCell>
+   548→                <TableCell className="text-right">{inr(p.priceMonthly)}</TableCell>
+   549→                <TableCell className="text-right">{inr(p.priceYearly)}</TableCell>
+   550→                <TableCell className="text-right">{p.maxUsers || '∞'}</TableCell>
+   551→                <TableCell className="text-right">{p.maxWarehouses || '∞'}</TableCell>
+   552→                <TableCell className="text-right">{p.maxItems || '∞'}</TableCell>
+   553→                <TableCell className="text-right">{p.orgCount}</TableCell>
+   554→                <TableCell>
+   555→                  <div className="flex gap-1.5">
+   556→                    <Button variant="outline" size="sm" className="h-8 rounded-full px-3 text-xs" onClick={() => {
+   557→                      setEditId(p.id)
+   558→                      setForm({ name: p.name, priceMonthly: String(p.priceMonthly), priceYearly: String(p.priceYearly), maxUsers: String(p.maxUsers), maxWarehouses: String(p.maxWarehouses), maxItems: String(p.maxItems) })
+   559→                      setOpen(true)
+   560→                    }}>Edit</Button>
+   561→                    <ConfirmAction
+   562→                      trigger={<Button variant="outline" size="sm" className="h-8 rounded-full px-3 text-xs text-destructive">Delete</Button>}
+   563→                      title={`Delete plan ${p.name}?`} message="Only possible when no organization uses it." tone="destructive" onConfirm={() => remove(p)}
+   564→                    />
+   565→                  </div>
+   566→                </TableCell>
+   567→              </TableRow>
+   568→            ))}
+   569→          </TableBody>
+   570→        </Table>
+   571→      </Card>
+   572→
+   573→      <FormDialog open={open} onOpenChange={setOpen} title={editId ? 'Edit plan' : 'Plan'} onSubmit={save} loading={saving} submitLabel={editId ? 'Save' : 'Create'}>
+   574→        <Field label="Plan name" required><TextInput value={form.name} onChange={setF('name')} placeholder="Standard" /></Field>
+   575→        <div className="grid gap-4 sm:grid-cols-2">
+   576→          <Field label="Price / month (₹)"><TextInput type="number" min={0} value={form.priceMonthly} onChange={setF('priceMonthly')} /></Field>
+   577→          <Field label="Price / year (₹)"><TextInput type="number" min={0} value={form.priceYearly} onChange={setF('priceYearly')} /></Field>
+   578→        </div>
+   579→        <div className="grid gap-4 sm:grid-cols-3">
+   580→          <Field label="Max users"><TextInput type="number" min={0} value={form.maxUsers} onChange={setF('maxUsers')} /></Field>
+   581→          <Field label="Max warehouses"><TextInput type="number" min={0} value={form.maxWarehouses} onChange={setF('maxWarehouses')} /></Field>
+   582→          <Field label="Max items"><TextInput type="number" min={0} value={form.maxItems} onChange={setF('maxItems')} /></Field>
+   583→        </div>
+   584→      </FormDialog>
+   585→    </div>
+   586→  )
+   587→}
+   588→

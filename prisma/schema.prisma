@@ -72,7 +72,7 @@ model OrgUser {
   email        String    @unique
   passwordHash String
   name         String
-  role         String    @default("OWNER") // OWNER | ACCOUNTANT | VIEWER
+  role         String    @default("OWNER") // OWNER | ACCOUNTANT | VIEWER | SUPER_ADMIN (platform admin)
   companyId    String
   company      Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
   createdAt    DateTime  @default(now())

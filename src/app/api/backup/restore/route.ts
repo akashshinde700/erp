@@ -1,7 +1,7 @@
 import { handleError, ok, fail } from '@/lib/api'
 import { db } from '@/lib/db'
 import { logAudit } from '@/lib/audit'
-import { requirePlatformKey } from '@/lib/platform'
+import { requirePlatformAdmin } from '@/lib/platform'
 
 /**
  * POST /api/backup/restore — {confirm:'RESTORE', snapshot}
@@ -16,7 +16,7 @@ interface Snapshot {
 
 export async function POST(req: Request) {
   try {
-    requirePlatformKey(req)
+    await requirePlatformAdmin(req)
     const body = (await req.json()) as { confirm?: string; snapshot?: Snapshot }
     if (body.confirm !== 'RESTORE') return fail('Type RESTORE to confirm the destructive restore', 400)
     const snap = body.snapshot

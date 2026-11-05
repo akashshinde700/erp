@@ -1,8 +1,10 @@
 import { handleError, ok, fail } from '@/lib/api'
 import { db } from '@/lib/db'
 import { logAudit } from '@/lib/audit'
-import { requirePlatformKey } from '@/lib/platform'
-import { hashPassword } from '@/lib/auth'
+import { requirePlatformAdmin } from '@/lib/platform'
+import { createSessionToken, hashPassword, setSessionCookie } from '@/lib/auth'
+import { buildSessionInfo } from '@/app/api/auth/_session'
+import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
 /**
@@ -14,16 +16,17 @@ import { z } from 'zod'
  *   {action:'customize', maxItems?, maxWarehouses?, maxParties?}  (null = plan default)
  *   {action:'resetCustom'}
  *   {action:'resetLogin', email, password}              (set/replace the org's owner login)
+ *   {action:'loginAs'}                                   (impersonate the org's owner — sets session cookie)
  */
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    requirePlatformKey(req)
+    await requirePlatformAdmin(req)
     const { id } = await params
     const org = await db.company.findUnique({ where: { id } })
     if (!org) return fail('Organization not found', 404)
 
     const schema = z.object({
-      action: z.enum(['setPlan', 'markPaid', 'extendTrial', 'suspend', 'activate', 'customize', 'resetCustom', 'resetLogin']),
+      action: z.enum(['setPlan', 'markPaid', 'extendTrial', 'suspend', 'activate', 'customize', 'resetCustom', 'resetLogin', 'loginAs']),
       planId: z.string().optional().nullable(),
       cycle: z.enum(['MONTHLY', 'YEARLY']).optional(),
       days: z.number().int().min(1).max(365).optional(),
@@ -103,6 +106,23 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         details = `owner login ${body.email} ${taken ? 'password reset' : 'created'}`
         break
       }
+      case 'loginAs': {
+        // Impersonate the org's owner (first login): sets the httpOnly session
+        // cookie and returns the session info so the console can hand the
+        // browser over to that organization's workspace honestly.
+        if (org.isPlatform) return fail('The platform company has no ERP workspace to open', 400)
+        const target = await db.orgUser.findFirst({
+          where: { companyId: id },
+          orderBy: { createdAt: 'asc' }, // first login = the owner (create/bootstrap flow)
+          include: { company: { include: { plan: true } } },
+        })
+        if (!target) return fail('This organization has no login yet — create one with “Reset pwd” first', 404)
+        await db.orgUser.update({ where: { id: target.id }, data: { lastLoginAt: new Date() } })
+        await logAudit('PLATFORM', 'OrgUser', target.id, `${org.name}: platform admin signed in as ${target.email}`)
+        const session = await buildSessionInfo(target)
+        const res: NextResponse = NextResponse.json({ success: true, data: session })
+        return setSessionCookie(res, createSessionToken(target.id, target.companyId))
+      }
     }
 
     await logAudit('PLATFORM', 'Company', id, `${org.name}: ${details}`)
@@ -116,14 +136,18 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 /** DELETE /api/platform/orgs/[id]?confirmName=<exact name> — typed-confirm destructive. */
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    requirePlatformKey(req)
+    await requirePlatformAdmin(req)
     const { id } = await params
     const org = await db.company.findUnique({ where: { id }, include: { plan: true } })
     if (!org) return fail('Organization not found', 404)
     const confirmName = new URL(req.url).searchParams.get('confirmName') ?? ''
     if (confirmName !== org.name) return fail(`Type the organization name "${org.name}" exactly to confirm`, 400)
 
-    const first = await db.company.findFirst({ orderBy: { createdAt: 'asc' } })
+    const first = await db.company.findFirst({
+      where: { isPlatform: false },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true },
+    })
     if (first?.id === org.id) {
       // Operating org = the whole install: wipe everything, children before parents.
       await db.stockLedger.deleteMany({})

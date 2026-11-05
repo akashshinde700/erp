@@ -26,7 +26,9 @@ const daysAgo = (n: number): Date => {
 }
 
 export async function seedDatabase(force = false) {
-  const existing = await db.company.findFirst()
+  // Only a customer organization counts as "seeded" (the platform company is
+  // the operator's own and never the demo scenario).
+  const existing = await db.company.findFirst({ where: { isPlatform: false } })
   if (existing && !force) return { seeded: false, reason: 'Company already exists (use ?force=1 to reseed)' }
 
   if (force) {
@@ -50,6 +52,7 @@ export async function seedDatabase(force = false) {
     await db.process.deleteMany()
     await db.warehouse.deleteMany()
     await db.party.deleteMany()
+    await db.orgUser.deleteMany()
     await db.company.deleteMany()
   }
 
@@ -80,6 +83,22 @@ export async function seedDatabase(force = false) {
       passwordHash: hashPassword('forge123'),
       role: 'OWNER',
       companyId: company.id,
+    },
+  })
+
+  // ---------- Platform administrator (SUPER_ADMIN, like the reference SaaS) ----------
+  // Created AFTER the operating org so Shree Forge stays the first company —
+  // the platform company is never billed, blocked or listed as a customer org.
+  const platformCompany = await db.company.create({
+    data: { name: 'Forge Platform Operations', email: 'admin@forgeplatform.example.com', isPlatform: true },
+  })
+  await db.orgUser.create({
+    data: {
+      name: 'Platform Admin',
+      email: 'admin@forgeplatform.example.com',
+      passwordHash: hashPassword('platform123'),
+      role: 'SUPER_ADMIN',
+      companyId: platformCompany.id,
     },
   })
 

@@ -561,6 +561,8 @@ export interface AuthStatus {
   companyName: string | null
   usersExist: boolean
   demoHint: boolean
+  /** Set when the seeded platform administrator exists (demo hint on the login screen). */
+  platformAdminEmail: string | null
 }
 
 // ---------- tally / platform / audit ----------

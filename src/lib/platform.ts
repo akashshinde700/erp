@@ -18,9 +18,56 @@
 
 import { db } from './db'
 import { BusinessError } from './accounting'
-import { currentSession } from './auth'
+import { currentSession, hashPassword } from './auth'
 
 export const PLATFORM_KEY = process.env.PLATFORM_ADMIN_KEY ?? 'forge-admin'
+
+// ---------- platform administrator (SUPER_ADMIN login, like the reference SaaS) ----------
+
+/** The operator's own company — never billed, blocked or listed as a customer org. */
+export const PLATFORM_COMPANY_NAME = process.env.PLATFORM_COMPANY_NAME ?? 'Forge Platform Operations'
+/** Default SUPER_ADMIN credentials (demo install; override via env on real deployments). */
+export const PLATFORM_ADMIN_EMAIL = (process.env.PLATFORM_ADMIN_EMAIL ?? 'admin@forgeplatform.example.com').trim().toLowerCase()
+export const PLATFORM_ADMIN_PASSWORD = process.env.PLATFORM_ADMIN_PASSWORD ?? 'platform123'
+export const SUPER_ADMIN_ROLE = 'SUPER_ADMIN'
+
+/** True when the signed-in user is the platform administrator (any org user with the role). */
+export function isSuperAdmin(user: { role: string } | null | undefined): boolean {
+  return user?.role === SUPER_ADMIN_ROLE
+}
+
+/**
+ * Idempotent platform administrator bootstrap (runs on login-screen status and
+ * platform auth probes): the platform company (isPlatform, never billed) plus a
+ * SUPER_ADMIN login. Existing installs get the admin without a reseed; the
+ * password is only written at creation so operator resets are never undone.
+ */
+export async function ensurePlatformAdmin(): Promise<void> {
+  const admin = await db.orgUser.findUnique({ where: { email: PLATFORM_ADMIN_EMAIL }, select: { id: true, companyId: true } })
+  if (admin) {
+    // Keep the role/company flags honest on existing rows (password untouched).
+    if (admin.companyId) {
+      await db.company.updateMany({ where: { id: admin.companyId }, data: { isPlatform: true } })
+    }
+    return
+  }
+  let company = await db.company.findFirst({ where: { isPlatform: true }, select: { id: true } })
+  if (!company) {
+    // Never hijack a customer company that happens to share the name.
+    const nameTaken = await db.company.findUnique({ where: { name: PLATFORM_COMPANY_NAME }, select: { isPlatform: true } })
+    const name = nameTaken && !nameTaken.isPlatform ? `${PLATFORM_COMPANY_NAME} #2` : PLATFORM_COMPANY_NAME
+    company = await db.company.create({ data: { name, email: PLATFORM_ADMIN_EMAIL, isPlatform: true } })
+  }
+  await db.orgUser.create({
+    data: {
+      name: 'Platform Admin',
+      email: PLATFORM_ADMIN_EMAIL,
+      passwordHash: hashPassword(PLATFORM_ADMIN_PASSWORD),
+      role: SUPER_ADMIN_ROLE,
+      companyId: company.id,
+    },
+  })
+}
 
 export type LimitKind = 'items' | 'warehouses' | 'parties'
 
@@ -72,6 +119,7 @@ export async function assertFeature(feature: PlanFeatureKey): Promise<void> {
   }
 }
 
+/** Platform admin key check only (header, or ?platformKey= for browser downloads). */
 export function platformKeyOk(req: Request): boolean {
   const header = req.headers.get('x-platform-key') ?? ''
   if (header.length > 0 && header === PLATFORM_KEY) return true
@@ -80,13 +128,26 @@ export function platformKeyOk(req: Request): boolean {
   return q.length > 0 && q === PLATFORM_KEY
 }
 
-export function requirePlatformKey(req: Request): void {
-  if (!platformKeyOk(req)) throw new BusinessError('Invalid platform admin key', 401)
+/**
+ * Guard for every platform-admin route: EITHER a valid SUPER_ADMIN session
+ * cookie (the main path — the admin signs in like the reference SaaS) OR the
+ * legacy platform key (header / ?platformKey=), kept for scripted access and
+ * browser downloads. Throws BusinessError(401).
+ */
+export async function requirePlatformAdmin(req: Request): Promise<void> {
+  if (platformKeyOk(req)) return
+  const session = await currentSession()
+  if (session) {
+    const user = await db.orgUser.findUnique({ where: { id: session.uid }, select: { role: true } })
+    if (isSuperAdmin(user)) return
+  }
+  throw new BusinessError('Platform administrator access required — sign in with the admin login', 401)
 }
 
-/** First company = the operating org (single-tenant runtime). */
+/** First NON-PLATFORM company = the operating org (single-tenant runtime). The
+ *  platform company (operator's own) is never the ERP workspace. */
 export function operatingCompany() {
-  return db.company.findFirst({ orderBy: { createdAt: 'asc' }, include: { plan: true } })
+  return db.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' }, include: { plan: true } })
 }
 
 function endOfDay(d: Date): Date {

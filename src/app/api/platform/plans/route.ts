@@ -1,13 +1,13 @@
 import { handleError, ok, fail } from '@/lib/api'
 import { db } from '@/lib/db'
 import { logAudit } from '@/lib/audit'
-import { ensurePlans, planOut, requirePlatformKey, PLAN_FEATURE_KEYS } from '@/lib/platform'
+import { ensurePlans, planOut, requirePlatformAdmin, PLAN_FEATURE_KEYS } from '@/lib/platform'
 import { z } from 'zod'
 
 /** GET /api/platform/plans — list with org counts (features as array). */
 export async function GET(req: Request) {
   try {
-    requirePlatformKey(req)
+    await requirePlatformAdmin(req)
     await ensurePlans()
     const plans = await db.plan.findMany({
       orderBy: { priceMonthly: 'asc' },
@@ -33,7 +33,7 @@ const planSchema = z.object({
 /** POST /api/platform/plans — create. */
 export async function POST(req: Request) {
   try {
-    requirePlatformKey(req)
+    await requirePlatformAdmin(req)
     const body = planSchema.parse(await req.json())
     const plan = await db.plan.create({
       data: { ...body, features: body.features.join(',') },
@@ -47,7 +47,7 @@ export async function POST(req: Request) {
 
 export async function DELETE(req: Request) {
   try {
-    requirePlatformKey(req)
+    await requirePlatformAdmin(req)
     const id = new URL(req.url).searchParams.get('id') ?? ''
     if (!id) return fail('id is required', 400)
     const inUse = await db.company.count({ where: { planId: id } })

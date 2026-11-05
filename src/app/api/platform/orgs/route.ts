@@ -1,20 +1,22 @@
 import { handleError, ok, fail } from '@/lib/api'
 import { db } from '@/lib/db'
 import { logAudit } from '@/lib/audit'
-import { requirePlatformKey, ensurePlans } from '@/lib/platform'
+import { requirePlatformAdmin, ensurePlans } from '@/lib/platform'
 import { hashPassword } from '@/lib/auth'
 import { z } from 'zod'
 
 /**
- * GET /api/platform/orgs — every company with plan, limits, usage, access state.
+ * GET /api/platform/orgs — customer organizations (the platform company is
+ *                              never listed or billed) with plan, limits, usage, state.
  * POST /api/platform/orgs — create organization (Company row + plan + trial
  *                           + optional owner login so that org can sign in).
  */
 export async function GET(req: Request) {
   try {
-    requirePlatformKey(req)
+    await requirePlatformAdmin(req)
     await ensurePlans()
     const orgs = await db.company.findMany({
+      where: { isPlatform: false },
       orderBy: { createdAt: 'asc' },
       include: { plan: true, users: { orderBy: { createdAt: 'asc' }, select: { id: true, email: true } } },
     })
@@ -74,7 +76,7 @@ const createSchema = z.object({
 
 export async function POST(req: Request) {
   try {
-    requirePlatformKey(req)
+    await requirePlatformAdmin(req)
     const body = createSchema.parse(await req.json())
     if ((body.ownerName || body.ownerEmail || body.ownerPassword) && !(body.ownerName && body.ownerEmail && body.ownerPassword)) {
       return fail('Owner login needs all three: name, email and password', 400)

@@ -1,13 +1,13 @@
 import { handleError, ok } from '@/lib/api'
 import { db } from '@/lib/db'
 import { logAudit } from '@/lib/audit'
-import { requirePlatformKey } from '@/lib/platform'
+import { requirePlatformAdmin } from '@/lib/platform'
 import { z } from 'zod'
 
 /** GET /api/platform/blog — all posts, newest first. */
 export async function GET(req: Request) {
   try {
-    requirePlatformKey(req)
+    await requirePlatformAdmin(req)
     const posts = await db.platformBlogPost.findMany({ orderBy: { createdAt: 'desc' } })
     return ok({ posts })
   } catch (e) {
@@ -34,7 +34,7 @@ const postSchema = z.object({
 /** POST /api/platform/blog — create a post (slug auto-generated + de-duplicated). */
 export async function POST(req: Request) {
   try {
-    requirePlatformKey(req)
+    await requirePlatformAdmin(req)
     const body = postSchema.parse(await req.json())
     const base = slugify(body.slug || body.title) || `post-${Date.now()}`
     let slug = base

@@ -21,7 +21,9 @@ export async function POST(req: Request) {
       })
       .parse(await req.json())
 
-    const company = await db.company.findFirst({ orderBy: { createdAt: 'asc' } })
+    // The operating org is the first NON-platform company (the platform
+    // company is the operator's own and never receives an owner login).
+    const company = await db.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } })
     if (!company) return fail('Set up a company first (no organization exists yet)', 409)
 
     const existingUsers = await db.orgUser.count()

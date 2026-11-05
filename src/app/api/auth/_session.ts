@@ -38,7 +38,11 @@ export async function buildSessionInfo(user: {
     plan: { name: string } | null
   }
 }): Promise<SessionInfo> {
-  const first = await db.company.findFirst({ orderBy: { createdAt: 'asc' }, select: { id: true, name: true } })
+  const first = await db.company.findFirst({
+    where: { isPlatform: false }, // the platform company is never the operating org
+    orderBy: { createdAt: 'asc' },
+    select: { id: true, name: true },
+  })
   const st = accessState(user.company)
   const operating = !!first && first.id === user.companyId
   return {

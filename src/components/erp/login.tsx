@@ -4,6 +4,7 @@
  * ForgeERP — organization sign-in screen (SaaS entry).
  * Flat white card on a light canvas, matching the platform console look:
  *  - Sign in with your organization login (email + password).
+ *  - SUPER_ADMIN credentials open the Platform Admin console directly.
  *  - First boot with no logins → create the owner login (bootstrap).
  *  - Separate, clearly-lowered entry for the Platform Admin console — the
  *    admin is NOT inside the org ERP; it is opened from here only.
@@ -20,7 +21,15 @@ import { Label } from '@/components/ui/label'
 import { api, apiPut, toastError, type AuthStatus, type SessionInfo } from './api'
 import { gstinChecksumValid } from '@/lib/erp'
 
-export function LoginView({ onLogin, onOpenPlatform }: { onLogin: (s: SessionInfo) => void; onOpenPlatform: () => void }) {
+export function LoginView({
+  onLogin,
+  onOpenPlatform,
+  onPlatformLogin,
+}: {
+  onLogin: (s: SessionInfo) => void
+  onOpenPlatform: () => void
+  onPlatformLogin: (s: SessionInfo) => void
+}) {
   const [status, setStatus] = useState<AuthStatus | null>(null)
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -36,7 +45,15 @@ export function LoginView({ onLogin, onOpenPlatform }: { onLogin: (s: SessionInf
   useEffect(() => {
     api<AuthStatus>('/api/auth/status')
       .then(setStatus)
-      .catch(() => setStatus({ companyExists: true, companyName: null, usersExist: true, demoHint: false }))
+      .catch(() =>
+        setStatus({
+          companyExists: true,
+          companyName: null,
+          usersExist: true,
+          demoHint: false,
+          platformAdminEmail: null,
+        })
+      )
   }, [])
 
   const bootstrapMode = status ? !status.usersExist : false
@@ -54,6 +71,12 @@ export function LoginView({ onLogin, onOpenPlatform }: { onLogin: (s: SessionInf
         method: 'POST',
         body: JSON.stringify({ email: email.trim(), password }),
       })
+      if (session.user.role === 'SUPER_ADMIN') {
+        // Platform administrator → straight to the console (never the org ERP).
+        toast.success(`Signed in — platform administrator`)
+        onPlatformLogin(session)
+        return
+      }
       toast.success(`Signed in — ${session.company.name}`)
       onLogin(session)
     } catch (err) {
@@ -88,6 +111,12 @@ export function LoginView({ onLogin, onOpenPlatform }: { onLogin: (s: SessionInf
   const fillDemo = () => {
     setEmail('owner@shreeforge.example.com')
     setPassword('forge123')
+    setError('')
+  }
+
+  const fillPlatformAdmin = () => {
+    setEmail(status?.platformAdminEmail ?? 'admin@forgeplatform.example.com')
+    setPassword('platform123')
     setError('')
   }
 
@@ -227,15 +256,29 @@ export function LoginView({ onLogin, onOpenPlatform }: { onLogin: (s: SessionInf
                     {busy ? 'Signing in…' : 'Sign in'}
                   </Button>
                   {status?.demoHint ? (
-                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                      <span className="flex items-center gap-1.5">
-                        <KeyRound className="size-3.5 shrink-0" aria-hidden />
-                        Demo login: <span className="font-mono text-foreground">owner@shreeforge.example.com</span> ·{' '}
-                        <span className="font-mono text-foreground">forge123</span>
-                      </span>
-                      <Button type="button" variant="outline" size="sm" className="h-7 px-2.5" onClick={fillDemo}>
-                        Fill
-                      </Button>
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                        <span className="flex items-center gap-1.5">
+                          <KeyRound className="size-3.5 shrink-0" aria-hidden />
+                          Demo org: <span className="font-mono text-foreground">owner@shreeforge.example.com</span> ·{' '}
+                          <span className="font-mono text-foreground">forge123</span>
+                        </span>
+                        <Button type="button" variant="outline" size="sm" className="h-7 px-2.5" onClick={fillDemo}>
+                          Fill
+                        </Button>
+                      </div>
+                      {status.platformAdminEmail ? (
+                        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                          <span className="flex items-center gap-1.5">
+                            <ShieldAlert className="size-3.5 shrink-0" aria-hidden />
+                            Platform admin: <span className="font-mono text-foreground">{status.platformAdminEmail}</span> ·{' '}
+                            <span className="font-mono text-foreground">platform123</span>
+                          </span>
+                          <Button type="button" variant="outline" size="sm" className="h-7 px-2.5" onClick={fillPlatformAdmin}>
+                            Fill
+                          </Button>
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
                 </form>

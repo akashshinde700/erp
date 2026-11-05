@@ -1,13 +1,13 @@
 import { handleError, ok, fail } from '@/lib/api'
 import { db } from '@/lib/db'
 import { logAudit } from '@/lib/audit'
-import { requirePlatformKey } from '@/lib/platform'
+import { requirePlatformAdmin } from '@/lib/platform'
 import { z } from 'zod'
 
 /** POST /api/platform/inquiries/[id]/follow-ups — append a follow-up note. */
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
-    requirePlatformKey(req)
+    await requirePlatformAdmin(req)
     const { id } = await params
     const inquiry = await db.platformInquiry.findUnique({ where: { id } })
     if (!inquiry) return fail('Inquiry not found', 404)

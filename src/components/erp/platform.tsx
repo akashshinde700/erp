@@ -1,11 +1,13 @@
 'use client'
 
 /**
- * ForgeERP — SaaS Platform Admin console (standalone fullscreen module, key-gated).
+ * ForgeERP — SaaS Platform Admin console (standalone fullscreen module).
  *
- * Layout modeled on the reference SaaS console: flat white header with the
- * admin identity, pill tab navigation, light-gray content canvas — no ERP
- * sidebar. Tabs: Organizations · Plans · Inquiries · Blog · Logout.
+ * Entry mirrors the reference SaaS consoles: the platform administrator
+ * signs in with a REAL login (SUPER_ADMIN role, httpOnly session cookie);
+ * a legacy platform-key unlock stays available for scripted access. Tabs:
+ * Organizations · Plans · Inquiries · Blog. “Login as” hands the browser to an
+ * organization’s workspace honestly (operating org → ERP, others → portal).
  *
  * Honest scope: the ERP runtime always operates the FIRST organization;
  * orgs created here are real Company rows the platform manages. Full
@@ -23,6 +25,7 @@ import {
   DatabaseBackup,
   KeyRound,
   Loader2,
+  LogIn,
   LogOut,
   MoreVertical,
   Pencil,
@@ -30,6 +33,7 @@ import {
   RefreshCw,
   Save,
   ShieldAlert,
+  UserRound,
   Trash2,
 } from 'lucide-react'
 import {
@@ -73,11 +77,10 @@ import {
   type OrgRow,
   type OrgsResponse,
   type Plan,
+  type SessionInfo,
   PLAN_FEATURE_CATALOG,
 } from './api'
 import { CardSkeleton, EmptyState, TableSkeleton } from './bits'
-
-const KEY_STORE = 'forge_platform_key'
 
 type ConsoleTab = 'orgs' | 'plans' | 'inquiries' | 'blog'
 
@@ -108,92 +111,232 @@ async function copyText(text: string) {
 }
 
 // ---------------------------------------------------------------------------
-// Entry: key gate → console
+// Entry: SUPER_ADMIN sign-in (session cookie) → console · legacy key unlock
 // ---------------------------------------------------------------------------
 
-export function PlatformView({ onExit }: { onExit: () => void }) {
+interface AdminIdentity {
+  id: string
+  name: string
+  email: string
+  company: string
+}
+
+export function PlatformView({ onExit, onLoginAs }: { onExit: () => void; onLoginAs: (s: SessionInfo) => void }) {
+  const [admin, setAdmin] = useState<AdminIdentity | null>(null)
+  const [apiKey, setApiKey] = useState<string | null>(null) // legacy key unlock
+  const [probing, setProbing] = useState(true)
+
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   const [key, setKey] = useState('')
-  const [authed, setAuthed] = useState(false)
-  const [checking, setChecking] = useState(false)
+  const [mode, setMode] = useState<'login' | 'key'>('login')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
 
   useEffect(() => {
-    const saved = sessionStorage.getItem(KEY_STORE)
-    if (saved) {
-      setKey(saved)
-      void verify(saved)
-    }
+    // Restore a SUPER_ADMIN session cookie (also creates the admin on first hit).
+    api<{ admin: AdminIdentity | null }>('/api/platform/auth')
+      .then((d) => setAdmin(d.admin))
+      .catch(() => setAdmin(null))
+      .finally(() => setProbing(false))
   }, [])
 
-  const verify = async (k: string) => {
-    setChecking(true)
+  const signIn = async (e?: React.FormEvent) => {
+    e?.preventDefault()
+    if (!email.trim() || !password) {
+      setError('Enter the admin email and password')
+      return
+    }
+    setBusy(true)
+    setError('')
     try {
-      await api('/api/platform/auth', { method: 'POST', body: JSON.stringify({ key: k }) })
-      sessionStorage.setItem(KEY_STORE, k)
-      setAuthed(true)
-    } catch (e) {
-      sessionStorage.removeItem(KEY_STORE)
-      toastError(e)
+      const d = await api<{ admin: AdminIdentity; session: SessionInfo }>('/api/platform/auth', {
+        method: 'POST',
+        body: JSON.stringify({ email: email.trim(), password }),
+      })
+      setAdmin(d.admin)
+      toast.success(`Signed in — ${d.admin.name}`)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Sign-in failed')
     } finally {
-      setChecking(false)
+      setBusy(false)
     }
   }
 
-  if (!authed) {
+  const unlockKey = async (e?: React.FormEvent) => {
+    e?.preventDefault()
+    if (!key) {
+      setError('Enter the platform admin key')
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      await api('/api/platform/auth', { method: 'POST', body: JSON.stringify({ key }) })
+      setApiKey(key)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Invalid key')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (probing) {
     return (
-      <div className="flex min-h-dvh flex-col items-center justify-center bg-muted/30 p-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
-        <div className="w-full max-w-md space-y-6">
-          <div className="space-y-3 text-center">
-            <span className="mx-auto flex size-14 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
-              <KeyRound className="size-7" aria-hidden />
-            </span>
-            <div className="space-y-1">
-              <h1 className="text-2xl font-bold tracking-tight">Platform Admin</h1>
-              <p className="text-sm text-muted-foreground">Plans, organizations, subscriptions, inquiries — the control plane.</p>
-            </div>
-          </div>
-          <Card className="p-0">
-            <CardContent className="space-y-4 p-6">
-              <div className="space-y-1.5">
-                <Label htmlFor="platform-key">Platform admin key</Label>
-                <Input
-                  id="platform-key"
-                  type="password"
-                  value={key}
-                  onChange={(e) => setKey(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && key) void verify(key)
-                  }}
-                  placeholder="forge-admin"
-                  className="h-11"
-                  autoFocus
-                />
-                <p className="text-xs text-muted-foreground">
-                  Default is <span className="font-mono">forge-admin</span> — change it with the{' '}
-                  <span className="font-mono">PLATFORM_ADMIN_KEY</span> environment variable.
-                </p>
-              </div>
-              <Button onClick={() => void verify(key)} disabled={!key || checking} className="h-11 w-full gap-2">
-                {checking ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <KeyRound className="size-4" aria-hidden />}
-                Unlock console
-              </Button>
-            </CardContent>
-          </Card>
-          <Button variant="outline" onClick={onExit} className="h-11 w-full gap-2">
-            <ArrowLeft className="size-4" aria-hidden /> Back to login
-          </Button>
-        </div>
+      <div className="flex min-h-dvh items-center justify-center bg-muted/30">
+        <Loader2 className="size-6 animate-spin text-muted-foreground" aria-hidden />
       </div>
     )
   }
 
-  return <Console key={key} apiKey={key} onAuthLost={() => setAuthed(false)} onExit={onExit} />
+  if (admin || apiKey) {
+    return (
+      <Console
+        key={admin?.id ?? apiKey ?? 'console'}
+        admin={admin}
+        apiKey={apiKey ?? undefined}
+        onAuthLost={() => {
+          setAdmin(null)
+          setApiKey(null)
+        }}
+        onExit={onExit}
+        onLoginAs={onLoginAs}
+      />
+    )
+  }
+
+  return (
+    <div className="flex min-h-dvh flex-col items-center justify-center bg-muted/30 p-4 pb-[max(1.5rem,env(safe-area-inset-bottom))]">
+      <div className="w-full max-w-md space-y-6">
+        <div className="space-y-3 text-center">
+          <span className="mx-auto flex size-14 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
+            <UserRound className="size-7" aria-hidden />
+          </span>
+          <div className="space-y-1">
+            <h1 className="text-2xl font-bold tracking-tight">Platform Admin</h1>
+            <p className="text-sm text-muted-foreground">
+              Plans, organizations, subscriptions, inquiries — the control plane.
+            </p>
+          </div>
+        </div>
+        <Card className="p-0">
+          <CardContent className="space-y-4 p-6">
+            {mode === 'login' ? (
+              <form onSubmit={signIn} className="space-y-4" noValidate>
+                <div className="space-y-1">
+                  <h2 className="text-sm font-semibold">Administrator sign-in</h2>
+                  <p className="text-xs text-muted-foreground">The SUPER_ADMIN login of this deployment.</p>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="platform-email">Admin email</Label>
+                  <Input
+                    id="platform-email"
+                    type="email"
+                    autoComplete="email"
+                    className="h-11"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="admin@forgeplatform.example.com"
+                    required
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="platform-password">Password</Label>
+                  <Input
+                    id="platform-password"
+                    type="password"
+                    autoComplete="current-password"
+                    className="h-11"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                  />
+                </div>
+                {error ? (
+                  <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                    {error}
+                  </p>
+                ) : null}
+                <Button type="submit" disabled={busy} className="h-11 w-full gap-2">
+                  {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <LogIn className="size-4" aria-hidden />}
+                  {busy ? 'Signing in…' : 'Sign in'}
+                </Button>
+                <p className="text-xs text-muted-foreground">
+                  Demo admin: <span className="font-mono text-foreground">admin@forgeplatform.example.com</span> ·{' '}
+                  <span className="font-mono text-foreground">platform123</span>
+                </p>
+              </form>
+            ) : (
+              <form onSubmit={unlockKey} className="space-y-4" noValidate>
+                <div className="space-y-1">
+                  <h2 className="text-sm font-semibold">Platform admin key</h2>
+                  <p className="text-xs text-muted-foreground">Legacy unlock for scripted access — no session is created.</p>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="platform-key">Key</Label>
+                  <Input
+                    id="platform-key"
+                    type="password"
+                    className="h-11"
+                    value={key}
+                    onChange={(e) => setKey(e.target.value)}
+                    placeholder="forge-admin"
+                    autoFocus
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Default is <span className="font-mono">forge-admin</span> — change it with the{' '}
+                    <span className="font-mono">PLATFORM_ADMIN_KEY</span> environment variable.
+                  </p>
+                </div>
+                {error ? (
+                  <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                    {error}
+                  </p>
+                ) : null}
+                <Button type="submit" disabled={!key || busy} className="h-11 w-full gap-2">
+                  {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <KeyRound className="size-4" aria-hidden />}
+                  Unlock console
+                </Button>
+              </form>
+            )}
+            <div className="flex items-center justify-center gap-1 text-xs text-muted-foreground">
+              {mode === 'login' ? (
+                <Button type="button" variant="link" className="h-auto p-0 text-xs" onClick={() => { setMode('key'); setError('') }}>
+                  Use the platform key instead
+                </Button>
+              ) : (
+                <Button type="button" variant="link" className="h-auto p-0 text-xs" onClick={() => { setMode('login'); setError('') }}>
+                  Sign in with the admin login
+                </Button>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+        <Button variant="outline" onClick={onExit} className="h-11 w-full gap-2">
+          <ArrowLeft className="size-4" aria-hidden /> Back to login
+        </Button>
+      </div>
+    </div>
+  )
 }
 
 // ---------------------------------------------------------------------------
 // Console shell: header (title + identity + pill nav) · tab body · footer
 // ---------------------------------------------------------------------------
 
-function Console({ apiKey, onAuthLost, onExit }: { apiKey: string; onAuthLost: () => void; onExit: () => void }) {
+function Console({
+  admin,
+  apiKey,
+  onAuthLost,
+  onExit,
+  onLoginAs,
+}: {
+  admin: AdminIdentity | null // SUPER_ADMIN session (or null in legacy key mode)
+  apiKey: string | undefined
+  onAuthLost: () => void
+  onExit: () => void
+  onLoginAs: (s: SessionInfo) => void
+}) {
   const [tab, setTab] = useState<ConsoleTab>('orgs')
   const [data, setData] = useState<OrgsResponse | null>(null)
   const [plans, setPlans] = useState<Plan[] | null>(null)
@@ -236,8 +379,16 @@ function Console({ apiKey, onAuthLost, onExit }: { apiKey: string; onAuthLost: (
     }
   }
 
-  const logout = () => {
-    sessionStorage.removeItem(KEY_STORE)
+  const logout = async () => {
+    if (admin) {
+      // Signed-in SUPER_ADMIN → end the session cookie, then re-gate.
+      try {
+        await api('/api/auth/logout', { method: 'POST', body: '{}' })
+      } catch {
+        /* best effort — cookie expiry still applies */
+      }
+      toast.success('Signed out of the platform console')
+    }
     onAuthLost()
   }
 
@@ -266,9 +417,15 @@ function Console({ apiKey, onAuthLost, onExit }: { apiKey: string; onAuthLost: (
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-3 px-4 py-4 pb-[max(1rem,env(safe-area-inset-top))] sm:flex-row sm:items-center sm:justify-between">
           <div className="min-w-0 space-y-0.5">
             <h1 className="truncate text-xl font-bold tracking-tight">Platform Admin</h1>
-            <p className="truncate text-sm text-muted-foreground">
-              <span className="font-mono">{apiKey}</span> · ForgeERP control plane
-            </p>
+            {admin ? (
+              <p className="truncate text-sm text-muted-foreground">
+                <span className="font-medium text-foreground">{admin.name}</span> · {admin.email} · SUPER_ADMIN
+              </p>
+            ) : (
+              <p className="truncate text-sm text-muted-foreground">
+                <span className="font-mono">key · {apiKey}</span> · ForgeERP control plane
+              </p>
+            )}
           </div>
           <nav aria-label="Platform Admin sections" className="flex flex-wrap items-center gap-2">
             {pill('orgs', 'Organizations', data?.orgs.length)}
@@ -290,7 +447,7 @@ function Console({ apiKey, onAuthLost, onExit }: { apiKey: string; onAuthLost: (
         {loading && !data ? (
           <TableSkeleton rows={5} cols={5} />
         ) : tab === 'orgs' ? (
-          <OrgsTab data={data} plans={plans ?? []} apiKey={apiKey} onAction={orgAction} reload={reload} />
+          <OrgsTab data={data} plans={plans ?? []} apiKey={apiKey} onAction={orgAction} reload={reload} onLoginAs={onLoginAs} />
         ) : tab === 'plans' ? (
           <PlansTab plans={plans ?? []} apiKey={apiKey} reload={reload} />
         ) : tab === 'inquiries' ? (
@@ -357,12 +514,14 @@ function OrgsTab({
   apiKey,
   onAction,
   reload,
+  onLoginAs,
 }: {
   data: OrgsResponse | null
   plans: Plan[]
-  apiKey: string
+  apiKey: string | undefined
   onAction: (id: string, body: Record<string, unknown>, okMsg: string) => Promise<void>
   reload: () => Promise<void>
+  onLoginAs: (s: SessionInfo) => void
 }) {
   const [createOpen, setCreateOpen] = useState(false)
   const [form, setForm] = useState({
@@ -450,6 +609,22 @@ function OrgsTab({
       await platformApi(`/api/platform/orgs/${id}?confirmName=${encodeURIComponent(orgName)}`, { method: 'DELETE' }, apiKey)
       toast.success(`${orgName} deleted`)
       void reload()
+    } catch (e) {
+      toastError(e)
+    }
+  }
+
+  /** Impersonate the org's owner: server sets the session cookie, the app
+   *  hands the browser to that org's workspace (operating → ERP, else portal). */
+  const loginAs = async (o: OrgRow) => {
+    try {
+      const s = await platformApi<SessionInfo>(
+        `/api/platform/orgs/${o.id}`,
+        { method: 'PATCH', body: JSON.stringify({ action: 'loginAs' }) },
+        apiKey
+      )
+      toast.success(`Signed in as ${o.name} — opening ${s.operating ? 'the ERP workspace' : 'the organization portal'}`)
+      onLoginAs(s)
     } catch (e) {
       toastError(e)
     }
@@ -557,6 +732,17 @@ function OrgsTab({
         >
           <KeyRound className="size-3.5" aria-hidden /> {o.ownerEmail ? 'Reset login' : 'Set login'}
         </Button>
+        {o.ownerEmail && !o.isPlatform ? (
+          <Button
+            size="sm"
+            variant="outline"
+            className={cn(pillCls, 'gap-1')}
+            title="Open this organization's workspace as its owner"
+            onClick={() => void loginAs(o)}
+          >
+            <LogIn className="size-3.5" aria-hidden /> Login as
+          </Button>
+        ) : null}
       </>
     )
   }
@@ -763,6 +949,11 @@ function OrgsTab({
                               >
                                 <KeyRound className="size-4" aria-hidden /> {o.ownerEmail ? 'Reset login' : 'Set login'}
                               </DropdownMenuItem>
+                              {o.ownerEmail && !o.isPlatform ? (
+                                <DropdownMenuItem onClick={() => void loginAs(o)}>
+                                  <LogIn className="size-4" aria-hidden /> Login as {o.name.split(' ')[0]}
+                                </DropdownMenuItem>
+                              ) : null}
                               {o.customized ? (
                                 <DropdownMenuItem
                                   onClick={() => void onAction(o.id, { action: 'resetCustom' }, 'Custom limits removed')}
@@ -1070,7 +1261,7 @@ function DeleteConfirm({ name, onConfirm }: { name: string; onConfirm: () => voi
 // Plans tab — pricing cards (reference style) with limits + feature pills
 // ---------------------------------------------------------------------------
 
-function PlansTab({ plans, apiKey, reload }: { plans: Plan[]; apiKey: string; reload: () => Promise<void> }) {
+function PlansTab({ plans, apiKey, reload }: { plans: Plan[]; apiKey: string | undefined; reload: () => Promise<void> }) {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<Plan | null>(null)
   const [form, setForm] = useState({
@@ -1413,7 +1604,7 @@ function InquiriesTab({
   reload,
 }: {
   inquiries: InquiriesResponse | null
-  apiKey: string
+  apiKey: string | undefined
   reload: () => Promise<void>
 }) {
   const [createOpen, setCreateOpen] = useState(false)
@@ -1741,7 +1932,7 @@ function InquiriesTab({
 // Blog tab — post list + editor
 // ---------------------------------------------------------------------------
 
-function BlogTab({ posts, apiKey, reload }: { posts: BlogPost[]; apiKey: string; reload: () => Promise<void> }) {
+function BlogTab({ posts, apiKey, reload }: { posts: BlogPost[]; apiKey: string | undefined; reload: () => Promise<void> }) {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<BlogPost | null>(null)
   const [form, setForm] = useState({ title: '', slug: '', excerpt: '', body: '', status: 'draft' })
@@ -1978,7 +2169,7 @@ function BlogTab({ posts, apiKey, reload }: { posts: BlogPost[]; apiKey: string;
 // Data & backup (kept from the original console — a real, useful tool)
 // ---------------------------------------------------------------------------
 
-function BackupCard({ apiKey }: { apiKey: string }) {
+function BackupCard({ apiKey }: { apiKey: string | undefined }) {
   const [restoring, setRestoring] = useState(false)
   const [confirmText, setConfirmText] = useState('')
 
@@ -2019,7 +2210,9 @@ function BackupCard({ apiKey }: { apiKey: string }) {
           <Button
             variant="outline"
             className="h-10 gap-2 rounded-full"
-            onClick={() => downloadUrl(`/api/backup?platformKey=${encodeURIComponent(apiKey)}`)}
+            onClick={() =>
+              downloadUrl(apiKey ? `/api/backup?platformKey=${encodeURIComponent(apiKey)}` : '/api/backup')
+            }
           >
             <DatabaseBackup className="size-4" aria-hidden /> Download backup
           </Button>

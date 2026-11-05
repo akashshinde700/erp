@@ -11,15 +11,20 @@ import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import {
   ArrowLeft,
+  Braces,
   Copy,
   Eye,
+  FileCode2,
   FileDown,
+  FileSpreadsheet,
   HandCoins,
   Loader2,
   Plus,
   Printer,
   RefreshCw,
+  ScrollText,
   Search,
+  Terminal,
   Trash2,
   XCircle,
 } from 'lucide-react'
@@ -28,7 +33,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -39,6 +44,7 @@ import {
   apiGet,
   apiPost,
   downloadCsv,
+  downloadUrl,
   num,
   partyTypes,
   toastError,
@@ -56,7 +62,7 @@ import { useErpUi } from './store'
 import { onPreset, setCreatePreset, takeCreatePreset } from './nav'
 import { computeInvoiceTotals, dateStr, INDIAN_STATES, money, r2, stateName } from '@/lib/erp'
 import { InvoicePrint } from './invoice-print'
-import { exportTallyVoucher, markTallySent, queueForConnector } from './tally'
+import { exportEInvoiceJson, exportTallyVoucher, markTallySent, queueForConnector } from './tally'
 
 export type InvoiceKind = 'SALES' | 'PURCHASE'
 
@@ -322,17 +328,36 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
                               <DropdownMenuItem onClick={() => void exportTallyVoucher(isSales ? 'SALES' : 'PURCHASE', inv.id, 'xml')}>
-                                Tally XML (import file)
+                                <FileCode2 className="size-4" aria-hidden /> Tally XML (import file)
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => void exportTallyVoucher(isSales ? 'SALES' : 'PURCHASE', inv.id, 'json')}>
+                                <Braces className="size-4" aria-hidden /> Tally JSON
                               </DropdownMenuItem>
                               <DropdownMenuItem onClick={() => void exportTallyVoucher(isSales ? 'SALES' : 'PURCHASE', inv.id, 'csv')}>
-                                Tally CSV
+                                <FileSpreadsheet className="size-4" aria-hidden /> Tally Excel (CSV)
                               </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem onClick={() => downloadUrl('/downloads/tally/Tally-Import.bat')}>
+                                <Terminal className="size-4" aria-hidden /> Tally importer (.bat)
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => downloadUrl('/api/tally/masters?parties=1')}>
+                                <FileDown className="size-4" aria-hidden /> Tally masters (XML)
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
                               <DropdownMenuItem onClick={() => void queueForConnector(isSales ? 'SALES' : 'PURCHASE', inv.id)}>
                                 Queue for Tally connector
                               </DropdownMenuItem>
                               <DropdownMenuItem onClick={() => void markTallySent(isSales ? 'SALES' : 'PURCHASE', inv.id, true)}>
                                 Mark as sent to Tally
                               </DropdownMenuItem>
+                              {isSales ? (
+                                <>
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem onClick={() => void exportEInvoiceJson(inv.id)}>
+                                    <ScrollText className="size-4" aria-hidden /> e-Invoice JSON (GST portal)
+                                  </DropdownMenuItem>
+                                </>
+                              ) : null}
                             </DropdownMenuContent>
                           </DropdownMenu>
                         </div>
@@ -951,11 +976,22 @@ export function InvoiceDetail({ kind, id }: { kind: InvoiceKind; id: string }) {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={() => void exportTallyVoucher(isSales ? 'SALES' : 'PURCHASE', id, 'xml')}>
-                Tally XML (import file)
+                <FileCode2 className="size-4" aria-hidden /> Tally XML (import file)
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => void exportTallyVoucher(isSales ? 'SALES' : 'PURCHASE', id, 'json')}>
+                <Braces className="size-4" aria-hidden /> Tally JSON
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => void exportTallyVoucher(isSales ? 'SALES' : 'PURCHASE', id, 'csv')}>
-                Tally CSV
+                <FileSpreadsheet className="size-4" aria-hidden /> Tally Excel (CSV)
               </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => downloadUrl('/downloads/tally/Tally-Import.bat')}>
+                <Terminal className="size-4" aria-hidden /> Tally importer (.bat)
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => downloadUrl('/api/tally/masters?parties=1')}>
+                <FileDown className="size-4" aria-hidden /> Tally masters (XML)
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
               <DropdownMenuItem onClick={() => void queueForConnector(isSales ? 'SALES' : 'PURCHASE', id)}>
                 Queue for Tally connector
               </DropdownMenuItem>
@@ -966,6 +1002,14 @@ export function InvoiceDetail({ kind, id }: { kind: InvoiceKind; id: string }) {
               >
                 {(invoice as SalesInvoice).tallySentAt ? 'Clear "sent to Tally"' : 'Mark as sent to Tally'}
               </DropdownMenuItem>
+              {isSales ? (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => void exportEInvoiceJson(id)}>
+                    <ScrollText className="size-4" aria-hidden /> e-Invoice JSON (GST portal)
+                  </DropdownMenuItem>
+                </>
+              ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
           <Button variant="outline" onClick={() => window.print()} className="h-11 gap-2">

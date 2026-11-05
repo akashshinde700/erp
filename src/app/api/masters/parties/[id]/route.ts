@@ -13,11 +13,22 @@ const partyUpdateSchema = z.object({
   stateCode: z.string().length(2).optional(),
   address: z.string().optional().nullable(),
   city: z.string().optional().nullable(),
+  pincode: z
+    .string()
+    .regex(/^\d{6}$/, 'Pincode must be 6 digits')
+    .optional()
+    .nullable(),
   phone: z.string().optional().nullable(),
   email: z.string().optional().nullable(),
   openingBal: z.number().optional(),
   active: z.boolean().optional(),
 })
+
+function parsePin(raw: unknown): string | null | undefined {
+  if (raw === undefined) return undefined
+  const t = typeof raw === 'string' ? raw.trim() : ''
+  return t === '' ? null : t
+}
 
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -30,6 +41,8 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
     const data: any = { ...body }
     if (body.types) data.types = body.types.join(',')
     if (body.gstin !== undefined) data.gstin = body.gstin || null
+    const pin = parsePin(body.pincode)
+    if (pin !== undefined) data.pincode = pin
     const party = await db.party.update({ where: { id }, data })
     await logAudit('UPDATE', 'Party', id, `${party.code} — ${party.name}`)
     return ok(party)

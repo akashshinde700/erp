@@ -101,6 +101,7 @@ model Party {
   stateCode  String   @default("27")
   address    String?
   city       String?
+  pincode    String? // required for e-Invoice BuyerDtls.Pin (IRP v1.1)
   phone      String?
   email      String?
   openingBal Float    @default(0) // + = receivable / - = payable

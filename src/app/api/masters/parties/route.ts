@@ -33,6 +33,11 @@ const partySchema = z.object({
   stateCode: z.string().length(2).default('27'),
   address: z.string().optional().nullable(),
   city: z.string().optional().nullable(),
+  pincode: z
+    .string()
+    .regex(/^\d{6}$/, 'Pincode must be 6 digits')
+    .optional()
+    .nullable(),
   phone: z.string().optional().nullable(),
   email: z.string().optional().nullable(),
   openingBal: z.number().default(0),
@@ -47,7 +52,7 @@ export async function POST(req: Request) {
       return fail('Invalid GSTIN — checksum failed (format: 27ABCDE1234F1Z5)')
     }
     const party = await db.party.create({
-      data: { ...body, types: body.types.join(','), gstin: body.gstin || null },
+      data: { ...body, types: body.types.join(','), gstin: body.gstin || null, pincode: body.pincode || null },
     })
     await logAudit('CREATE', 'Party', party.id, `${party.code} — ${party.name}`)
     return ok(party)

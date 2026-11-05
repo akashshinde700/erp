@@ -366,7 +366,7 @@ export function ErpApp() {
           >
             <ShieldAlert className="size-4 shrink-0" aria-hidden />
             <span>
-              Free trial{company.data.trialEndsAt ? ` until ${new Date(company.data.trialEndsAt).toLocaleDateString()}` : ''} — pick a plan to keep going.
+              Free trial{company.data.trialEndsAt ? ` until ${dateStr(company.data.trialEndsAt)}` : ''} — pick a plan to keep going.
             </span>
             <button
               type="button"

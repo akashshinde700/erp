@@ -91,6 +91,7 @@ export interface Party {
   stateCode: string
   address: string | null
   city: string | null
+  pincode: string | null
   phone: string | null
   email: string | null
   openingBal: number
@@ -555,6 +556,25 @@ export interface TallyVoucherPreview {
     totals: { taxable: number; cgst: number; sgst: number; igst: number; roundOff: number; grandTotal: number }
   }
   warnings: string[]
+}
+
+// ---------- e-invoice ----------
+
+export interface EInvoicePreview {
+  valid: boolean
+  docNo: string
+  errors: string[]
+  warnings: string[]
+  supTyp: string
+  itemCount: number
+  totInvVal: number
+}
+
+export interface EInvoiceBulkPreview {
+  total: number
+  eligible: number
+  skipped: { docNo: string; errors: string[] }[]
+  value: number
 }
 
 export interface TallyConnectorStatus {

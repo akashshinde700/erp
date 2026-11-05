@@ -44,7 +44,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { money } from '@/lib/erp'
+import { dateStr, money } from '@/lib/erp'
 import {
   api,
   downloadUrl,
@@ -356,9 +356,9 @@ function OrgsTable({
                       )}
                     </TableCell>
                     <TableCell className="text-xs tabular-nums">
-                      {o.paidUntil ? <span>Paid: {new Date(o.paidUntil).toLocaleDateString()}</span> : null}
+                      {o.paidUntil ? <span>Paid: {dateStr(o.paidUntil)}</span> : null}
                       {o.trialEndsAt ? (
-                        <span className={o.paidUntil ? ' block' : ''}>Trial: {new Date(o.trialEndsAt).toLocaleDateString()}</span>
+                        <span className={o.paidUntil ? ' block' : ''}>Trial: {dateStr(o.trialEndsAt)}</span>
                       ) : null}
                       {!o.paidUntil && !o.trialEndsAt ? <span className="text-muted-foreground">No expiry</span> : null}
                     </TableCell>

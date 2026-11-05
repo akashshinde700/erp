@@ -350,7 +350,7 @@ function OpeningStockTab() {
         </div>
         <div className="space-y-1">
           <Label>Warehouse</Label>
-          <Select value={warehouseId || undefined} onValueChange={setWarehouseId}>
+          <Select value={warehouseId} onValueChange={setWarehouseId}>
             <SelectTrigger className="h-11 w-full">
               <SelectValue placeholder="Select warehouse…" />
             </SelectTrigger>
@@ -386,7 +386,7 @@ function OpeningStockTab() {
             {rows.map((r) => (
               <TableRow key={r.key}>
                 <TableCell>
-                  <Select value={r.itemId || undefined} onValueChange={(v) => onItemPick(r.key, v)}>
+                  <Select value={r.itemId} onValueChange={(v) => onItemPick(r.key, v)}>
                     <SelectTrigger className="h-11 w-full min-w-40">
                       <SelectValue placeholder="Pick stock item…" />
                     </SelectTrigger>

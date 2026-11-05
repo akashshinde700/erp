@@ -56,7 +56,7 @@ import {
 import { EmptyState, Money, SectionHeading, TableSkeleton } from './bits'
 import { useErpUi } from './store'
 import { setCreatePreset } from './nav'
-import { INDIAN_STATES, stateName, gstinChecksumValid, money, PARTY_TYPES, UOMS } from '@/lib/erp'
+import { INDIAN_STATES, stateName, gstinChecksumValid, dateStr, money, PARTY_TYPES, UOMS } from '@/lib/erp'
 
 const GST_RATES = [0, 5, 12, 18, 28]
 
@@ -342,7 +342,7 @@ function PartyViewDialog({
   const invLine = (i: { id: string; invoiceNo: string; date: string; grandTotal: number; paidAmount: number; status: string }) => (
     <TableRow key={i.id}>
       <TableCell className="font-medium tabular-nums">{i.invoiceNo}</TableCell>
-      <TableCell className="whitespace-nowrap text-xs">{new Date(i.date).toLocaleDateString()}</TableCell>
+      <TableCell className="whitespace-nowrap text-xs">{dateStr(i.date)}</TableCell>
       <TableCell className="text-right tabular-nums">₹ {money(i.grandTotal)}</TableCell>
       <TableCell className="text-right tabular-nums text-muted-foreground">₹ {money(i.paidAmount)}</TableCell>
       <TableCell className="text-right font-medium tabular-nums">₹ {money(i.grandTotal - i.paidAmount)}</TableCell>
@@ -371,6 +371,7 @@ function PartyViewDialog({
             {party.gstin ? `${party.gstin} · ` : 'Unregistered · '}
             {stateName(party.stateCode)}
             {party.city ? ` · ${party.city}` : ''}
+            {party.pincode ? ` ${party.pincode}` : ''}
             {party.phone ? ` · ${party.phone}` : ''}
           </DialogDescription>
         </DialogHeader>
@@ -490,7 +491,7 @@ function PartyViewDialog({
                       {paymentRows.map((p) => (
                         <TableRow key={p.id}>
                           <TableCell className="font-medium tabular-nums">{p.paymentNo}</TableCell>
-                          <TableCell className="whitespace-nowrap text-xs">{new Date(p.date).toLocaleDateString()}</TableCell>
+                          <TableCell className="whitespace-nowrap text-xs">{dateStr(p.date)}</TableCell>
                           <TableCell>
                             <Badge variant={p.type === 'RECEIPT' ? 'default' : 'secondary'} className="text-[10px]">
                               {p.type}
@@ -535,6 +536,7 @@ function PartyDialog({
   const [stateCode, setStateCode] = useState('27')
   const [address, setAddress] = useState('')
   const [city, setCity] = useState('')
+  const [pincode, setPincode] = useState('')
   const [phone, setPhone] = useState('')
   const [email, setEmail] = useState('')
   const [openingBal, setOpeningBal] = useState('')
@@ -551,6 +553,7 @@ function PartyDialog({
     setStateCode(party?.stateCode ?? '27')
     setAddress(party?.address ?? '')
     setCity(party?.city ?? '')
+    setPincode(party?.pincode ?? '')
     setPhone(party?.phone ?? '')
     setEmail(party?.email ?? '')
     setOpeningBal(party ? String(party.openingBal) : '')
@@ -571,6 +574,10 @@ function PartyDialog({
       toast.error('GSTIN checksum failed — fix or clear the field')
       return
     }
+    if (pincode.trim() && !/^\d{6}$/.test(pincode.trim())) {
+      toast.error('Pincode must be 6 digits — required for e-Invoice')
+      return
+    }
     setSaving(true)
     try {
       const body = {
@@ -581,6 +588,7 @@ function PartyDialog({
         stateCode,
         address: address.trim() || null,
         city: city.trim() || null,
+        pincode: pincode.trim() || null,
         phone: phone.trim() || null,
         email: email.trim() || null,
         openingBal: num(openingBal),
@@ -665,6 +673,19 @@ function PartyDialog({
           <div className="space-y-1.5">
             <Label htmlFor="p-city">City</Label>
             <Input id="p-city" value={city} onChange={(e) => setCity(e.target.value)} placeholder="City" className="h-11" />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="p-pin">Pincode</Label>
+            <Input
+              id="p-pin"
+              value={pincode}
+              onChange={(e) => setPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              placeholder="411026"
+              className="h-11"
+              inputMode="numeric"
+              pattern="[0-9]{6}"
+            />
+            <p className="text-xs text-muted-foreground">Needed for e-Invoice BuyerDtls (IRP).</p>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="p-phone">Phone</Label>

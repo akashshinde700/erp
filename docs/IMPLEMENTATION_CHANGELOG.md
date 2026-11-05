@@ -120,3 +120,43 @@ User directive: make navigation as easy as demo.mapsofterp.in (KPI cards drill i
 
 ### 11.5 Verification (executed, browser)
 Palette open+search("Mahindra") → party + 2 invoices + 1 inward found → click lands on invoice detail; g s/g t/g d/g m shortcuts; ? help dialog; Alt+S opens prefilled create; breadcrumb text "Sales/INV-2627-004"; Receive Payment → dialog with RECEIPT + CUST-001 + ₹38,374 + allocation "Allocated ₹ 38,374.00 / ₹ 38,374.00"; party view → New Invoice (party prefilled) and Party Ledger (tab + party selected); low-stock click → Inventory; mobile drawer intact; zero console/page errors. `bun run lint` clean.
+
+## 12. e-Invoice IRP JSON + full-app audit session (2026-11-06)
+
+User directive: full audit of the project (buttons/navigation/flows), report on the .bat status, and add the e-Invoice JSON download shown in the user's screenshot (reference app's Tally dropdown with "e-Invoice JSON (GST portal)").
+
+### 12.1 e-Invoice IRP JSON v1.1 engine (`src/lib/einvoice.ts`, A4 → DONE)
+- IRP v1.1 schema builder (TranDtls/DocDtls/SellerDtls/BuyerDtls/ItemList/ValDtls) per the published NIC spec; ASCII-hardened text, UQC unit normalization (KG→KGS etc.), qty 3dp / amounts 2dp, Pin as integer.
+- **Pre-validation** split into hard errors (block download, 409) vs warnings (toast): seller+buyer GSTIN format, B2B eligibility, 6/8-digit HSN per item, 6-digit pincodes, state codes, future date, cancelled invoice, Σ line AssAmt = AssVal, Σ line tax = header tax, TotInvVal = components + RndOff. 30-day IRN window (Notification 76/2023) as warning.
+- TotAmt = Qty × UnitPrice (pre-discount) vs AssAmt (post-discount) per spec; discount lines verified (INV-2627-003 15% line exports TotAmt 25,600 / AssAmt 21,694.92).
+
+### 12.2 API `GET /api/e-invoice` (assertCompanyAccess + logAudit)
+- `?id=<salesInvoiceId>` → file download `<INV>_einvoice.json`; `&preview=1` → {valid, errors, warnings, supTyp, itemCount, totInvVal}.
+- `?from&to` → bulk `{Version:"1.1", BulkInvList:[…]}` file `forge-einvoice_<from>_<to>.json`; `&preview=1` → {total, eligible, skipped[{docNo, errors}], value} — broken documents never ship to the portal.
+- e-Invoice is outward-supply only (sales); purchase dropdown intentionally omits the item.
+- `/api/tally/voucher?format=json` upgraded from JSON envelope → attachment file download (`<VCH>_tally.json`).
+
+### 12.3 Tally dropdown → screenshot parity (invoice lists + detail view)
+Reference menu structure re-implemented with groups + separators: Tally XML (import file) / **Tally JSON** / **Tally Excel (CSV)** | **Tally importer (.bat)** (static download link) / **Tally masters (XML)** (API download) | Queue for Tally connector / Mark as sent to Tally | **e-Invoice JSON (GST portal)** (sales only) — icons per item.
+
+### 12.4 Tally Export module: e-Invoice bulk card
+Date-range card with preview stats (eligible/total, ₹value, skipped invoices with reasons) then bulk download; toast guidance "GST portal: e-Invoice → Upload JSON".
+
+### 12.5 Party.pincode (IRP BuyerDtls prerequisite)
+- Prisma: `Party.pincode String?` (nullable, non-breaking) + db push; backfilled 6 seeded parties.
+- API: POST/PUT parties accept 6-digit pincode (zod-validated); masters party form pincode input (numeric-only, 6-digit hint) + validation; party view header shows pincode.
+- Seed upgraded: proper 6-digit HSN codes (848390/848330/730790/720890/740721) + KGS units; existing DB lines backfilled to match (4-digit HSNs failed IRP pre-validation — caught live by the new validator).
+
+### 12.6 Full-app audit (read-only, 16-point checklist in a dedicated browser session)
+All PASS: dashboard KPIs/quick actions, sales/purchase lists + detail, Tally dropdowns (8 items sales / 7 items purchase), jobwork inward detail, inventory summary+ledger, accounting payments+ledger, 4 report types, masters tabs + party view actions, Tally Export cards, audit trail filters, platform key gate, command palette search, shortcuts dialog, mobile 390px (no horizontal overflow, drawer), sticky footer (0px gap at 900px), zero page errors / zero red console errors.
+
+### 12.7 Audit fixes applied
+- Controlled selects: `value={x || undefined}` → `value={x}` in inventory (opening warehouse + row item) and accounting (payment party + ledger party) — kills the uncontrolled→controlled flip class.
+- Date consistency: party-view Sales/Payments tabs, platform org Paid/Trial cells and trial banner switched from `toLocaleDateString()` (US M/D/YYYY) to shared `dateStr()` (03 Nov 2026).
+- Data regression repaired: audit session deactivated CUST-001 — reactivated (6/6 active).
+- Non-reproducible ghost warnings from the audit session (2 Radix Description notes) — all dialogs/AlertDialogs statically verified to carry descriptions; could not be reproduced in 5 targeted dialog flows.
+
+### 12.8 Verification (executed live)
+- Backend: preview + file endpoints per-invoice and bulk (all 200, attachment headers, correct IRP JSON body; 4/4 seeded invoices pass validation, ₹2,68,054 total); Tally JSON/CSV attachment headers; .bat 200 (4,659 B); masters XML 200.
+- Unit-level builder tests: 45-day-old → 30-day warning; future date → error; no buyer pin → error; no buyer GSTIN (B2C) → error; 4-digit HSN → error; discount line math exact.
+- Browser golden path: dropdown → e-Invoice JSON → toast + real file in ~/Downloads; detail view same; purchase omits item; bulk card stats + download; party form pincode create → API → DB round-trip; payment-dialog party select placeholder + selection; opening-stock selects; zero console/page errors. `bun run lint` clean.

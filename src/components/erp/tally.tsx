@@ -19,6 +19,7 @@ import {
   Plug,
   RefreshCw,
   Save,
+  ScrollText,
   Terminal,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -36,6 +37,8 @@ import {
   toastError,
   todayISO,
   type Company,
+  type EInvoiceBulkPreview,
+  type EInvoicePreview,
   type TallyConnectorStatus,
   type TallyVoucherPreview,
 } from './api'
@@ -62,6 +65,7 @@ export function TallyView() {
       <TallyHowItWorks />
       <MastersCard />
       <BulkExportCard />
+      <EInvoiceBulkCard />
       <ConnectorCard />
       <BatCard />
       <LedgerSettingsCard />
@@ -201,6 +205,89 @@ function BulkExportCard() {
 }
 
 // ---------------------------------------------------------------------------
+
+function EInvoiceBulkCard() {
+  const monthStart = `${todayISO().slice(0, 7)}-01`
+  const [from, setFrom] = useState(monthStart)
+  const [to, setTo] = useState(todayISO())
+  const [stats, setStats] = useState<EInvoiceBulkPreview | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const go = async () => {
+    setBusy(true)
+    try {
+      const preview = await apiGet<EInvoiceBulkPreview>(`/api/e-invoice?from=${from}&to=${to}&preview=1`)
+      setStats(preview)
+      if (preview.eligible === 0) {
+        toast.error('No eligible invoice in this range', {
+          description: preview.skipped[0]?.errors[0] ?? 'Every invoice failed e-Invoice pre-validation',
+        })
+        return
+      }
+      downloadUrl(`/api/e-invoice?from=${from}&to=${to}`)
+      toast.success(`e-Invoice JSON for ${preview.eligible} invoice(s) downloaded`, {
+        description: `${preview.skipped.length} skipped · upload it on the GST portal: e-Invoice → Upload JSON.`,
+      })
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Card className="p-0">
+      <CardContent className="space-y-3 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <p className="text-sm font-semibold">e-Invoice JSON (GST portal)</p>
+            <p className="text-xs text-muted-foreground">
+              IRP v1.1 format for einvoice.gst.gov.in — per-invoice from the Sales list “Tally” menu, or the whole range here.
+            </p>
+          </div>
+          <Button onClick={go} disabled={busy} className="h-10 gap-2">
+            {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <ScrollText className="size-4" aria-hidden />}
+            {busy ? 'Validating…' : 'Download bulk IRP JSON'}
+          </Button>
+        </div>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="einv-from">From</Label>
+            <Input id="einv-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="h-11" />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="einv-to">To</Label>
+            <Input id="einv-to" type="date" value={to} onChange={(e) => setTo(e.target.value)} className="h-11" />
+          </div>
+        </div>
+        {stats ? (
+          <div className="space-y-2 rounded-lg border bg-muted/30 p-3 text-xs">
+            <p className="font-medium">
+              {stats.eligible} of {stats.total} invoice(s) eligible · ₹{stats.value.toFixed(2)} total value
+            </p>
+            {stats.skipped.length > 0 ? (
+              <div className="max-h-32 space-y-1 overflow-y-auto">
+                {stats.skipped.map((s) => (
+                  <p key={s.docNo} className="text-muted-foreground">
+                    <span className="font-medium text-foreground">{s.docNo}</span> — {s.errors[0]}
+                    {s.errors.length > 1 ? ` (+${s.errors.length - 1} more)` : ''}
+                  </p>
+                ))}
+              </div>
+            ) : (
+              <p className="text-muted-foreground">Nothing skipped — every invoice passed pre-validation.</p>
+            )}
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            Pre-validation runs first: buyer GSTIN, 6-digit HSN, pincode and arithmetic are checked — broken documents are
+            skipped, never shipped to the portal.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
 
 function ConnectorCard() {
   const [status, setStatus] = useState<TallyConnectorStatus | null>(null)
@@ -491,6 +578,31 @@ export async function markTallySent(doc: 'SALES' | 'PURCHASE', id: string, sent:
   try {
     await apiPost('/api/tally/voucher', { doc, id, action: sent ? 'mark-sent' : 'unmark' })
     toast.success(sent ? 'Marked as sent to Tally' : 'Tally sent mark cleared')
+  } catch (e) {
+    toastError(e)
+  }
+}
+
+/** e-Invoice IRP JSON (GST portal) — pre-validates, then downloads the file. */
+export async function exportEInvoiceJson(id: string): Promise<void> {
+  try {
+    const preview = await apiGet<EInvoicePreview>(`/api/e-invoice?id=${id}&preview=1`)
+    if (!preview.valid) {
+      toast.error(`${preview.docNo} failed e-Invoice pre-validation`, {
+        description: preview.errors.slice(0, 3).join(' · '),
+      })
+      return
+    }
+    if (preview.warnings.length > 0) {
+      toast.warning(`${preview.docNo} — e-Invoice JSON ready`, {
+        description: preview.warnings.slice(0, 3).join(' · '),
+      })
+    } else {
+      toast.success(`${preview.docNo} — e-Invoice JSON ready`, {
+        description: `IRP v1.1 · ${preview.itemCount} item(s) · ₹${preview.totInvVal.toFixed(2)} — upload on the GST portal (e-Invoice → Upload JSON).`,
+      })
+    }
+    downloadUrl(`/api/e-invoice?id=${id}`)
   } catch (e) {
     toastError(e)
   }

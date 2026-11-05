@@ -37,7 +37,14 @@ export async function GET(req: Request) {
 
     if (format === 'json') {
       await stampExport(doc, id)
-      return ok({ voucher })
+      return new NextResponse(JSON.stringify(voucher, null, 2), {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Content-Disposition': `attachment; filename="${tallyFileName(voucher.voucherNumber, 'json')}"`,
+          'Cache-Control': 'no-store',
+        },
+      })
     }
 
     const company = await getCompany()

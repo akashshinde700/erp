@@ -426,7 +426,7 @@ function NewPaymentDialog({
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>{type === 'RECEIPT' ? 'Customer' : 'Supplier'}</Label>
-              <Select value={partyId || undefined} onValueChange={(v) => { setPartyId(v); setAllocs({}) }}>
+              <Select value={partyId} onValueChange={(v) => { setPartyId(v); setAllocs({}) }}>
                 <SelectTrigger className="h-11 w-full">
                   <SelectValue placeholder="Select party…" />
                 </SelectTrigger>
@@ -579,7 +579,7 @@ function PartyLedgerTab({ presetPartyId }: { presetPartyId?: string }) {
     <div className="space-y-4">
       <div className="grid gap-2 sm:max-w-md">
         <Label>Party</Label>
-        <Select value={partyId || undefined} onValueChange={setPartyId}>
+        <Select value={partyId} onValueChange={setPartyId}>
           <SelectTrigger className="h-11 w-full">
             <SelectValue placeholder="Select party…" />
           </SelectTrigger>

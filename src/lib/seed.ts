@@ -88,7 +88,7 @@ export async function seedDatabase(force = false) {
     data: {
       code: 'CUST-001', name: 'Mahindra Metal Works Pvt. Ltd.',
       types: 'CUSTOMER', gstin: makeGstin('27', 'AABCM5239K1Z'), stateCode: '27',
-      address: 'Sector 22, MIDC Chakan', city: 'Pune', phone: '+91 20 2760 1122',
+      address: 'Sector 22, MIDC Chakan', city: 'Pune', pincode: '410501', phone: '+91 20 2760 1122',
       email: 'purchase@mahindrametal.example.com',
     },
   })
@@ -96,54 +96,54 @@ export async function seedDatabase(force = false) {
     data: {
       code: 'CUST-002', name: 'Gujarat Heavy Castings LLP',
       types: 'CUSTOMER', gstin: makeGstin('24', 'AACFG8821L1Z'), stateCode: '24',
-      address: 'GIDC Vatva, Phase II', city: 'Ahmedabad', phone: '+91 79 2583 4477',
+      address: 'GIDC Vatva, Phase II', city: 'Ahmedabad', pincode: '382210', phone: '+91 79 2583 4477',
     },
   })
   const bengal = await db.party.create({
     data: {
       code: 'CUST-003', name: 'Bengal Alloys & Forgings Co.',
       types: 'CUSTOMER', gstin: makeGstin('19', 'AAJCB0417D1Z'), stateCode: '19',
-      address: 'Howrah Industrial Zone', city: 'Kolkata', phone: '+91 33 2664 7788',
+      address: 'Howrah Industrial Zone', city: 'Kolkata', pincode: '711106', phone: '+91 33 2664 7788',
     },
   })
   const steelTrader = await db.party.create({
     data: {
       code: 'SUPP-001', name: 'Pune Steel Traders',
       types: 'SUPPLIER', gstin: makeGstin('27', 'AAKPS6033F1Z'), stateCode: '27',
-      address: 'Bhawani Peth Steel Market', city: 'Pune', phone: '+91 20 2446 0918',
+      address: 'Bhawani Peth Steel Market', city: 'Pune', pincode: '411004', phone: '+91 20 2446 0918',
     },
   })
   const alloysSupply = await db.party.create({
     data: {
       code: 'SUPP-002', name: 'Mumbai Alloys Supply Corp.',
       types: 'SUPPLIER', gstin: makeGstin('27', 'AABCM9955E1Z'), stateCode: '27',
-      address: 'Kalamboli Steel Market', city: 'Navi Mumbai', phone: '+91 22 2739 5566',
+      address: 'Kalamboli Steel Market', city: 'Navi Mumbai', pincode: '410218', phone: '+91 22 2739 5566',
     },
   })
   await db.party.create({
     data: {
       code: 'SUPP-003', name: 'Nagpur Ferro Alloys',
       types: 'SUPPLIER', gstin: makeGstin('27', 'AACCN2210H1Z'), stateCode: '27',
-      address: 'MIDC Hingna', city: 'Nagpur', phone: '+91 712 226 3344',
+      address: 'MIDC Hingna', city: 'Nagpur', pincode: '440016', phone: '+91 712 226 3344',
       openingBal: -25000, // payable
     },
   })
 
   // ---------- Items ----------
   const gearBlank = await db.item.create({
-    data: { code: 'FG-1001', name: 'Gear Blank C45', groupName: 'Finished Goods', hsn: '8483', uom: 'PCS', gstRate: 18, saleRate: 850, costRate: 520, reorderLevel: 40 },
+    data: { code: 'FG-1001', name: 'Gear Blank C45', groupName: 'Finished Goods', hsn: '848390', uom: 'PCS', gstRate: 18, saleRate: 850, costRate: 520, reorderLevel: 40 },
   })
   const flange = await db.item.create({
-    data: { code: 'FG-1002', name: 'Flange DN50 SS316', groupName: 'Finished Goods', hsn: '7307', uom: 'PCS', gstRate: 18, saleRate: 640, costRate: 380, reorderLevel: 60 },
+    data: { code: 'FG-1002', name: 'Flange DN50 SS316', groupName: 'Finished Goods', hsn: '730790', uom: 'PCS', gstRate: 18, saleRate: 640, costRate: 380, reorderLevel: 60 },
   })
   const shaft = await db.item.create({
-    data: { code: 'FG-1003', name: 'Input Shaft EN24', groupName: 'Finished Goods', hsn: '8483', uom: 'PCS', gstRate: 18, saleRate: 1200, costRate: 750, reorderLevel: 25 },
+    data: { code: 'FG-1003', name: 'Input Shaft EN24', groupName: 'Finished Goods', hsn: '848330', uom: 'PCS', gstRate: 18, saleRate: 1200, costRate: 750, reorderLevel: 25 },
   })
   const msPlate = await db.item.create({
-    data: { code: 'RM-2001', name: 'MS Plate 12mm', groupName: 'Raw Material', hsn: '7208', uom: 'KG', gstRate: 18, saleRate: 68, costRate: 52, reorderLevel: 500 },
+    data: { code: 'RM-2001', name: 'MS Plate 12mm', groupName: 'Raw Material', hsn: '720890', uom: 'KGS', gstRate: 18, saleRate: 68, costRate: 52, reorderLevel: 500 },
   })
   const brassRod = await db.item.create({
-    data: { code: 'RM-2002', name: 'Brass Rod 25mm', groupName: 'Raw Material', hsn: '7407', uom: 'KG', gstRate: 18, saleRate: 520, costRate: 410, reorderLevel: 200 },
+    data: { code: 'RM-2002', name: 'Brass Rod 25mm', groupName: 'Raw Material', hsn: '740721', uom: 'KGS', gstRate: 18, saleRate: 520, costRate: 410, reorderLevel: 200 },
   })
   const jwService = await db.item.create({
     data: { code: 'JW-SERVICE', name: 'Jobwork Services', groupName: 'Services', hsn: '998887', isService: true, isStockItem: false, uom: 'PCS', gstRate: 18, saleRate: 0, costRate: 0 },

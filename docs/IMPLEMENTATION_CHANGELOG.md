@@ -160,3 +160,17 @@ All PASS: dashboard KPIs/quick actions, sales/purchase lists + detail, Tally dro
 - Backend: preview + file endpoints per-invoice and bulk (all 200, attachment headers, correct IRP JSON body; 4/4 seeded invoices pass validation, ₹2,68,054 total); Tally JSON/CSV attachment headers; .bat 200 (4,659 B); masters XML 200.
 - Unit-level builder tests: 45-day-old → 30-day warning; future date → error; no buyer pin → error; no buyer GSTIN (B2C) → error; 4-digit HSN → error; discount line math exact.
 - Browser golden path: dropdown → e-Invoice JSON → toast + real file in ~/Downloads; detail view same; purchase omits item; bulk card stats + download; party form pincode create → API → DB round-trip; payment-dialog party select placeholder + selection; opening-stock selects; zero console/page errors. `bun run lint` clean.
+
+## 13. e-Invoice JSON → GST portal auto-open (2026-11-06, session 2)
+
+User directive: on clicking "e-Invoice JSON (GST portal)", the GST portal's Bulk Upload page (https://einvoice1.gst.gov.in/Home/Index?ReturnUrl=%2FInvoice%2FBulkUpload) must open together with the JSON download.
+
+### 13.1 Popup-blocker-safe portal launcher (`src/components/erp/api.ts`)
+- New exported `EINVOICE_PORTAL_URL` + `openEInvoicePortal()` returning `{retry, cancel}`: the tab is opened **synchronously inside the click gesture** (browsers otherwise block `window.open` after awaits); `retry()` re-attempts if the first open was blocked; `cancel()` closes the tab when pre-validation fails and no JSON is produced.
+
+### 13.2 Both entry points wired (`src/components/erp/tally.tsx`)
+- Per-invoice `exportEInvoiceJson(id)` (Sales list + detail "Tally" dropdown item) and the bulk card `go()` (Tally Export page) now: open portal tab → pre-validate → download JSON → keep tab; on validation failure/API error the tab is closed and the reason toasted. Toast copy updated to "the GST portal Bulk Upload page opened — upload this JSON there."
+
+### 13.3 Verification (executed live, headless Chromium)
+- Instrumented `window.open` at click time: exactly one call with the exact portal URL, returning a live Window (not blocked); preview 200 → file download 200 per-invoice (INV-2627-003, toast "e-Invoice JSON ready") and bulk (2026-11-01→05 range).
+- Portal tab confirmed loading the real government site and staying open (multiple repetitions, both entry points; final tab `einvoice1.gst.gov.in/Home/Index?ReturnUrl=%2FInvoice%2FBulkUpload` stable across checks). `bun run lint` clean; no dev.log errors.

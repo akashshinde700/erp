@@ -34,6 +34,7 @@ import {
   apiGet,
   apiPost,
   downloadUrl,
+  openEInvoicePortal,
   toastError,
   todayISO,
   type Company,
@@ -214,21 +215,25 @@ function EInvoiceBulkCard() {
   const [busy, setBusy] = useState(false)
 
   const go = async () => {
+    const portal = openEInvoicePortal() // opened inside the click gesture → popup-safe
     setBusy(true)
     try {
       const preview = await apiGet<EInvoiceBulkPreview>(`/api/e-invoice?from=${from}&to=${to}&preview=1`)
       setStats(preview)
       if (preview.eligible === 0) {
+        portal.cancel()
         toast.error('No eligible invoice in this range', {
           description: preview.skipped[0]?.errors[0] ?? 'Every invoice failed e-Invoice pre-validation',
         })
         return
       }
       downloadUrl(`/api/e-invoice?from=${from}&to=${to}`)
+      portal.retry()
       toast.success(`e-Invoice JSON for ${preview.eligible} invoice(s) downloaded`, {
-        description: `${preview.skipped.length} skipped · upload it on the GST portal: e-Invoice → Upload JSON.`,
+        description: `${preview.skipped.length} skipped · the GST portal Bulk Upload page opened — upload this JSON there.`,
       })
     } catch (e) {
+      portal.cancel()
       toastError(e)
     } finally {
       setBusy(false)
@@ -242,7 +247,8 @@ function EInvoiceBulkCard() {
           <div>
             <p className="text-sm font-semibold">e-Invoice JSON (GST portal)</p>
             <p className="text-xs text-muted-foreground">
-              IRP v1.1 format for einvoice.gst.gov.in — per-invoice from the Sales list “Tally” menu, or the whole range here.
+              IRP v1.1 format for einvoice.gst.gov.in — per-invoice from the Sales list “Tally” menu, or the whole range
+              here. The portal’s Bulk Upload page opens together with the download.
             </p>
           </div>
           <Button onClick={go} disabled={busy} className="h-10 gap-2">
@@ -583,11 +589,13 @@ export async function markTallySent(doc: 'SALES' | 'PURCHASE', id: string, sent:
   }
 }
 
-/** e-Invoice IRP JSON (GST portal) — pre-validates, then downloads the file. */
+/** e-Invoice IRP JSON (GST portal) — pre-validates, downloads the file, opens the portal upload page. */
 export async function exportEInvoiceJson(id: string): Promise<void> {
+  const portal = openEInvoicePortal() // opened inside the click gesture → popup-safe
   try {
     const preview = await apiGet<EInvoicePreview>(`/api/e-invoice?id=${id}&preview=1`)
     if (!preview.valid) {
+      portal.cancel()
       toast.error(`${preview.docNo} failed e-Invoice pre-validation`, {
         description: preview.errors.slice(0, 3).join(' · '),
       })
@@ -599,11 +607,13 @@ export async function exportEInvoiceJson(id: string): Promise<void> {
       })
     } else {
       toast.success(`${preview.docNo} — e-Invoice JSON ready`, {
-        description: `IRP v1.1 · ${preview.itemCount} item(s) · ₹${preview.totInvVal.toFixed(2)} — upload on the GST portal (e-Invoice → Upload JSON).`,
+        description: `IRP v1.1 · ${preview.itemCount} item(s) · ₹${preview.totInvVal.toFixed(2)} · the GST portal Bulk Upload page opened — upload this JSON there.`,
       })
     }
     downloadUrl(`/api/e-invoice?id=${id}`)
+    portal.retry()
   } catch (e) {
+    portal.cancel()
     toastError(e)
   }
 }

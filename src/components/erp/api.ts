@@ -651,6 +651,27 @@ export function downloadUrl(path: string): void {
   a.remove()
 }
 
+/** GST e-invoice portal — Bulk Upload page (where the IRP JSON is uploaded). */
+export const EINVOICE_PORTAL_URL =
+  'https://einvoice1.gst.gov.in/Home/Index?ReturnUrl=%2FInvoice%2FBulkUpload'
+
+/**
+ * Opens the GST e-invoice portal's Bulk Upload page in a new tab, together with
+ * an e-Invoice JSON download. Popup-blocker-safe: the tab is opened
+ * synchronously inside the click gesture (browsers block window.open after
+ * awaits). `retry()` re-attempts in case the first open was blocked;
+ * `cancel()` closes the tab when pre-validation fails and no JSON is produced.
+ */
+export function openEInvoicePortal(): { retry: () => void; cancel: () => void } {
+  const tab = window.open(EINVOICE_PORTAL_URL, '_blank')
+  return {
+    retry: () => {
+      if (!tab) void window.open(EINVOICE_PORTAL_URL, '_blank', 'noopener')
+    },
+    cancel: () => tab?.close(),
+  }
+}
+
 /** Client-side CSV download (BOM + quote escaping). */
 export function downloadCsv(filename: string, rows: (string | number)[][]): void {
   const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n')

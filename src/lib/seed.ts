@@ -1,0 +1,316 @@
+/**
+ * ForgeERP — Demo seed. Builds a realistic Maharashtrian manufacturing-jobwork
+ * scenario through the REAL posting services (never raw inserts), so invoice ≡
+ * stock ledger ≡ GL by construction. Idempotent: skips when a company exists
+ * unless force = true (which wipes everything in FK-safe order).
+ */
+import { db } from './db'
+import { makeGstin } from './erp'
+import {
+  postOpeningStock,
+  postPurchaseInvoice,
+  postSalesInvoice,
+  postPayment,
+  postJobworkInward,
+  postJobCard,
+  issueCertificate,
+  generateJobworkInvoice,
+} from './services'
+
+const daysAgo = (n: number): Date => {
+  const d = new Date()
+  d.setDate(d.getDate() - n)
+  d.setHours(10, 30, 0, 0)
+  return d
+}
+
+export async function seedDatabase(force = false) {
+  const existing = await db.company.findFirst()
+  if (existing && !force) return { seeded: false, reason: 'Company already exists (use ?force=1 to reseed)' }
+
+  if (force) {
+    // FK-safe wipe order — destructive, hence opt-in only
+    await db.paymentAllocation.deleteMany()
+    await db.payment.deleteMany()
+    await db.jobCardProcess.deleteMany()
+    await db.jobCard.deleteMany()
+    await db.jobworkCertificate.deleteMany()
+    await db.jobworkInwardItem.deleteMany()
+    await db.jobworkInward.deleteMany()
+    await db.salesInvoiceItem.deleteMany()
+    await db.salesInvoice.deleteMany()
+    await db.purchaseInvoiceItem.deleteMany()
+    await db.purchaseInvoice.deleteMany()
+    await db.stockLedger.deleteMany()
+    await db.accountLedger.deleteMany()
+    await db.partyProcessRate.deleteMany()
+    await db.counter.deleteMany()
+    await db.item.deleteMany()
+    await db.process.deleteMany()
+    await db.warehouse.deleteMany()
+    await db.party.deleteMany()
+    await db.company.deleteMany()
+  }
+
+  // ---------- Company ----------
+  const company = await db.company.create({
+    data: {
+      name: 'Shree Forge Industries',
+      legalName: 'Shree Forge Industries Pvt. Ltd.',
+      gstin: makeGstin('27', 'AAECS1429B1Z'),
+      stateCode: '27',
+      address: 'Plot 42, MIDC Bhosari Industrial Estate',
+      city: 'Pune',
+      pincode: '411026',
+      phone: '+91 20 4567 8900',
+      email: 'works@shreeforge.example.com',
+      bankName: 'HDFC Bank, Bhosari Branch',
+      bankAcct: '50200034567891',
+      bankIfsc: 'HDFC0000123',
+      upiId: 'shreeforge@hdfcbank',
+    },
+  })
+
+  // ---------- Warehouses ----------
+  const main = await db.warehouse.create({ data: { code: 'MAIN', name: 'Main Stores', location: 'Pune Plant 1' } })
+  const jw = await db.warehouse.create({ data: { code: 'JW', name: 'Jobwork Store', location: 'Pune Plant 1 — customer material cage' } })
+
+  // ---------- Processes ----------
+  const shot = await db.process.create({ data: { code: 'SHOT', name: 'Shot Blasting', seq: 1, basis: 'WEIGHT', rate: 6, lotCharge: 0 } })
+  const ht = await db.process.create({ data: { code: 'HT', name: 'Heat Treatment', seq: 2, basis: 'WEIGHT', rate: 9, lotCharge: 150 } })
+  const galv = await db.process.create({ data: { code: 'GALV', name: 'Galvanizing', seq: 3, basis: 'WEIGHT', rate: 14, lotCharge: 200 } })
+  const mach = await db.process.create({ data: { code: 'MACH', name: 'CNC Machining', seq: 4, basis: 'QTY', rate: 120, lotCharge: 0 } })
+  const qc = await db.process.create({ data: { code: 'QC', name: 'Quality Check & NDT', seq: 5, basis: 'QTY', rate: 15, lotCharge: 0 } })
+  const pack = await db.process.create({ data: { code: 'PACK', name: 'Packing & Marking', seq: 6, basis: 'QTY', rate: 20, lotCharge: 100 } })
+
+  // ---------- Parties ----------
+  const mahindra = await db.party.create({
+    data: {
+      code: 'CUST-001', name: 'Mahindra Metal Works Pvt. Ltd.',
+      types: 'CUSTOMER', gstin: makeGstin('27', 'AABCM5239K1Z'), stateCode: '27',
+      address: 'Sector 22, MIDC Chakan', city: 'Pune', phone: '+91 20 2760 1122',
+      email: 'purchase@mahindrametal.example.com',
+    },
+  })
+  const gujarat = await db.party.create({
+    data: {
+      code: 'CUST-002', name: 'Gujarat Heavy Castings LLP',
+      types: 'CUSTOMER', gstin: makeGstin('24', 'AACFG8821L1Z'), stateCode: '24',
+      address: 'GIDC Vatva, Phase II', city: 'Ahmedabad', phone: '+91 79 2583 4477',
+    },
+  })
+  const bengal = await db.party.create({
+    data: {
+      code: 'CUST-003', name: 'Bengal Alloys & Forgings Co.',
+      types: 'CUSTOMER', gstin: makeGstin('19', 'AAJCB0417D1Z'), stateCode: '19',
+      address: 'Howrah Industrial Zone', city: 'Kolkata', phone: '+91 33 2664 7788',
+    },
+  })
+  const steelTrader = await db.party.create({
+    data: {
+      code: 'SUPP-001', name: 'Pune Steel Traders',
+      types: 'SUPPLIER', gstin: makeGstin('27', 'AAKPS6033F1Z'), stateCode: '27',
+      address: 'Bhawani Peth Steel Market', city: 'Pune', phone: '+91 20 2446 0918',
+    },
+  })
+  const alloysSupply = await db.party.create({
+    data: {
+      code: 'SUPP-002', name: 'Mumbai Alloys Supply Corp.',
+      types: 'SUPPLIER', gstin: makeGstin('27', 'AABCM9955E1Z'), stateCode: '27',
+      address: 'Kalamboli Steel Market', city: 'Navi Mumbai', phone: '+91 22 2739 5566',
+    },
+  })
+  await db.party.create({
+    data: {
+      code: 'SUPP-003', name: 'Nagpur Ferro Alloys',
+      types: 'SUPPLIER', gstin: makeGstin('27', 'AACCN2210H1Z'), stateCode: '27',
+      address: 'MIDC Hingna', city: 'Nagpur', phone: '+91 712 226 3344',
+      openingBal: -25000, // payable
+    },
+  })
+
+  // ---------- Items ----------
+  const gearBlank = await db.item.create({
+    data: { code: 'FG-1001', name: 'Gear Blank C45', groupName: 'Finished Goods', hsn: '8483', uom: 'PCS', gstRate: 18, saleRate: 850, costRate: 520, reorderLevel: 40 },
+  })
+  const flange = await db.item.create({
+    data: { code: 'FG-1002', name: 'Flange DN50 SS316', groupName: 'Finished Goods', hsn: '7307', uom: 'PCS', gstRate: 18, saleRate: 640, costRate: 380, reorderLevel: 60 },
+  })
+  const shaft = await db.item.create({
+    data: { code: 'FG-1003', name: 'Input Shaft EN24', groupName: 'Finished Goods', hsn: '8483', uom: 'PCS', gstRate: 18, saleRate: 1200, costRate: 750, reorderLevel: 25 },
+  })
+  const msPlate = await db.item.create({
+    data: { code: 'RM-2001', name: 'MS Plate 12mm', groupName: 'Raw Material', hsn: '7208', uom: 'KG', gstRate: 18, saleRate: 68, costRate: 52, reorderLevel: 500 },
+  })
+  const brassRod = await db.item.create({
+    data: { code: 'RM-2002', name: 'Brass Rod 25mm', groupName: 'Raw Material', hsn: '7407', uom: 'KG', gstRate: 18, saleRate: 520, costRate: 410, reorderLevel: 200 },
+  })
+  const jwService = await db.item.create({
+    data: { code: 'JW-SERVICE', name: 'Jobwork Services', groupName: 'Services', hsn: '998887', isService: true, isStockItem: false, uom: 'PCS', gstRate: 18, saleRate: 0, costRate: 0 },
+  })
+
+  // ---------- Party-specific process rates (Mahindra contract) ----------
+  await db.partyProcessRate.createMany({
+    data: [
+      { partyId: mahindra.id, processId: ht.id, rate: 8.5, lotCharge: 120 },
+      { partyId: mahindra.id, processId: galv.id, rate: 13, lotCharge: 180 },
+    ],
+  })
+
+  // ---------- Opening stock ----------
+  await postOpeningStock({
+    date: daysAgo(75),
+    warehouseId: main.id,
+    rows: [
+      { itemId: msPlate.id, qty: 5000, rate: 52 },
+      { itemId: brassRod.id, qty: 800, rate: 410 },
+      { itemId: flange.id, qty: 100, rate: 380 },
+    ],
+  })
+
+  // ---------- Purchases ----------
+  const pin1 = await postPurchaseInvoice({
+    partyId: steelTrader.id,
+    date: daysAgo(48),
+    poNo: 'PO-2026-014',
+    warehouseId: main.id,
+    lines: [
+      { itemId: msPlate.id, qty: 3000, rate: 54 },
+      { itemId: brassRod.id, qty: 200, rate: 415 },
+    ],
+  })
+  const pin2 = await postPurchaseInvoice({
+    partyId: alloysSupply.id,
+    date: daysAgo(3),
+    poNo: 'PO-2026-019',
+    warehouseId: main.id,
+    lines: [{ itemId: msPlate.id, qty: 1500, rate: 55 }],
+  })
+
+  // ---------- Sales ----------
+  const inv1 = await postSalesInvoice({
+    partyId: mahindra.id,
+    date: daysAgo(30),
+    poNo: 'MMW/PO/8841',
+    lines: [{ itemId: flange.id, qty: 50, rate: 640 }],
+  })
+  const inv2 = await postSalesInvoice({
+    partyId: gujarat.id,
+    date: daysAgo(24),
+    lines: [{ itemId: brassRod.id, qty: 250, rate: 520 }],
+  })
+  const inv3 = await postSalesInvoice({
+    partyId: bengal.id,
+    date: daysAgo(2),
+    taxInclusive: true,
+    lines: [
+      { itemId: flange.id, qty: 40, rate: 640 },
+      { itemId: msPlate.id, qty: 200, rate: 68, discPct: 5 },
+    ],
+  })
+
+  // ---------- Payments ----------
+  await postPayment({
+    type: 'RECEIPT',
+    partyId: mahindra.id,
+    date: daysAgo(20),
+    amount: 30000,
+    mode: 'BANK',
+    refNo: 'NEFT-884120',
+    allocations: [{ invoiceType: 'SALES', invoiceNo: inv1.invoiceNo, amount: 30000 }],
+  })
+  await postPayment({
+    type: 'PAYMENT',
+    partyId: steelTrader.id,
+    date: daysAgo(18),
+    amount: 100000,
+    mode: 'BANK',
+    refNo: 'RTGS-552103',
+    allocations: [{ invoiceType: 'PURCHASE', invoiceNo: pin1.invoiceNo, amount: 100000 }],
+  })
+  await postPayment({
+    type: 'RECEIPT',
+    partyId: gujarat.id,
+    date: daysAgo(2),
+    amount: 25000,
+    mode: 'UPI',
+    refNo: 'UPI-7712093',
+    allocations: [],
+  })
+
+  // ---------- Jobwork chain (core workflow) ----------
+  // Inward from Mahindra: gear blanks + shafts for treatment
+  const inward = await postJobworkInward({
+    partyId: mahindra.id,
+    date: daysAgo(22),
+    challanNo: 'MMW/CH/2026-118',
+    warehouseId: jw.id,
+    notes: 'Customer material for heat treatment + machining batch',
+    items: [
+      { itemId: gearBlank.id, batchNo: 'GB-BATCH-07', qty: 200, weight: 480 },
+      { itemId: shaft.id, batchNo: 'SH-BATCH-03', qty: 150, weight: 420 },
+    ],
+  })
+
+  // Job card 1: gears full chain; shafts partial (100 of 150)
+  await postJobCard({
+    inwardId: inward.id,
+    date: daysAgo(16),
+    notes: 'Batch 07 — line 2',
+    lines: [
+      { inwardItemId: inward.items[0].id, qty: 200, weight: 480, processIds: [shot.id, ht.id, qc.id] },
+      { inwardItemId: inward.items[1].id, qty: 100, weight: 280, processIds: [ht.id, mach.id] },
+    ],
+  })
+  // Job card 2: remaining 50 shafts → inward COMPLETED
+  await postJobCard({
+    inwardId: inward.id,
+    date: daysAgo(9),
+    notes: 'Shaft balance quantity',
+    lines: [{ inwardItemId: inward.items[1].id, qty: 50, weight: 140, processIds: [ht.id, mach.id, qc.id] }],
+  })
+
+  // Certificate
+  const cert = await issueCertificate(inward.id, daysAgo(6))
+
+  // Jobwork invoice (service lines per process, SAC 998887, income → JWIN)
+  const jwInv = await generateJobworkInvoice(inward.id, daysAgo(2))
+
+  // One more open inward to show the pending report
+  await postJobworkInward({
+    partyId: gujarat.id,
+    date: daysAgo(1),
+    challanNo: 'GHC/CH/4412',
+    warehouseId: jw.id,
+    items: [
+      { itemId: gearBlank.id, batchNo: 'GB-GUJ-01', qty: 120, weight: 290 },
+      { itemId: shaft.id, batchNo: 'SH-GUJ-01', qty: 80, weight: 225 },
+    ],
+  })
+
+  // Unallocated advance left on Gujarat shows in outstanding; verify trial balance
+  const tb = await db.accountLedger.groupBy({ by: ['account'], _sum: { debit: true, credit: true } })
+  const dr = tb.reduce((s, r) => s + (r._sum.debit ?? 0), 0)
+  const cr = tb.reduce((s, r) => s + (r._sum.credit ?? 0), 0)
+  if (Math.abs(dr - cr) > 0.01) {
+    throw new Error(`Seed produced unbalanced GL (Dr ${dr} vs Cr ${cr}) — refusing to ship broken demo data`)
+  }
+
+  return {
+    seeded: true,
+    company: company.name,
+    counts: {
+      parties: 7, items: 6, processes: 6, warehouses: 2,
+      purchaseInvoices: 2, salesInvoices: 4, payments: 3,
+      jobworkInwards: 2, jobCards: 2, certificates: 1,
+    },
+    sample: {
+      firstSalesInvoice: inv1.invoiceNo,
+      jobworkInward: inward.inwardNo,
+      jobworkInvoice: jwInv.invoiceNo,
+      certificate: cert.certNo,
+    },
+    trialBalanceDr: Math.round(dr * 100) / 100,
+    trialBalanceCr: Math.round(cr * 100) / 100,
+  }
+}

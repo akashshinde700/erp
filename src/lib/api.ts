@@ -1,0 +1,26 @@
+import { NextResponse } from 'next/server'
+import { ZodError } from 'zod'
+import { Prisma } from '@prisma/client'
+import { BusinessError } from './accounting'
+
+export function ok(data: unknown, status = 200) {
+  return NextResponse.json({ success: true, data })
+}
+
+export function fail(error: string, status = 400) {
+  return NextResponse.json({ success: false, error }, { status })
+}
+
+export function handleError(e: unknown) {
+  if (e instanceof BusinessError) return fail(e.message, e.status)
+  if (e instanceof ZodError) {
+    return fail(e.issues.map((i) => `${i.path.join('.') || 'body'}: ${i.message}`).join('; '), 400)
+  }
+  if (e instanceof Prisma.PrismaClientKnownRequestError) {
+    if (e.code === 'P2002') return fail('A record with this code/number already exists', 409)
+    if (e.code === 'P2025') return fail('Record not found', 404)
+  }
+  console.error('[api]', e)
+  const msg = e instanceof Error ? e.message : 'Internal server error'
+  return fail(msg, 500)
+}

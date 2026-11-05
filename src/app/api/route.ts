@@ -1,5 +1,12 @@
-import { NextResponse } from "next/server";
+import { ok } from '@/lib/api'
+import { db } from '@/lib/db'
 
 export async function GET() {
-  return NextResponse.json({ message: "Hello, world!" });
+  const company = await db.company.findFirst({ select: { name: true, gstin: true } })
+  return ok({
+    app: 'ForgeERP',
+    status: 'running',
+    company: company?.name ?? null,
+    modules: ['dashboard', 'sales', 'purchase', 'inventory', 'jobwork', 'accounting', 'reports', 'masters', 'docs'],
+  })
 }

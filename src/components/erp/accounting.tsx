@@ -84,8 +84,8 @@ export function AccountingView() {
       />
       <Tabs value={tab} onValueChange={(v) => setTab(v as 'payments' | 'ledger')}>
         <TabsList className="h-11 w-full justify-start overflow-x-auto sm:w-auto">
-          <TabsTrigger value="payments" className="h-9">Payments</TabsTrigger>
-          <TabsTrigger value="ledger" className="h-9">Party Ledger</TabsTrigger>
+          <TabsTrigger value="payments" className="h-11 sm:h-9">Payments</TabsTrigger>
+          <TabsTrigger value="ledger" className="h-11 sm:h-9">Party Ledger</TabsTrigger>
         </TabsList>
         <TabsContent value="payments" className="mt-4">
           <PaymentsTab preset={paymentPreset} onPresetConsumed={() => setPaymentPreset(null)} />
@@ -448,6 +448,7 @@ function NewPaymentDialog({
               <Input
                 id="pay-amount"
                 type="number"
+                inputMode="decimal"
                 min="0"
                 step="any"
                 value={amount}
@@ -500,7 +501,7 @@ function NewPaymentDialog({
                       <TableRow>
                         <TableHead>Invoice</TableHead>
                         <TableHead className="hidden sm:table-cell">Date</TableHead>
-                        <TableHead className="text-right">Outstanding</TableHead>
+                        <TableHead className="hidden text-right sm:table-cell">Outstanding</TableHead>
                         <TableHead className="w-32 text-right">Allocate ₹</TableHead>
                       </TableRow>
                     </TableHeader>
@@ -513,12 +514,13 @@ function NewPaymentDialog({
                           <TableRow key={inv.id}>
                             <TableCell className="font-medium tabular-nums">{inv.invoiceNo}</TableCell>
                             <TableCell className="hidden whitespace-nowrap text-xs sm:table-cell">{dateStr(inv.date)}</TableCell>
-                            <TableCell className="text-right tabular-nums">
+                            <TableCell className="hidden text-right tabular-nums sm:table-cell">
                               <Money value={outstanding} plain />
                             </TableCell>
                             <TableCell>
                               <Input
                                 type="number"
+                                inputMode="decimal"
                                 min="0"
                                 max={outstanding}
                                 step="any"
@@ -634,7 +636,7 @@ function PartyLedgerTab({ presetPartyId }: { presetPartyId?: string }) {
                     <TableRow>
                       <TableHead>Date</TableHead>
                       <TableHead>Voucher</TableHead>
-                      <TableHead>Account</TableHead>
+                      <TableHead className="hidden sm:table-cell">Account</TableHead>
                       <TableHead className="text-right">Debit</TableHead>
                       <TableHead className="text-right">Credit</TableHead>
                       <TableHead className="text-right">Balance</TableHead>
@@ -642,7 +644,10 @@ function PartyLedgerTab({ presetPartyId }: { presetPartyId?: string }) {
                   </TableHeader>
                   <TableBody>
                     <TableRow className="bg-muted/40">
-                      <TableCell colSpan={5} className="text-sm font-medium">
+                      <TableCell colSpan={5} className="hidden text-sm font-medium sm:table-cell">
+                        Opening balance
+                      </TableCell>
+                      <TableCell colSpan={4} className="text-sm font-medium sm:hidden">
                         Opening balance
                       </TableCell>
                       <TableCell className="text-right font-semibold tabular-nums">₹ {money(data.openingBal)}</TableCell>
@@ -654,14 +659,19 @@ function PartyLedgerTab({ presetPartyId }: { presetPartyId?: string }) {
                           <span className="block text-xs font-medium">{r.voucherType}</span>
                           <span className="block text-xs tabular-nums text-muted-foreground">{r.voucherNo}</span>
                         </TableCell>
-                        <TableCell className="text-sm">{r.accountName}</TableCell>
+                        <TableCell className="hidden text-sm sm:table-cell">{r.accountName}</TableCell>
                         <TableCell className="text-right tabular-nums">{r.debit > 0 ? money(r.debit) : ''}</TableCell>
                         <TableCell className="text-right tabular-nums">{r.credit > 0 ? money(r.credit) : ''}</TableCell>
                         <TableCell className="text-right font-medium tabular-nums">₹ {money(r.balance)}</TableCell>
                       </TableRow>
                     ))}
                     <TableRow className="bg-muted/40 font-semibold">
-                      <TableCell colSpan={3} className="text-sm">
+                      <TableCell colSpan={3} className="hidden text-sm sm:table-cell">
+                        <span className="inline-flex items-center gap-1.5">
+                          <Scale className="size-3.5" aria-hidden /> Closing
+                        </span>
+                      </TableCell>
+                      <TableCell colSpan={2} className="text-sm sm:hidden">
                         <span className="inline-flex items-center gap-1.5">
                           <Scale className="size-3.5" aria-hidden /> Closing
                         </span>

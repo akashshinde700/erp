@@ -16,19 +16,27 @@
  *  - plan limits (0 = unlimited; org override wins) checked on master create.
  */
 
+import { timingSafeEqual } from 'node:crypto'
 import { db } from './db'
 import { BusinessError } from './accounting'
 import { currentSession, hashPassword } from './auth'
+import { platformAdminKey, randomPassword } from './secrets'
 
-export const PLATFORM_KEY = process.env.PLATFORM_ADMIN_KEY ?? 'forge-admin'
+/** The platform admin key (env override, else a persisted per-install random value).
+ *  Function — never a module-level constant — so installs without the env var
+ *  can never be unlocked with a public repo default. */
+export function PLATFORM_KEY(): string {
+  return platformAdminKey()
+}
 
 // ---------- platform administrator (SUPER_ADMIN login, like the reference SaaS) ----------
 
 /** The operator's own company — never billed, blocked or listed as a customer org. */
 export const PLATFORM_COMPANY_NAME = process.env.PLATFORM_COMPANY_NAME ?? 'Forge Platform Operations'
-/** Default SUPER_ADMIN credentials (demo install; override via env on real deployments). */
+/** SUPER_ADMIN login email (env override). The password is env-set or a RANDOM
+ *  value generated at bootstrap and announced once in the server log — never a
+ *  public repo constant, never rendered on any screen. */
 export const PLATFORM_ADMIN_EMAIL = (process.env.PLATFORM_ADMIN_EMAIL ?? 'admin@forgeplatform.example.com').trim().toLowerCase()
-export const PLATFORM_ADMIN_PASSWORD = process.env.PLATFORM_ADMIN_PASSWORD ?? 'platform123'
 export const SUPER_ADMIN_ROLE = 'SUPER_ADMIN'
 
 /** True when the signed-in user is the platform administrator (any org user with the role). */
@@ -58,11 +66,20 @@ export async function ensurePlatformAdmin(): Promise<void> {
     const name = nameTaken && !nameTaken.isPlatform ? `${PLATFORM_COMPANY_NAME} #2` : PLATFORM_COMPANY_NAME
     company = await db.company.create({ data: { name, email: PLATFORM_ADMIN_EMAIL, isPlatform: true } })
   }
+  // Password policy: env override wins (min 8 chars); otherwise a RANDOM
+  // password is generated and announced exactly once in the server log.
+  const envPassword = process.env.PLATFORM_ADMIN_PASSWORD
+  const password = envPassword && envPassword.length >= 8 ? envPassword : randomPassword(18)
+  if (!envPassword || envPassword.length < 8) {
+    console.info(
+      `[platform] SUPER_ADMIN bootstrap: ${PLATFORM_ADMIN_EMAIL} / ${password}\n[platform] This password is printed ONCE — store it now; set PLATFORM_ADMIN_PASSWORD to control future installs.`
+    )
+  }
   await db.orgUser.create({
     data: {
       name: 'Platform Admin',
       email: PLATFORM_ADMIN_EMAIL,
-      passwordHash: hashPassword(PLATFORM_ADMIN_PASSWORD),
+      passwordHash: hashPassword(password),
       role: SUPER_ADMIN_ROLE,
       companyId: company.id,
     },
@@ -119,13 +136,17 @@ export async function assertFeature(feature: PlanFeatureKey): Promise<void> {
   }
 }
 
-/** Platform admin key check only (header, or ?platformKey= for browser downloads). */
+/** Platform admin key check — HEADER ONLY (x-platform-key), constant-time.
+ *  The key is env-set or a persisted per-install random value (never a public
+ *  default). Query-string keys are rejected: URLs leak into access logs,
+ *  browser history and Referer headers. Browser downloads authenticate with
+ *  the SUPER_ADMIN session cookie instead. */
 export function platformKeyOk(req: Request): boolean {
   const header = req.headers.get('x-platform-key') ?? ''
-  if (header.length > 0 && header === PLATFORM_KEY) return true
-  // Query-param form for browser downloads from the console (GET /api/backup).
-  const q = new URL(req.url).searchParams.get('platformKey') ?? ''
-  return q.length > 0 && q === PLATFORM_KEY
+  if (header.length === 0) return false
+  const expected = Buffer.from(PLATFORM_KEY())
+  const actual = Buffer.from(header)
+  return expected.length === actual.length && timingSafeEqual(expected, actual)
 }
 
 /**
@@ -138,7 +159,9 @@ export async function requirePlatformAdmin(req: Request): Promise<void> {
   if (platformKeyOk(req)) return
   const session = await currentSession()
   if (session) {
-    const user = await db.orgUser.findUnique({ where: { id: session.uid }, select: { role: true } })
+    const user = await db.orgUser.findUnique({ where: { id: session.uid }, select: { role: true, tokenVersion: true } })
+    if (!user) throw new BusinessError('Platform administrator access required — sign in with the admin login', 401)
+    if ((session.tv ?? 0) !== user.tokenVersion) throw new BusinessError('Your session was revoked — sign in again', 401)
     if (isSuperAdmin(user)) return
   }
   throw new BusinessError('Platform administrator access required — sign in with the admin login', 401)
@@ -205,13 +228,19 @@ export function accessState(
   }
 }
 
-/** Guard for every business mutation route. Throws BusinessError(403/401). */
-export async function assertCompanyAccess(): Promise<void> {
+/** Guard for every business route (reads AND writes). Throws BusinessError(403/401).
+ *  - org blocked (suspended/expired) → 403
+ *  - logins exist → a session whose org IS the operating org is required;
+ *    the session is also DB-verified (user exists, tokenVersion matches) so
+ *    password resets revoke live sessions immediately.
+ *  Returns the acting user (role included) when authenticated, else null. */
+export async function assertCompanyAccess(): Promise<{ role: string } | null> {
   const org = await operatingCompany()
   const st = accessState(org)
   if (st.blocked) throw new BusinessError(st.message, 403)
-  // Sign-in gate: once org logins exist, mutations require a session whose
-  // org IS the operating org (the workspace this deployment serves).
+  // Sign-in gate: once org logins exist, every business route (GET included)
+  // requires a session whose org IS the operating org (the workspace this
+  // deployment serves).
   const logins = await db.orgUser.count()
   if (logins > 0) {
     const session = await currentSession()
@@ -219,7 +248,22 @@ export async function assertCompanyAccess(): Promise<void> {
     if (session.cid !== org?.id) {
       throw new BusinessError('Your organization has no ERP workspace on this deployment yet', 403)
     }
+    const user = await db.orgUser.findUnique({ where: { id: session.uid }, select: { role: true, tokenVersion: true } })
+    if (!user) throw new BusinessError('Sign in to your organization first', 401)
+    if ((session.tv ?? 0) !== user.tokenVersion) throw new BusinessError('Your session was revoked — sign in again', 401)
+    return { role: user.role }
   }
+  return null
+}
+
+/** Mutation guard: VIEWER logins are read-only (OWNER/ACCOUNTANT/SUPER_ADMIN mutate).
+ *  Call AFTER assertCompanyAccess in every POST/PUT/DELETE business handler. */
+export async function assertMutationAccess(): Promise<{ role: string } | null> {
+  const actor = await assertCompanyAccess()
+  if (actor && actor.role === 'VIEWER') {
+    throw new BusinessError('Your login is read-only (VIEWER) — this action needs the OWNER or an ACCOUNTANT', 403)
+  }
+  return actor
 }
 
 /** Effective limits: org override ?? plan ?? 0 (unlimited). */

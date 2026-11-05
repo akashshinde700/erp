@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { handleError } from '@/lib/api'
 import { db } from '@/lib/db'
 import { logAudit } from '@/lib/audit'
-import { assertFeature } from '@/lib/platform'
+import { assertCompanyAccess, assertFeature } from '@/lib/platform'
 import { buildInvoiceVoucher, buildPaymentVoucher, getCompany, vouchersToXml } from '@/lib/tally'
 
 /**
@@ -12,6 +12,7 @@ import { buildInvoiceVoucher, buildPaymentVoucher, getCompany, vouchersToXml } f
  */
 export async function GET(req: Request) {
   try {
+    await assertCompanyAccess()
     await assertFeature('exportData')
     const sp = new URL(req.url).searchParams
     const company = await getCompany()

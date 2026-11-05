@@ -1,0 +1,1196 @@
+     1→'use client'
+     2→
+     3→/**
+     4→ * ForgeERP — Jobwork module (the flagship chain):
+     5→ * Inward (multi item, qty + weight) → Job Cards (partial, multi-process,
+     6→ * over-processing guarded server-side with 5% tolerance) → Certificate →
+     7→ * Sales Invoice (source JOBWORK). Plus the pending report.
+     8→ */
+     9→
+    10→import { useEffect, useMemo, useState } from 'react'
+    11→import { toast } from 'sonner'
+    12→import {
+    13→  ArrowLeft,
+    14→  BadgeCheck,
+    15→  ClipboardList,
+    16→  FileCheck2,
+    17→  Loader2,
+    18→  PackageCheck,
+    19→  Plus,
+    20→  ReceiptText,
+    21→  Trash2,
+    22→  Wrench,
+    23→  XCircle,
+    24→} from 'lucide-react'
+    25→import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
+    26→import { Badge } from '@/components/ui/badge'
+    27→import { Button } from '@/components/ui/button'
+    28→import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+    29→import { Checkbox } from '@/components/ui/checkbox'
+    30→import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+    31→import { Input } from '@/components/ui/input'
+    32→import { Label } from '@/components/ui/label'
+    33→import { ScrollArea } from '@/components/ui/scroll-area'
+    34→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+    35→import { Separator } from '@/components/ui/separator'
+    36→import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+    37→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+    38→import { Textarea } from '@/components/ui/textarea'
+    39→import {
+    40→  apiDelete,
+    41→  apiPost,
+    42→  num,
+    43→  partyTypes,
+    44→  toastError,
+    45→  todayISO,
+    46→  useApi,
+    47→  useMasters,
+    48→  type JobworkCertificate,
+    49→  type JobworkInward,
+    50→  type JobworkPendingRow,
+    51→  type Process,
+    52→  type SalesInvoice,
+    53→} from './api'
+    54→import { EmptyState, Money, ProgressBar, SectionHeading, StatusBadge, TableSkeleton } from './bits'
+    55→import { useErpUi } from './store'
+    56→import { dateStr, money, qty as qtyFmt } from '@/lib/erp'
+    57→
+    58→// ===========================================================================
+    59→// Module view (tabs: inwards | pending)
+    60→// ===========================================================================
+    61→
+    62→export function JobworkView() {
+    63→  return (
+    64→    <div className="space-y-4">
+    65→      <SectionHeading
+    66→        title="Jobwork"
+    67→        description="Customer material inwards → multi-process job cards → certificate → GST invoice. The core manufacturing chain."
+    68→      />
+    69→      <Tabs defaultValue="inwards">
+    70→        <TabsList className="h-11 w-full justify-start overflow-x-auto sm:w-auto">
+    71→          <TabsTrigger value="inwards" className="h-9 gap-1.5">
+    72→            <ClipboardList className="size-4" aria-hidden /> Inwards
+    73→          </TabsTrigger>
+    74→          <TabsTrigger value="pending" className="h-9 gap-1.5">
+    75→            <Wrench className="size-4" aria-hidden /> Pending
+    76→          </TabsTrigger>
+    77→        </TabsList>
+    78→        <TabsContent value="inwards" className="mt-4">
+    79→          <InwardsTab />
+    80→        </TabsContent>
+    81→        <TabsContent value="pending" className="mt-4">
+    82→          <PendingTab />
+    83→        </TabsContent>
+    84→      </Tabs>
+    85→    </div>
+    86→  )
+    87→}
+    88→
+    89→// ---------- inwards list ----------
+    90→
+    91→function InwardsTab() {
+    92→  const setView = useErpUi((s) => s.setView)
+    93→  const list = useApi<JobworkInward[]>('/api/jobwork/inwards')
+    94→  const [createOpen, setCreateOpen] = useState(false)
+    95→  const inwards = list.data ?? []
+    96→
+    97→  const progressOf = (iw: JobworkInward) => {
+    98→    const total = iw.items.reduce((s, i) => s + i.qty, 0)
+    99→    const done = iw.items.reduce((s, i) => s + i.processedQty, 0)
+   100→    return { total, done, pct: total > 0 ? (done / total) * 100 : 0 }
+   101→  }
+   102→  const cardValue = (iw: JobworkInward) => iw.jobCards.reduce((s, c) => s + c.totalAmount, 0)
+   103→
+   104→  return (
+   105→    <div className="space-y-4">
+   106→      <div className="flex items-center justify-between gap-2">
+   107→        <p className="text-sm text-muted-foreground">
+   108→          {inwards.length} inward{inwards.length === 1 ? '' : 's'} — customer-owned material, value-neutral stock.
+   109→        </p>
+   110→        <Button onClick={() => setCreateOpen(true)} className="h-11 gap-2">
+   111→          <Plus className="size-4" aria-hidden /> New Inward
+   112→        </Button>
+   113→      </div>
+   114→
+   115→      <Card className="p-0">
+   116→        <CardContent className="p-0">
+   117→          {list.loading ? (
+   118→            <TableSkeleton rows={5} cols={6} />
+   119→          ) : inwards.length === 0 ? (
+   120→            <div className="p-6">
+   121→              <EmptyState
+   122→                title="No inwards yet"
+   123→                hint="Record a customer challan inward to start the jobwork chain."
+   124→                icon={ClipboardList}
+   125→                action={
+   126→                  <Button variant="outline" onClick={() => setCreateOpen(true)} className="mt-2 h-11 gap-2">
+   127→                    <Plus className="size-4" aria-hidden /> New Inward
+   128→                  </Button>
+   129→                }
+   130→              />
+   131→            </div>
+   132→          ) : (
+   133→            <div className="max-h-[62dvh] overflow-auto erp-scroll [&_[data-slot=table-container]]:overflow-visible">
+   134→              <Table>
+   135→                <TableHeader className="sticky top-0 z-10 bg-card">
+   136→                  <TableRow>
+   137→                    <TableHead>Inward No</TableHead>
+   138→                    <TableHead>Date</TableHead>
+   139→                    <TableHead>Party</TableHead>
+   140→                    <TableHead className="text-right">Items</TableHead>
+   141→                    <TableHead className="min-w-36">Progress</TableHead>
+   142→                    <TableHead className="text-right">Card Value</TableHead>
+   143→                    <TableHead>Status</TableHead>
+   144→                  </TableRow>
+   145→                </TableHeader>
+   146→                <TableBody>
+   147→                  {inwards.map((iw) => {
+   148→                    const p = progressOf(iw)
+   149→                    return (
+   150→                      <TableRow key={iw.id} className="cursor-pointer" onClick={() => setView('jobwork-detail', { id: iw.id })}>
+   151→                        <TableCell className="font-medium tabular-nums">{iw.inwardNo}</TableCell>
+   152→                        <TableCell className="whitespace-nowrap">{dateStr(iw.date)}</TableCell>
+   153→                        <TableCell>
+   154→                          <span className="block max-w-40 truncate">{iw.party?.name ?? '—'}</span>
+   155→                          <span className="block max-w-40 truncate text-xs text-muted-foreground">{iw.challanNo ? `Challan ${iw.challanNo}` : '—'}</span>
+   156→                        </TableCell>
+   157→                        <TableCell className="text-right tabular-nums">{iw.items.length}</TableCell>
+   158→                        <TableCell>
+   159→                          <div className="space-y-1">
+   160→                            <ProgressBar value={p.pct} />
+   161→                            <p className="text-xs tabular-nums text-muted-foreground">
+   162→                              {qtyFmt(p.done)} / {qtyFmt(p.total)} pcs
+   163→                            </p>
+   164→                          </div>
+   165→                        </TableCell>
+   166→                        <TableCell className="text-right font-semibold tabular-nums">
+   167→                          <Money value={cardValue(iw)} plain />
+   168→                        </TableCell>
+   169→                        <TableCell>
+   170→                          <StatusBadge status={iw.status} />
+   171→                        </TableCell>
+   172→                      </TableRow>
+   173→                    )
+   174→                  })}
+   175→                </TableBody>
+   176→              </Table>
+   177→            </div>
+   178→          )}
+   179→        </CardContent>
+   180→      </Card>
+   181→
+   182→      <NewInwardDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={() => list.reload()} key={`inw-${createOpen}`} />
+   183→    </div>
+   184→  )
+   185→}
+   186→
+   187→// ---------- new inward dialog ----------
+   188→
+   189→interface InwardRowDraft {
+   190→  key: number
+   191→  itemId: string
+   192→  batchNo: string
+   193→  qty: string
+   194→  weight: string
+   195→}
+   196→
+   197→function NewInwardDialog({
+   198→  open,
+   199→  onOpenChange,
+   200→  onCreated,
+   201→}: {
+   202→  open: boolean
+   203→  onOpenChange: (o: boolean) => void
+   204→  onCreated: () => void
+   205→}) {
+   206→  const { parties, items, warehouses } = useMasters()
+   207→  const customers = parties.filter((p) => p.active && partyTypes(p).includes('CUSTOMER'))
+   208→
+   209→  const [partyId, setPartyId] = useState('')
+   210→  const [date, setDate] = useState(todayISO())
+   211→  const [challanNo, setChallanNo] = useState('')
+   212→  const [warehouseId, setWarehouseId] = useState('')
+   213→  const [notes, setNotes] = useState('')
+   214→  const [rows, setRows] = useState<InwardRowDraft[]>([{ key: 1, itemId: '', batchNo: '', qty: '', weight: '' }])
+   215→  const [saving, setSaving] = useState(false)
+   216→
+   217→  const seq = rows.length ? Math.max(...rows.map((r) => r.key)) : 0
+   218→  const setRow = (key: number, patch: Partial<InwardRowDraft>) =>
+   219→    setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)))
+   220→
+   221→  const validRows = rows.filter((r) => r.itemId && num(r.qty) > 0)
+   222→
+   223→  const submit = async () => {
+   224→    if (!partyId) {
+   225→      toast.error('Select a customer party')
+   226→      return
+   227→    }
+   228→    if (validRows.length === 0) {
+   229→      toast.error('Add at least one item row with quantity > 0')
+   230→      return
+   231→    }
+   232→    setSaving(true)
+   233→    try {
+   234→      const res = await apiPost<JobworkInward>('/api/jobwork/inwards', {
+   235→        partyId,
+   236→        date,
+   237→        challanNo: challanNo.trim() || undefined,
+   238→        warehouseId: warehouseId || undefined,
+   239→        notes: notes.trim() || undefined,
+   240→        items: validRows.map((r) => ({
+   241→          itemId: r.itemId,
+   242→          batchNo: r.batchNo.trim() || undefined,
+   243→          qty: num(r.qty),
+   244→          weight: num(r.weight),
+   245→        })),
+   246→      })
+   247→      toast.success(`${res.inwardNo} recorded`, {
+   248→        description: `${validRows.length} item line(s) — material received into the jobwork store, status OPEN.`,
+   249→      })
+   250→      onCreated()
+   251→      onOpenChange(false)
+   252→      setRows([{ key: seq + 1, itemId: '', batchNo: '', qty: '', weight: '' }])
+   253→    } catch (e) {
+   254→      toastError(e)
+   255→    } finally {
+   256→      setSaving(false)
+   257→    }
+   258→  }
+   259→
+   260→  return (
+   261→    <Dialog open={open} onOpenChange={onOpenChange}>
+   262→      <DialogContent className="flex max-h-[92dvh] flex-col overflow-hidden sm:max-w-3xl">
+   263→        <DialogHeader>
+   264→          <DialogTitle>New Jobwork Inward</DialogTitle>
+   265→          <DialogDescription>
+   266→            Record the customer challan — items are booked qty + weight into the jobwork store (customer-owned,
+   267→            value-neutral).
+   268→          </DialogDescription>
+   269→        </DialogHeader>
+   270→
+   271→        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto erp-scroll-y pr-1">
+   272→          <div className="grid gap-4 sm:grid-cols-2">
+   273→            <div className="space-y-1.5">
+   274→              <Label>Customer</Label>
+   275→              <Select value={partyId || undefined} onValueChange={setPartyId}>
+   276→                <SelectTrigger className="h-11 w-full">
+   277→                  <SelectValue placeholder="Select customer…" />
+   278→                </SelectTrigger>
+   279→                <SelectContent>
+   280→                  {customers.map((p) => (
+   281→                    <SelectItem key={p.id} value={p.id}>
+   282→                      {p.code} — {p.name}
+   283→                    </SelectItem>
+   284→                  ))}
+   285→                </SelectContent>
+   286→              </Select>
+   287→            </div>
+   288→            <div className="space-y-1.5">
+   289→              <Label htmlFor="inw-date">Date</Label>
+   290→              <Input id="inw-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-11" />
+   291→            </div>
+   292→            <div className="space-y-1.5">
+   293→              <Label htmlFor="inw-challan">Challan No</Label>
+   294→              <Input id="inw-challan" value={challanNo} onChange={(e) => setChallanNo(e.target.value)} placeholder="Customer challan ref" className="h-11" />
+   295→            </div>
+   296→            <div className="space-y-1.5">
+   297→              <Label>Warehouse</Label>
+   298→              <Select value={warehouseId || undefined} onValueChange={(v) => setWarehouseId(v === 'none' ? '' : v)}>
+   299→                <SelectTrigger className="h-11 w-full">
+   300→                  <SelectValue placeholder="Optional — jobwork store" />
+   301→                </SelectTrigger>
+   302→                <SelectContent>
+   303→                  <SelectItem value="none">— skip —</SelectItem>
+   304→                  {warehouses.map((w) => (
+   305→                    <SelectItem key={w.id} value={w.id}>
+   306→                      {w.code} — {w.name}
+   307→                    </SelectItem>
+   308→                  ))}
+   309→                </SelectContent>
+   310→              </Select>
+   311→            </div>
+   312→          </div>
+   313→
+   314→          <div className="overflow-x-auto rounded-md border">
+   315→            <Table>
+   316→              <TableHeader>
+   317→                <TableRow>
+   318→                  <TableHead className="min-w-44">Item</TableHead>
+   319→                  <TableHead className="min-w-28">Batch No</TableHead>
+   320→                  <TableHead className="w-24 text-right">Qty (pcs)</TableHead>
+   321→                  <TableHead className="w-28 text-right">Weight (kg)</TableHead>
+   322→                  <TableHead className="w-12" />
+   323→                </TableRow>
+   324→              </TableHeader>
+   325→              <TableBody>
+   326→                {rows.map((r) => (
+   327→                  <TableRow key={r.key}>
+   328→                    <TableCell>
+   329→                      <Select value={r.itemId || undefined} onValueChange={(v) => setRow(r.key, { itemId: v })}>
+   330→                        <SelectTrigger className="h-11 w-full min-w-40">
+   331→                          <SelectValue placeholder="Pick item…" />
+   332→                        </SelectTrigger>
+   333→                        <SelectContent className="max-h-64">
+   334→                          {items
+   335→                            .filter((i) => i.active)
+   336→                            .map((i) => (
+   337→                              <SelectItem key={i.id} value={i.id}>
+   338→                                {i.code} — {i.name}
+   339→                              </SelectItem>
+   340→                            ))}
+   341→                        </SelectContent>
+   342→                      </Select>
+   343→                    </TableCell>
+   344→                    <TableCell>
+   345→                      <Input
+   346→                        value={r.batchNo}
+   347→                        onChange={(e) => setRow(r.key, { batchNo: e.target.value })}
+   348→                        placeholder="Optional"
+   349→                        className="h-11"
+   350→                        aria-label="Batch number"
+   351→                      />
+   352→                    </TableCell>
+   353→                    <TableCell>
+   354→                      <Input
+   355→                        type="number"
+   356→                        min="0"
+   357→                        step="any"
+   358→                        value={r.qty}
+   359→                        onChange={(e) => setRow(r.key, { qty: e.target.value })}
+   360→                        placeholder="0"
+   361→                        className="h-11 text-right tabular-nums"
+   362→                        aria-label="Quantity"
+   363→                      />
+   364→                    </TableCell>
+   365→                    <TableCell>
+   366→                      <Input
+   367→                        type="number"
+   368→                        min="0"
+   369→                        step="any"
+   370→                        value={r.weight}
+   371→                        onChange={(e) => setRow(r.key, { weight: e.target.value })}
+   372→                        placeholder="0"
+   373→                        className="h-11 text-right tabular-nums"
+   374→                        aria-label="Weight in kg"
+   375→                      />
+   376→                    </TableCell>
+   377→                    <TableCell>
+   378→                      <Button
+   379→                        variant="ghost"
+   380→                        size="icon"
+   381→                        className="size-11 text-muted-foreground hover:text-destructive md:size-9"
+   382→                        onClick={() => setRows((rs) => (rs.length > 1 ? rs.filter((x) => x.key !== r.key) : rs))}
+   383→                        disabled={rows.length === 1}
+   384→                        aria-label={`Remove row ${r.key}`}
+   385→                      >
+   386→                        <Trash2 className="size-4" aria-hidden />
+   387→                      </Button>
+   388→                    </TableCell>
+   389→                  </TableRow>
+   390→                ))}
+   391→              </TableBody>
+   392→            </Table>
+   393→          </div>
+   394→          <Button variant="outline" onClick={() => setRows((rs) => [...rs, { key: seq + 1, itemId: '', batchNo: '', qty: '', weight: '' }])} className="h-11 gap-2">
+   395→            <Plus className="size-4" aria-hidden /> Add item
+   396→          </Button>
+   397→
+   398→          <div className="space-y-1.5">
+   399→            <Label htmlFor="inw-notes">Notes</Label>
+   400→            <Textarea id="inw-notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional — e.g. material condition, dispatch instructions" rows={2} />
+   401→          </div>
+   402→        </div>
+   403→
+   404→        <DialogFooter className="gap-2 border-t pt-3">
+   405→          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving} className="h-11">
+   406→            Cancel
+   407→          </Button>
+   408→          <Button onClick={submit} disabled={saving} className="h-11 gap-2">
+   409→            {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+   410→            {saving ? 'Saving…' : 'Record Inward'}
+   411→          </Button>
+   412→        </DialogFooter>
+   413→      </DialogContent>
+   414→    </Dialog>
+   415→  )
+   416→}
+   417→
+   418→// ---------- pending report tab ----------
+   419→
+   420→function PendingTab() {
+   421→  const setView = useErpUi((s) => s.setView)
+   422→  const { data, loading } = useApi<JobworkPendingRow[]>('/api/reports?type=jobwork-pending')
+   423→  const rows = data ?? []
+   424→
+   425→  if (loading) return <Card className="p-0"><CardContent className="p-0"><TableSkeleton rows={5} cols={6} /></CardContent></Card>
+   426→  if (rows.length === 0) {
+   427→    return <EmptyState title="Nothing pending" hint="All inwards are fully processed and invoiced." icon={PackageCheck} />
+   428→  }
+   429→
+   430→  return (
+   431→    <div className="space-y-4">
+   432→      {rows.map((r) => (
+   433→        <Card key={r.inward.id} className="p-0">
+   434→          <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 border-b py-3">
+   435→            <CardTitle className="flex flex-wrap items-center gap-2 text-sm font-medium">
+   436→              <button type="button" className="font-semibold tabular-nums underline-offset-2 hover:underline" onClick={() => setView('jobwork-detail', { id: r.inward.id })}>
+   437→                {r.inward.inwardNo}
+   438→              </button>
+   439→              <StatusBadge status={r.inward.status} />
+   440→              <span className="text-muted-foreground">
+   441→                {r.inward.party.name} · {dateStr(r.inward.date)}
+   442→              </span>
+   443→            </CardTitle>
+   444→            <span className="text-sm text-muted-foreground">
+   445→              Card value <span className="font-semibold tabular-nums text-foreground">₹ {money(r.cardValue)}</span>
+   446→            </span>
+   447→          </CardHeader>
+   448→          <CardContent className="p-0">
+   449→            <div className="overflow-x-auto">
+   450→              <Table>
+   451→                <TableHeader>
+   452→                  <TableRow>
+   453→                    <TableHead>Item</TableHead>
+   454→                    <TableHead>Batch</TableHead>
+   455→                    <TableHead className="text-right">Received</TableHead>
+   456→                    <TableHead className="text-right">Processed</TableHead>
+   457→                    <TableHead className="text-right">Remaining</TableHead>
+   458→                    <TableHead className="text-right">Weight Rem.</TableHead>
+   459→                    <TableHead className="min-w-40">Pending Processes</TableHead>
+   460→                  </TableRow>
+   461→                </TableHeader>
+   462→                <TableBody>
+   463→                  {r.items.map((it, idx) => (
+   464→                    <TableRow key={`${it.item.id}-${it.batchNo ?? ''}-${idx}`}>
+   465→                      <TableCell>
+   466→                        <span className="block max-w-40 truncate font-medium">{it.item.name}</span>
+   467→                        <span className="block text-xs text-muted-foreground">{it.item.code}</span>
+   468→                      </TableCell>
+   469→                      <TableCell className="text-xs">{it.batchNo ?? '—'}</TableCell>
+   470→                      <TableCell className="text-right tabular-nums">{qtyFmt(it.receivedQty)} {it.item.uom}</TableCell>
+   471→                      <TableCell className="text-right tabular-nums">{qtyFmt(it.processedQty)}</TableCell>
+   472→                      <TableCell className="text-right font-medium tabular-nums">{qtyFmt(it.remainingQty)}</TableCell>
+   473→                      <TableCell className="text-right tabular-nums">{qtyFmt(it.remainingWeight)} kg</TableCell>
+   474→                      <TableCell>
+   475→                        <div className="flex flex-wrap gap-1">
+   476→                          {it.pendingProcesses.length === 0 ? (
+   477→                            <Badge variant="default" className="gap-1">
+   478→                              <BadgeCheck className="size-3" aria-hidden /> All done
+   479→                            </Badge>
+   480→                          ) : (
+   481→                            it.pendingProcesses.map((p) => (
+   482→                              <Badge key={p.id} variant="outline" className="gap-1">
+   483→                                <Wrench className="size-3" aria-hidden />
+   484→                                {p.code}
+   485→                              </Badge>
+   486→                            ))
+   487→                          )}
+   488→                        </div>
+   489→                      </TableCell>
+   490→                    </TableRow>
+   491→                  ))}
+   492→                </TableBody>
+   493→              </Table>
+   494→            </div>
+   495→          </CardContent>
+   496→        </Card>
+   497→      ))}
+   498→    </div>
+   499→  )
+   500→}
+   501→
+   502→// ===========================================================================
+   503→// Inward detail
+   504→// ===========================================================================
+   505→
+   506→export function JobworkDetailView({ id }: { id: string }) {
+   507→  const setView = useErpUi((s) => s.setView)
+   508→  const inv = useApi<JobworkInward | null>(`/api/jobwork/inwards/${id}`)
+   509→  const { processes } = useMasters()
+   510→  const [cardOpen, setCardOpen] = useState(false)
+   511→  const [busy, setBusy] = useState<'cert' | 'invoice' | null>(null)
+   512→  const [cancelling, setCancelling] = useState(false)
+   513→
+   514→  if (inv.loading) {
+   515→    return <TableSkeleton rows={8} cols={5} />
+   516→  }
+   517→  if (inv.error || !inv.data) {
+   518→    return <EmptyState title="Inward not found" hint={inv.error ?? 'Unknown inward.'} icon={XCircle} />
+   519→  }
+   520→  const iw = inv.data
+   521→  const completedCards = iw.jobCards.filter((c) => c.status === 'COMPLETED')
+   522→  const hasActiveCert = iw.certificates.some((c) => c.status === 'ISSUED')
+   523→  const anyRemaining = iw.items.some((i) => i.qty - i.processedQty > 0.0001)
+   524→  const totalQty = iw.items.reduce((s, i) => s + i.qty, 0)
+   525→  const totalWeight = iw.items.reduce((s, i) => s + i.weight, 0)
+   526→  const processedQty = iw.items.reduce((s, i) => s + i.processedQty, 0)
+   527→  const processedWeight = iw.items.reduce((s, i) => s + i.processedWeight, 0)
+   528→  const cardValue = completedCards.reduce((s, c) => s + c.totalAmount, 0)
+   529→  const pct = totalQty > 0 ? (processedQty / totalQty) * 100 : 0
+   530→
+   531→  const issueCertificate = async () => {
+   532→    setBusy('cert')
+   533→    try {
+   534→      const res = await apiPost<JobworkCertificate>('/api/jobwork/certificates', { inwardId: id })
+   535→      toast.success(`${res.certNo} issued`, {
+   536→        description: `${qtyFmt(res.totalQty)} pcs · ${qtyFmt(res.totalWeight)} kg · ₹ ${money(res.totalAmount)} process value.`,
+   537→      })
+   538→      inv.reload()
+   539→    } catch (e) {
+   540→      toastError(e)
+   541→    } finally {
+   542→      setBusy(null)
+   543→    }
+   544→  }
+   545→
+   546→  const generateInvoice = async () => {
+   547→    setBusy('invoice')
+   548→    try {
+   549→      const res = await apiPost<SalesInvoice>('/api/jobwork/invoices', { inwardId: id })
+   550→      toast.success(`${res.invoiceNo} generated`, {
+   551→        description: 'Jobwork invoice posted to Sales (source JOBWORK) — open the Sales module to view or print it.',
+   552→      })
+   553→      inv.reload()
+   554→    } catch (e) {
+   555→      toastError(e)
+   556→    } finally {
+   557→      setBusy(null)
+   558→    }
+   559→  }
+   560→
+   561→  const cancelInward = async () => {
+   562→    setCancelling(true)
+   563→    try {
+   564→      await apiDelete(`/api/jobwork/inwards/${id}`)
+   565→      toast.success(`${iw.inwardNo} cancelled`, { description: 'Reversal entries posted to the stock ledger.' })
+   566→      setView('jobwork')
+   567→    } catch (e) {
+   568→      toastError(e)
+   569→    } finally {
+   570→      setCancelling(false)
+   571→    }
+   572→  }
+   573→
+   574→  const cancelCard = async (cardId: string, cardNo: string) => {
+   575→    try {
+   576→      await apiDelete(`/api/jobwork/job-cards/${cardId}`)
+   577→      toast.success(`${cardNo} cancelled`, { description: 'Processed quantities rolled back on the inward items.' })
+   578→      inv.reload()
+   579→    } catch (e) {
+   580→      toastError(e)
+   581→    }
+   582→  }
+   583→
+   584→  return (
+   585→    <div className="space-y-4">
+   586→      {/* header */}
+   587→      <div className="flex flex-wrap items-start justify-between gap-2">
+   588→        <div className="flex items-center gap-2">
+   589→          <Button variant="ghost" size="icon" className="size-11" onClick={() => setView('jobwork')} aria-label="Back to inwards">
+   590→            <ArrowLeft className="size-5" aria-hidden />
+   591→          </Button>
+   592→          <div>
+   593→            <h2 className="flex items-center gap-2 text-lg font-semibold tabular-nums">
+   594→              {iw.inwardNo} <StatusBadge status={iw.status} />
+   595→            </h2>
+   596→            <p className="text-sm text-muted-foreground">
+   597→              {iw.party?.name} · {dateStr(iw.date)}
+   598→              {iw.challanNo ? ` · Challan ${iw.challanNo}` : ''}
+   599→            </p>
+   600→          </div>
+   601→        </div>
+   602→        <div className="flex flex-wrap items-center gap-2">
+   603→          <Button onClick={() => setCardOpen(true)} disabled={!anyRemaining || iw.status === 'CANCELLED' || iw.status === 'INVOICED'} className="h-11 gap-2">
+   604→            <Wrench className="size-4" aria-hidden /> New Job Card
+   605→          </Button>
+   606→          <Button variant="outline" onClick={issueCertificate} disabled={completedCards.length === 0 || hasActiveCert || iw.status === 'CANCELLED' || busy !== null} className="h-11 gap-2">
+   607→            {busy === 'cert' ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <FileCheck2 className="size-4" aria-hidden />}
+   608→            Issue Certificate
+   609→          </Button>
+   610→          <Button variant="outline" onClick={generateInvoice} disabled={completedCards.length === 0 || iw.status === 'INVOICED' || iw.status === 'CANCELLED' || busy !== null} className="h-11 gap-2">
+   611→            {busy === 'invoice' ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <ReceiptText className="size-4" aria-hidden />}
+   612→            Generate Invoice
+   613→          </Button>
+   614→          <AlertDialog>
+   615→            <AlertDialogTrigger asChild>
+   616→              <Button variant="destructive" disabled={iw.status === 'CANCELLED' || cancelling} className="h-11 gap-2">
+   617→                {cancelling ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <XCircle className="size-4" aria-hidden />}
+   618→                Cancel Inward
+   619→              </Button>
+   620→            </AlertDialogTrigger>
+   621→            <AlertDialogContent>
+   622→              <AlertDialogHeader>
+   623→                <AlertDialogTitle>Cancel {iw.inwardNo}?</AlertDialogTitle>
+   624→                <AlertDialogDescription>
+   625→                  Blocked if any completed job card exists. Cancellation posts a reversal to the stock ledger —
+   626→                  the inward stays visible as an audit trail.
+   627→                </AlertDialogDescription>
+   628→              </AlertDialogHeader>
+   629→              <AlertDialogFooter>
+   630→                <AlertDialogCancel className="h-11">Keep inward</AlertDialogCancel>
+   631→                <AlertDialogAction onClick={cancelInward} className="h-11" disabled={cancelling}>
+   632→                  {cancelling ? 'Cancelling…' : 'Cancel inward'}
+   633→                </AlertDialogAction>
+   634→              </AlertDialogFooter>
+   635→            </AlertDialogContent>
+   636→          </AlertDialog>
+   637→        </div>
+   638→      </div>
+   639→
+   640→      {/* progress summary */}
+   641→      <div className="grid gap-4 sm:grid-cols-3">
+   642→        <Card className="p-4">
+   643→          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Quantity processed</p>
+   644→          <p className="mt-1 text-xl font-semibold tabular-nums">
+   645→            {qtyFmt(processedQty)} <span className="text-sm font-normal text-muted-foreground">/ {qtyFmt(totalQty)} pcs</span>
+   646→          </p>
+   647→          <ProgressBar value={pct} className="mt-2" />
+   648→        </Card>
+   649→        <Card className="p-4">
+   650→          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Weight processed</p>
+   651→          <p className="mt-1 text-xl font-semibold tabular-nums">
+   652→            {qtyFmt(processedWeight)} <span className="text-sm font-normal text-muted-foreground">/ {qtyFmt(totalWeight)} kg</span>
+   653→          </p>
+   654→        </Card>
+   655→        <Card className="p-4">
+   656→          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Job card value (not yet invoiced)</p>
+   657→          <p className="mt-1 text-xl font-semibold tabular-nums">₹ {money(cardValue)}</p>
+   658→          <p className="mt-1 text-xs text-muted-foreground">
+   659→            {completedCards.length} completed card{completedCards.length === 1 ? '' : 's'}
+   660→            {hasActiveCert ? ' · certificate issued' : ''}
+   661→          </p>
+   662→        </Card>
+   663→      </div>
+   664→
+   665→      {/* items */}
+   666→      <Card className="p-0">
+   667→        <CardHeader className="border-b py-3">
+   668→          <CardTitle className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
+   669→            Inward Items
+   670→          </CardTitle>
+   671→        </CardHeader>
+   672→        <CardContent className="p-0">
+   673→          <div className="overflow-x-auto">
+   674→            <Table>
+   675→              <TableHeader>
+   676→                <TableRow>
+   677→                  <TableHead>Item</TableHead>
+   678→                  <TableHead>Batch</TableHead>
+   679→                  <TableHead className="text-right">Received Qty</TableHead>
+   680→                  <TableHead className="text-right">Processed Qty</TableHead>
+   681→                  <TableHead className="text-right">Remaining</TableHead>
+   682→                  <TableHead className="text-right">Weight (recv / proc / rem)</TableHead>
+   683→                  <TableHead className="min-w-28">Progress</TableHead>
+   684→                </TableRow>
+   685→              </TableHeader>
+   686→              <TableBody>
+   687→                {iw.items.map((it) => {
+   688→                  const rem = it.qty - it.processedQty
+   689→                  const remW = it.weight - it.processedWeight
+   690→                  const p = it.qty > 0 ? (it.processedQty / it.qty) * 100 : 0
+   691→                  return (
+   692→                    <TableRow key={it.id}>
+   693→                      <TableCell>
+   694→                        <span className="block max-w-40 truncate font-medium">{it.item?.name ?? it.itemId}</span>
+   695→                        <span className="block text-xs text-muted-foreground">{it.item?.code}</span>
+   696→                      </TableCell>
+   697→                      <TableCell className="text-xs">{it.batchNo ?? '—'}</TableCell>
+   698→                      <TableCell className="text-right tabular-nums">{qtyFmt(it.qty)}</TableCell>
+   699→                      <TableCell className="text-right tabular-nums">{qtyFmt(it.processedQty)}</TableCell>
+   700→                      <TableCell className="text-right font-medium tabular-nums">{qtyFmt(rem)}</TableCell>
+   701→                      <TableCell className="text-right text-xs tabular-nums text-muted-foreground">
+   702→                        {qtyFmt(it.weight)} / {qtyFmt(it.processedWeight)} / {qtyFmt(remW)}
+   703→                      </TableCell>
+   704→                      <TableCell>
+   705→                        <ProgressBar value={p} />
+   706→                      </TableCell>
+   707→                    </TableRow>
+   708→                  )
+   709→                })}
+   710→              </TableBody>
+   711→            </Table>
+   712→          </div>
+   713→        </CardContent>
+   714→      </Card>
+   715→
+   716→      {/* job cards */}
+   717→      <Card className="p-0">
+   718→        <CardHeader className="border-b py-3">
+   719→          <CardTitle className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
+   720→            Job Cards ({iw.jobCards.length})
+   721→          </CardTitle>
+   722→        </CardHeader>
+   723→        <CardContent className="space-y-4 p-4">
+   724→          {iw.jobCards.length === 0 ? (
+   725→            <EmptyState
+   726→              title="No job cards yet"
+   727→              hint="Create a job card to process inward items — partial quantities allowed, multiple processes per card."
+   728→              icon={Wrench}
+   729→            />
+   730→          ) : (
+   731→            iw.jobCards.map((c) => (
+   732→              <div key={c.id} className="rounded-lg border">
+   733→                <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/30 px-4 py-2.5">
+   734→                  <div className="flex flex-wrap items-center gap-2">
+   735→                    <span className="font-semibold tabular-nums">{c.cardNo}</span>
+   736→                    <StatusBadge status={c.status} />
+   737→                    <span className="text-xs text-muted-foreground">{dateStr(c.date)}</span>
+   738→                    {c.notes ? <span className="text-xs italic text-muted-foreground">— {c.notes}</span> : null}
+   739→                  </div>
+   740→                  <div className="flex items-center gap-3">
+   741→                    <span className="text-sm font-semibold tabular-nums">₹ {money(c.totalAmount)}</span>
+   742→                    {c.status === 'COMPLETED' ? (
+   743→                      <AlertDialog>
+   744→                        <AlertDialogTrigger asChild>
+   745→                          <Button variant="ghost" size="sm" className="h-11 gap-1.5 text-destructive hover:bg-destructive/10 hover:text-destructive md:h-9">
+   746→                            <XCircle className="size-4" aria-hidden /> Cancel card
+   747→                          </Button>
+   748→                        </AlertDialogTrigger>
+   749→                        <AlertDialogContent>
+   750→                          <AlertDialogHeader>
+   751→                            <AlertDialogTitle>Cancel {c.cardNo}?</AlertDialogTitle>
+   752→                            <AlertDialogDescription>
+   753→                              Processed quantities are rolled back onto the inward items. Blocked once a certificate
+   754→                              has been issued for this inward.
+   755→                            </AlertDialogDescription>
+   756→                          </AlertDialogHeader>
+   757→                          <AlertDialogFooter>
+   758→                            <AlertDialogCancel className="h-11">Keep card</AlertDialogCancel>
+   759→                            <AlertDialogAction onClick={() => cancelCard(c.id, c.cardNo)} className="h-11">
+   760→                              Cancel card
+   761→                            </AlertDialogAction>
+   762→                          </AlertDialogFooter>
+   763→                        </AlertDialogContent>
+   764→                      </AlertDialog>
+   765→                    ) : null}
+   766→                  </div>
+   767→                </div>
+   768→                <div className="overflow-x-auto">
+   769→                  <Table>
+   770→                    <TableHeader>
+   771→                      <TableRow>
+   772→                        <TableHead>Process</TableHead>
+   773→                        <TableHead>Basis</TableHead>
+   774→                        <TableHead className="text-right">Qty</TableHead>
+   775→                        <TableHead className="text-right">Weight</TableHead>
+   776→                        <TableHead className="text-right">Rate</TableHead>
+   777→                        <TableHead className="text-right">Lot Charge</TableHead>
+   778→                        <TableHead className="text-right">Amount</TableHead>
+   779→                      </TableRow>
+   780→                    </TableHeader>
+   781→                    <TableBody>
+   782→                      {(c.processes ?? []).map((p) => {
+   783→                        const item = iw.items.find((x) => x.id === p.inwardItemId)
+   784→                        return (
+   785→                          <TableRow key={p.id}>
+   786→                            <TableCell>
+   787→                              <span className="block max-w-40 truncate font-medium">{p.process?.name ?? p.processId}</span>
+   788→                              <span className="block text-xs text-muted-foreground">
+   789→                                {p.process?.code}
+   790→                                {item ? ` · ${item.item?.code ?? ''}${item.batchNo ? ` / ${item.batchNo}` : ''}` : ''}
+   791→                              </span>
+   792→                            </TableCell>
+   793→                            <TableCell>
+   794→                              <Badge variant="secondary" className="text-[11px]">
+   795→                                {p.basis === 'WEIGHT' ? 'per KG' : 'per piece'}
+   796→                              </Badge>
+   797→                            </TableCell>
+   798→                            <TableCell className="text-right tabular-nums">{qtyFmt(p.qty)}</TableCell>
+   799→                            <TableCell className="text-right tabular-nums">{qtyFmt(p.weight)} kg</TableCell>
+   800→                            <TableCell className="text-right tabular-nums">₹ {money(p.rate)}</TableCell>
+   801→                            <TableCell className="text-right tabular-nums">{p.lotCharge > 0 ? `₹ ${money(p.lotCharge)}` : '—'}</TableCell>
+   802→                            <TableCell className="text-right font-semibold tabular-nums">₹ {money(p.amount)}</TableCell>
+   803→                          </TableRow>
+   804→                        )
+   805→                      })}
+   806→                      <TableRow className="bg-muted/30">
+   807→                        <TableCell colSpan={6} className="text-right text-sm font-medium">
+   808→                          Card total (incl. lot charges)
+   809→                        </TableCell>
+   810→                        <TableCell className="text-right text-sm font-bold tabular-nums">₹ {money(c.totalAmount)}</TableCell>
+   811→                      </TableRow>
+   812→                    </TableBody>
+   813→                  </Table>
+   814→                </div>
+   815→              </div>
+   816→            ))
+   817→          )}
+   818→        </CardContent>
+   819→      </Card>
+   820→
+   821→      {/* certificates */}
+   822→      <Card className="p-0">
+   823→        <CardHeader className="border-b py-3">
+   824→          <CardTitle className="text-sm font-medium uppercase tracking-wide text-muted-foreground">
+   825→            Certificates ({iw.certificates.length})
+   826→          </CardTitle>
+   827→        </CardHeader>
+   828→        <CardContent className="p-4">
+   829→          {iw.certificates.length === 0 ? (
+   830→            <EmptyState
+   831→              title="No certificate issued"
+   832→              hint="Issue after job cards are completed — aggregates process-wise totals for the customer."
+   833→              icon={FileCheck2}
+   834→            />
+   835→          ) : (
+   836→            <div className="space-y-4">
+   837→              {iw.certificates.map((c) => (
+   838→                <CertificateBlock key={c.id} cert={c} />
+   839→              ))}
+   840→            </div>
+   841→          )}
+   842→        </CardContent>
+   843→      </Card>
+   844→
+   845→      <NewJobCardDialog
+   846→        inward={iw}
+   847→        processes={processes}
+   848→        open={cardOpen}
+   849→        onOpenChange={setCardOpen}
+   850→        onCreated={() => inv.reload()}
+   851→      />
+   852→    </div>
+   853→  )
+   854→}
+   855→
+   856→// ---------- certificate display ----------
+   857→
+   858→interface CertDetail {
+   859→  code: string
+   860→  name: string
+   861→  qty: number
+   862→  weight: number
+   863→  amount: number
+   864→}
+   865→
+   866→function CertificateBlock({ cert }: { cert: JobworkCertificate }) {
+   867→  const details = useMemo<CertDetail[]>(() => {
+   868→    try {
+   869→      const parsed: unknown = JSON.parse(cert.details ?? '[]')
+   870→      if (Array.isArray(parsed)) return parsed as CertDetail[]
+   871→    } catch {
+   872→      /* ignore malformed */
+   873→    }
+   874→    return []
+   875→  }, [cert.details])
+   876→
+   877→  return (
+   878→    <div className="rounded-lg border">
+   879→      <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/30 px-4 py-2.5">
+   880→        <div className="flex flex-wrap items-center gap-2">
+   881→          <span className="font-semibold tabular-nums">{cert.certNo}</span>
+   882→          <StatusBadge status={cert.status} />
+   883→          <span className="text-xs text-muted-foreground">{dateStr(cert.date)}</span>
+   884→        </div>
+   885→        <div className="flex flex-wrap gap-3 text-sm">
+   886→          <span className="tabular-nums">{qtyFmt(cert.totalQty)} pcs</span>
+   887→          <span className="tabular-nums">{qtyFmt(cert.totalWeight)} kg</span>
+   888→          <span className="font-semibold tabular-nums">₹ {money(cert.totalAmount)}</span>
+   889→        </div>
+   890→      </div>
+   891→      {details.length > 0 ? (
+   892→        <Table>
+   893→          <TableHeader>
+   894→            <TableRow>
+   895→              <TableHead>Process</TableHead>
+   896→              <TableHead className="text-right">Qty</TableHead>
+   897→              <TableHead className="text-right">Weight</TableHead>
+   898→              <TableHead className="text-right">Amount</TableHead>
+   899→            </TableRow>
+   900→          </TableHeader>
+   901→          <TableBody>
+   902→            {details.map((d) => (
+   903→              <TableRow key={d.code}>
+   904→                <TableCell>
+   905→                  <span className="font-medium">{d.name}</span>
+   906→                  <span className="block text-xs text-muted-foreground">{d.code}</span>
+   907→                </TableCell>
+   908→                <TableCell className="text-right tabular-nums">{qtyFmt(d.qty)}</TableCell>
+   909→                <TableCell className="text-right tabular-nums">{qtyFmt(d.weight)} kg</TableCell>
+   910→                <TableCell className="text-right tabular-nums">₹ {money(d.amount)}</TableCell>
+   911→              </TableRow>
+   912→            ))}
+   913→          </TableBody>
+   914→        </Table>
+   915→      ) : null}
+   916→    </div>
+   917→  )
+   918→}
+   919→
+   920→// ---------- new job card dialog ----------
+   921→
+   922→interface JcLineState {
+   923→  included: boolean
+   924→  qty: string
+   925→  weight: string
+   926→}
+   927→
+   928→function NewJobCardDialog({
+   929→  inward,
+   930→  processes,
+   931→  open,
+   932→  onOpenChange,
+   933→  onCreated,
+   934→}: {
+   935→  inward: JobworkInward
+   936→  processes: Process[]
+   937→  open: boolean
+   938→  onOpenChange: (o: boolean) => void
+   939→  onCreated: () => void
+   940→}) {
+   941→  const [date, setDate] = useState(todayISO())
+   942→  const [notes, setNotes] = useState('')
+   943→  const [saving, setSaving] = useState(false)
+   944→  const [lines, setLines] = useState<Record<string, JcLineState>>({})
+   945→  const [selected, setSelected] = useState<Record<string, boolean>>({})
+   946→
+   947→  // reset when re-opened, from the latest inward state
+   948→  useEffect(() => {
+   949→    if (!open) return
+   950→    const fresh: Record<string, JcLineState> = {}
+   951→    for (const it of inward.items) {
+   952→      const remQ = Math.max(0, it.qty - it.processedQty)
+   953→      const remW = Math.max(0, it.weight - it.processedWeight)
+   954→      fresh[it.id] = { included: remQ > 0, qty: String(remQ), weight: String(remW) }
+   955→    }
+   956→    setLines(fresh)
+   957→    setSelected({})
+   958→    setDate(todayISO())
+   959→    setNotes('')
+   960→  }, [open, inward])
+   961→
+   962→  const activeProcesses = processes.filter((p) => p.active)
+   963→  const selectedIds = activeProcesses.filter((p) => selected[p.id]).map((p) => p.id)
+   964→  const includedLines = inward.items.filter((it) => lines[it.id]?.included && num(lines[it.id]?.qty) > 0)
+   965→
+   966→  // live estimate using process default rates (server may use party rates)
+   967→  const estimates = selectedIds.flatMap((pid) => {
+   968→    const p = activeProcesses.find((x) => x.id === pid)
+   969→    if (!p) return []
+   970→    const qtySum = includedLines.reduce((s, it) => s + num(lines[it.id]?.qty), 0)
+   971→    const weightSum = includedLines.reduce((s, it) => s + num(lines[it.id]?.weight), 0)
+   972→    const amount = p.basis === 'WEIGHT' ? weightSum * p.rate : qtySum * p.rate
+   973→    return [{ process: p, qtySum, weightSum, amount }]
+   974→  })
+   975→  const estimateTotal =
+   976→    estimates.reduce((s, e) => s + e.amount, 0) +
+   977→    selectedIds.reduce((s, pid) => {
+   978→      const p = activeProcesses.find((x) => x.id === pid)
+   979→      return s + (p?.lotCharge ?? 0)
+   980→    }, 0)
+   981→
+   982→  const setLine = (id: string, patch: Partial<JcLineState>) =>
+   983→    setLines((ls) => ({
+   984→      ...ls,
+   985→      [id]: { ...(ls[id] ?? { included: false, qty: '', weight: '' }), ...patch },
+   986→    }))
+   987→
+   988→  const toggleProcess = (id: string, on: boolean) => setSelected((s) => ({ ...s, [id]: on }))
+   989→
+   990→  const submit = async () => {
+   991→    if (includedLines.length === 0) {
+   992→      toast.error('Include at least one item line with qty > 0')
+   993→      return
+   994→    }
+   995→    if (selectedIds.length === 0) {
+   996→      toast.error('Select at least one process')
+   997→      return
+   998→    }
+   999→    setSaving(true)
+  1000→    try {
+  1001→      const res = await apiPost<{ cardNo: string; totalAmount: number }>('/api/jobwork/job-cards', {
+  1002→        inwardId: inward.id,
+  1003→        date,
+  1004→        notes: notes.trim() || undefined,
+  1005→        lines: includedLines.map((it) => ({
+  1006→          inwardItemId: it.id,
+  1007→          qty: num(lines[it.id].qty),
+  1008→          weight: num(lines[it.id].weight),
+  1009→          processIds: selectedIds,
+  1010→        })),
+  1011→      })
+  1012→      toast.success(`${res.cardNo} posted`, {
+  1013→        description: `Card value ₹ ${money(res.totalAmount)} — processed quantities bumped on the inward (5% over-tolerance guarded server-side).`,
+  1014→      })
+  1015→      onCreated()
+  1016→      onOpenChange(false)
+  1017→    } catch (e) {
+  1018→      toastError(e)
+  1019→    } finally {
+  1020→      setSaving(false)
+  1021→    }
+  1022→  }
+  1023→
+  1024→  return (
+  1025→    <Dialog open={open} onOpenChange={onOpenChange}>
+  1026→      <DialogContent className="flex max-h-[92dvh] flex-col overflow-hidden sm:max-w-3xl">
+  1027→        <DialogHeader>
+  1028→          <DialogTitle>New Job Card — {inward.inwardNo}</DialogTitle>
+  1029→          <DialogDescription>
+  1030→            Pick items (partial quantities allowed) and the processes to run. Rates resolve from party rates when
+  1031→            set, else process defaults — the estimate below uses defaults.
+  1032→          </DialogDescription>
+  1033→        </DialogHeader>
+  1034→
+  1035→        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto erp-scroll-y pr-1">
+  1036→          <div className="grid gap-4 sm:grid-cols-2">
+  1037→            <div className="space-y-1.5">
+  1038→              <Label htmlFor="jc-date">Date</Label>
+  1039→              <Input id="jc-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-11" />
+  1040→            </div>
+  1041→            <div className="space-y-1.5">
+  1042→              <Label htmlFor="jc-notes">Notes</Label>
+  1043→              <Input id="jc-notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional" className="h-11" />
+  1044→            </div>
+  1045→          </div>
+  1046→
+  1047→          <div className="overflow-x-auto rounded-md border">
+  1048→            <Table>
+  1049→              <TableHeader>
+  1050→                <TableRow>
+  1051→                  <TableHead className="w-12">Include</TableHead>
+  1052→                  <TableHead>Item</TableHead>
+  1053→                  <TableHead className="text-right">Remaining</TableHead>
+  1054→                  <TableHead className="w-24 text-right">Qty</TableHead>
+  1055→                  <TableHead className="w-28 text-right">Weight (kg)</TableHead>
+  1056→                </TableRow>
+  1057→              </TableHeader>
+  1058→              <TableBody>
+  1059→                {inward.items.map((it) => {
+  1060→                  const remQ = Math.max(0, it.qty - it.processedQty)
+  1061→                  const remW = Math.max(0, it.weight - it.processedWeight)
+  1062→                  const st = lines[it.id] ?? { included: false, qty: '0', weight: '0' }
+  1063→                  const disabled = remQ <= 0
+  1064→                  return (
+  1065→                    <TableRow key={it.id} className={disabled ? 'opacity-50' : ''}>
+  1066→                      <TableCell>
+  1067→                        <label className="flex size-11 cursor-pointer items-center justify-center">
+  1068→                          <Checkbox
+  1069→                            checked={st.included}
+  1070→                            disabled={disabled}
+  1071→                            onCheckedChange={(v) => setLine(it.id, { included: v === true })}
+  1072→                            aria-label={`Include ${it.item?.name ?? 'item'}`}
+  1073→                            className="size-5"
+  1074→                          />
+  1075→                        </label>
+  1076→                      </TableCell>
+  1077→                      <TableCell>
+  1078→                        <span className="block max-w-40 truncate font-medium">{it.item?.name ?? it.itemId}</span>
+  1079→                        <span className="block text-xs text-muted-foreground">
+  1080→                          {it.item?.code}
+  1081→                          {it.batchNo ? ` · batch ${it.batchNo}` : ''}
+  1082→                        </span>
+  1083→                      </TableCell>
+  1084→                      <TableCell className="text-right text-xs tabular-nums text-muted-foreground">
+  1085→                        {qtyFmt(remQ)} pcs / {qtyFmt(remW)} kg
+  1086→                      </TableCell>
+  1087→                      <TableCell>
+  1088→                        <Input
+  1089→                          type="number"
+  1090→                          min="0"
+  1091→                          max={remQ}
+  1092→                          step="any"
+  1093→                          value={st.qty}
+  1094→                          disabled={disabled || !st.included}
+  1095→                          onChange={(e) => setLine(it.id, { qty: e.target.value })}
+  1096→                          className="h-11 text-right tabular-nums"
+  1097→                          aria-label="Quantity to process"
+  1098→                        />
+  1099→                      </TableCell>
+  1100→                      <TableCell>
+  1101→                        <Input
+  1102→                          type="number"
+  1103→                          min="0"
+  1104→                          max={remW}
+  1105→                          step="any"
+  1106→                          value={st.weight}
+  1107→                          disabled={disabled || !st.included}
+  1108→                          onChange={(e) => setLine(it.id, { weight: e.target.value })}
+  1109→                          className="h-11 text-right tabular-nums"
+  1110→                          aria-label="Weight to process"
+  1111→                        />
+  1112→                      </TableCell>
+  1113→                    </TableRow>
+  1114→                  )
+  1115→                })}
+  1116→              </TableBody>
+  1117→            </Table>
+  1118→          </div>
+  1119→
+  1120→          <div className="space-y-2">
+  1121→            <Label>Processes</Label>
+  1122→            <div className="grid gap-2 sm:grid-cols-2">
+  1123→              {activeProcesses.map((p) => (
+  1124→                <label
+  1125→                  key={p.id}
+  1126→                  className="flex cursor-pointer items-start gap-3 rounded-md border p-3 transition-colors hover:bg-accent/50 has-[button]:border-primary"
+  1127→                >
+  1128→                  <Checkbox
+  1129→                    checked={!!selected[p.id]}
+  1130→                    onCheckedChange={(v) => toggleProcess(p.id, v === true)}
+  1131→                    className="mt-0.5 size-5"
+  1132→                    aria-label={`Process ${p.name}`}
+  1133→                  />
+  1134→                  <div className="min-w-0 flex-1">
+  1135→                    <p className="text-sm font-medium">
+  1136→                      {p.name} <span className="text-xs text-muted-foreground">({p.code})</span>
+  1137→                    </p>
+  1138→                    <p className="text-xs text-muted-foreground">
+  1139→                      ₹ {money(p.rate)} {p.basis === 'WEIGHT' ? 'per KG' : 'per piece'}
+  1140→                      {p.lotCharge > 0 ? ` · lot ₹ ${money(p.lotCharge)}` : ''}
+  1141→                    </p>
+  1142→                  </div>
+  1143→                </label>
+  1144→              ))}
+  1145→            </div>
+  1146→          </div>
+  1147→
+  1148→          {estimates.length > 0 ? (
+  1149→            <div className="rounded-md border bg-muted/30 p-3">
+  1150→              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+  1151→                Estimate (process default rates)
+  1152→              </p>
+  1153→              <ScrollArea className="max-h-40">
+  1154→                <div className="space-y-1 pr-2 pt-1 text-sm">
+  1155→                  {estimates.map((e) => (
+  1156→                    <div key={e.process.id} className="flex items-center justify-between gap-2">
+  1157→                      <span className="text-muted-foreground">
+  1158→                        {e.process.name}
+  1159→                        <span className="ml-1 text-xs">
+  1160→                          ({e.process.basis === 'WEIGHT' ? `${qtyFmt(e.weightSum)} kg` : `${qtyFmt(e.qtySum)} pcs`}
+  1161→                          {' × '}₹{money(e.process.rate)}
+  1162→                          {e.process.lotCharge > 0 ? ` + lot ₹${money(e.process.lotCharge)}` : ''})
+  1163→                        </span>
+  1164→                      </span>
+  1165→                      <span className="tabular-nums">₹ {money(e.amount + e.process.lotCharge)}</span>
+  1166→                    </div>
+  1167→                  ))}
+  1168→                  <Separator className="my-1" />
+  1169→                  <div className="flex justify-between font-semibold">
+  1170→                    <span>Estimated card total</span>
+  1171→                    <span className="tabular-nums">₹ {money(estimateTotal)}</span>
+  1172→                  </div>
+  1173→                  <p className="pt-1 text-[11px] text-muted-foreground">
+  1174→                    Server applies party-specific rates when configured (Masters → Party Rates) and validates
+  1175→                    over-processing with a 5% tolerance.
+  1176→                  </p>
+  1177→                </div>
+  1178→              </ScrollArea>
+  1179→            </div>
+  1180→          ) : null}
+  1181→        </div>
+  1182→
+  1183→        <DialogFooter className="gap-2 border-t pt-3">
+  1184→          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving} className="h-11">
+  1185→            Cancel
+  1186→          </Button>
+  1187→          <Button onClick={submit} disabled={saving} className="h-11 gap-2">
+  1188→            {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+  1189→            {saving ? 'Posting…' : 'Post Job Card'}
+  1190→          </Button>
+  1191→        </DialogFooter>
+  1192→      </DialogContent>
+  1193→    </Dialog>
+  1194→  )
+  1195→}
+  1196→

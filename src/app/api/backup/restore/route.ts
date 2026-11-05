@@ -7,6 +7,8 @@ import { requirePlatformAdmin } from '@/lib/platform'
  * POST /api/backup/restore — {confirm:'RESTORE', snapshot}
  * Platform-admin gated. Typed-confirm destructive restore inside ONE
  * transaction; validates the snapshot shape before touching anything.
+ * Restores OrgUser too (v2 snapshots) so a restore never empties the login
+ * table — otherwise the anonymous bootstrap route would own the workspace.
  */
 
 interface Snapshot {
@@ -20,31 +22,36 @@ export async function POST(req: Request) {
     const body = (await req.json()) as { confirm?: string; snapshot?: Snapshot }
     if (body.confirm !== 'RESTORE') return fail('Type RESTORE to confirm the destructive restore', 400)
     const snap = body.snapshot
-    if (!snap || snap.version !== 1 || !snap.data) return fail('Invalid snapshot — export a backup first', 400)
+    if (!snap || (snap.version !== 1 && snap.version !== 2) || !snap.data) {
+      return fail('Invalid snapshot — export a backup first', 400)
+    }
 
-    await db.$transaction(async (tx) => {
-      // children → parents wipe
-      await tx.stockLedger.deleteMany({})
-      await tx.accountLedger.deleteMany({})
-      await tx.paymentAllocation.deleteMany({})
-      await tx.payment.deleteMany({})
-      await tx.salesInvoiceItem.deleteMany({})
-      await tx.salesInvoice.deleteMany({})
-      await tx.purchaseInvoiceItem.deleteMany({})
-      await tx.purchaseInvoice.deleteMany({})
-      await tx.jobCardProcess.deleteMany({})
-      await tx.jobCard.deleteMany({})
-      await tx.jobworkCertificate.deleteMany({})
-      await tx.jobworkInwardItem.deleteMany({})
-      await tx.jobworkInward.deleteMany({})
-      await tx.partyProcessRate.deleteMany({})
-      await tx.party.deleteMany({})
-      await tx.item.deleteMany({})
-      await tx.warehouse.deleteMany({})
-      await tx.process.deleteMany({})
-      await tx.counter.deleteMany({})
-      await tx.auditLog.deleteMany({})
-      await tx.company.deleteMany({})
+    await db.$transaction(
+      async (tx) => {
+        // children → parents wipe
+        await tx.stockLedger.deleteMany({})
+        await tx.accountLedger.deleteMany({})
+        await tx.paymentAllocation.deleteMany({})
+        await tx.payment.deleteMany({})
+        await tx.salesInvoiceItem.deleteMany({})
+        await tx.salesInvoice.deleteMany({})
+        await tx.purchaseInvoiceItem.deleteMany({})
+        await tx.purchaseInvoice.deleteMany({})
+        await tx.jobCardProcess.deleteMany({})
+        await tx.jobCard.deleteMany({})
+        await tx.jobworkCertificate.deleteMany({})
+        await tx.jobworkInwardItem.deleteMany({})
+        await tx.jobworkInward.deleteMany({})
+        await tx.partyProcessRate.deleteMany({})
+        await tx.party.deleteMany({})
+        await tx.item.deleteMany({})
+        await tx.warehouse.deleteMany({})
+        await tx.process.deleteMany({})
+        await tx.counter.deleteMany({})
+        await tx.auditLog.deleteMany({})
+        await tx.orgUser.deleteMany({})
+        await tx.company.deleteMany({})
+        await tx.plan.deleteMany({})
 
       const d = snap.data!
       // parents → children insert
@@ -84,8 +91,12 @@ export async function POST(req: Request) {
       }
       if (d.certificates?.length) await tx.jobworkCertificate.createMany({ data: d.certificates as never })
       if (d.counters?.length) await tx.counter.createMany({ data: d.counters as never })
+      if (d.orgUsers?.length) await tx.orgUser.createMany({ data: d.orgUsers as never })
       if (d.auditLogs?.length) await tx.auditLog.createMany({ data: d.auditLogs as never })
-    })
+      },
+      // Full-database restore is heavier than the 5s interactive default.
+      { timeout: 60_000 }
+    )
     await logAudit('BACKUP', 'Restore', undefined, 'snapshot restored (typed RESTORE confirm)')
     return ok({ restored: true })
   } catch (e) {

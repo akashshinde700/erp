@@ -1,5 +1,6 @@
 import { fail, handleError, ok } from '@/lib/api'
 import { logAudit } from '@/lib/audit'
+import { assertCompanyAccess, assertMutationAccess } from '@/lib/platform'
 import { loadInvoiceVoucher, loadPaymentVoucher, vouchersToXml, getCompany, type TallyDocKind } from '@/lib/tally'
 
 /**
@@ -101,7 +102,7 @@ export async function GET(req: Request) {
   try {
     const mode = new URL(req.url).searchParams.get('mode')
 
-    // Connector poll: one pending job at a time.
+    // Connector poll: one pending job at a time (bearer-token gated, no cookie).
     if (mode === 'pending') {
       if (!(await bearerOk(req))) return fail('Connector token invalid or revoked', 401)
       const s = store()
@@ -114,6 +115,7 @@ export async function GET(req: Request) {
     }
 
     // UI status
+    await assertCompanyAccess()
     const s = store()
     const now = Date.now()
     const paired = !!s.tokenHash
@@ -140,6 +142,9 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   try {
+    // 'pair' and 'result' are connector-side actions (pairing code / bearer
+    // token gated — no session); every user-side action requires an
+    // operating-org session with mutation rights.
     const body = (await req.json()) as {
       action?: string
       code?: string
@@ -156,6 +161,7 @@ export async function POST(req: Request) {
     const action = body.action ?? ''
 
     if (action === 'new-code') {
+      await assertMutationAccess()
       const s = store()
       const code = randomCode()
       s.codeHash = await sha256(code)
@@ -184,6 +190,7 @@ export async function POST(req: Request) {
     }
 
     if (action === 'queue') {
+      await assertMutationAccess()
       const doc = (body.doc ?? '').toUpperCase() as TallyDocKind
       const id = body.id ?? ''
       if (!id || !['SALES', 'PURCHASE', 'PAYMENT'].includes(doc)) return fail('doc and id are required', 400)
@@ -231,6 +238,7 @@ export async function POST(req: Request) {
 
 export async function DELETE() {
   try {
+    await assertMutationAccess()
     const s = store()
     s.tokenHash = null
     s.codeHash = null

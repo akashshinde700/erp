@@ -69,12 +69,12 @@ export function MastersView() {
       />
       <Tabs defaultValue="parties">
         <TabsList className="h-11 w-full justify-start overflow-x-auto sm:w-auto">
-          <TabsTrigger value="parties" className="h-9">Parties</TabsTrigger>
-          <TabsTrigger value="items" className="h-9">Items</TabsTrigger>
-          <TabsTrigger value="warehouses" className="h-9">Warehouses</TabsTrigger>
-          <TabsTrigger value="processes" className="h-9">Processes</TabsTrigger>
-          <TabsTrigger value="party-rates" className="h-9">Party Rates</TabsTrigger>
-          <TabsTrigger value="company" className="h-9">Company</TabsTrigger>
+          <TabsTrigger value="parties" className="h-11 sm:h-9">Parties</TabsTrigger>
+          <TabsTrigger value="items" className="h-11 sm:h-9">Items</TabsTrigger>
+          <TabsTrigger value="warehouses" className="h-11 sm:h-9">Warehouses</TabsTrigger>
+          <TabsTrigger value="processes" className="h-11 sm:h-9">Processes</TabsTrigger>
+          <TabsTrigger value="party-rates" className="h-11 sm:h-9">Party Rates</TabsTrigger>
+          <TabsTrigger value="company" className="h-11 sm:h-9">Company</TabsTrigger>
         </TabsList>
         <TabsContent value="parties" className="mt-4"><PartiesTab /></TabsContent>
         <TabsContent value="items" className="mt-4"><ItemsTab /></TabsContent>
@@ -421,9 +421,9 @@ function PartyViewDialog({
         <div className="min-h-0 flex-1 overflow-hidden">
           <Tabs defaultValue={isCustomer ? 'sales' : 'purchases'}>
             <TabsList className="h-11 w-full justify-start overflow-x-auto sm:w-auto">
-              {isCustomer ? <TabsTrigger value="sales" className="h-9 text-xs">Sales ({salesRows.length})</TabsTrigger> : null}
-              {isSupplier ? <TabsTrigger value="purchases" className="h-9 text-xs">Purchases ({purchaseRows.length})</TabsTrigger> : null}
-              <TabsTrigger value="payments" className="h-9 text-xs">Payments ({paymentRows.length})</TabsTrigger>
+              {isCustomer ? <TabsTrigger value="sales" className="h-11 text-xs sm:h-9">Sales ({salesRows.length})</TabsTrigger> : null}
+              {isSupplier ? <TabsTrigger value="purchases" className="h-11 text-xs sm:h-9">Purchases ({purchaseRows.length})</TabsTrigger> : null}
+              <TabsTrigger value="payments" className="h-11 text-xs sm:h-9">Payments ({paymentRows.length})</TabsTrigger>
             </TabsList>
             {isCustomer ? (
               <TabsContent value="sales" className="mt-2">
@@ -608,13 +608,15 @@ function PartyDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[92dvh] overflow-y-auto erp-scroll-y sm:max-w-2xl">
+      <DialogContent className="flex max-h-[92dvh] flex-col overflow-hidden sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{party ? `Edit ${party.code}` : 'New Party'}</DialogTitle>
           <DialogDescription>Customers, suppliers and jobworkers — GSTIN is checksum-validated live.</DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-4 sm:grid-cols-2">
+        {/* Scrollable body — sticky footer keeps Save visible above the mobile keyboard */}
+        <div className="min-h-0 flex-1 overflow-y-auto erp-scroll-y">
+          <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label htmlFor="p-code">Code *</Label>
             <Input id="p-code" value={code} onChange={(e) => setCode(e.target.value)} placeholder="CUST-004" className="h-11" maxLength={20} />
@@ -700,6 +702,7 @@ function PartyDialog({
             <Input
               id="p-bal"
               type="number"
+              inputMode="decimal"
               step="any"
               value={openingBal}
               onChange={(e) => setOpeningBal(e.target.value)}
@@ -708,9 +711,10 @@ function PartyDialog({
             />
             <p className="text-xs text-muted-foreground">+ = receivable (customer), − = payable (supplier)</p>
           </div>
+          </div>
         </div>
 
-        <DialogFooter className="gap-2">
+        <DialogFooter className="gap-2 border-t pt-3">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving} className="h-11">
             Cancel
           </Button>
@@ -927,13 +931,15 @@ function ItemDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[92dvh] overflow-y-auto erp-scroll-y sm:max-w-2xl">
+      <DialogContent className="flex max-h-[92dvh] flex-col overflow-hidden sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>{item ? `Edit ${item.code}` : 'New Item'}</DialogTitle>
           <DialogDescription>Finished goods, raw material or service — services skip the stock ledger.</DialogDescription>
         </DialogHeader>
 
-        <div className="grid gap-4 sm:grid-cols-2">
+        {/* Scrollable body — sticky footer keeps Save visible above the mobile keyboard */}
+        <div className="min-h-0 flex-1 overflow-y-auto erp-scroll-y">
+          <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-1.5">
             <Label htmlFor="i-code">Code *</Label>
             <Input id="i-code" value={code} onChange={(e) => setCode(e.target.value)} placeholder="FG-1004" className="h-11" maxLength={30} />
@@ -982,15 +988,15 @@ function ItemDialog({
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="i-sale">Sale Rate ₹</Label>
-            <Input id="i-sale" type="number" min="0" step="any" value={saleRate} onChange={(e) => setSaleRate(e.target.value)} placeholder="0" className="h-11 text-right tabular-nums" />
+            <Input id="i-sale" type="number" inputMode="decimal" min="0" step="any" value={saleRate} onChange={(e) => setSaleRate(e.target.value)} placeholder="0" className="h-11 text-right tabular-nums" />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="i-cost">Cost Rate ₹</Label>
-            <Input id="i-cost" type="number" min="0" step="any" value={costRate} onChange={(e) => setCostRate(e.target.value)} placeholder="0" className="h-11 text-right tabular-nums" />
+            <Input id="i-cost" type="number" inputMode="decimal" min="0" step="any" value={costRate} onChange={(e) => setCostRate(e.target.value)} placeholder="0" className="h-11 text-right tabular-nums" />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="i-reorder">Reorder Level</Label>
-            <Input id="i-reorder" type="number" min="0" step="any" value={reorderLevel} onChange={(e) => setReorderLevel(e.target.value)} placeholder="0" className="h-11 text-right tabular-nums" />
+            <Input id="i-reorder" type="number" inputMode="decimal" min="0" step="any" value={reorderLevel} onChange={(e) => setReorderLevel(e.target.value)} placeholder="0" className="h-11 text-right tabular-nums" />
           </div>
           <div className="flex items-center gap-6 pt-4">
             <div className="flex items-center gap-2">
@@ -1016,9 +1022,10 @@ function ItemDialog({
               <Label htmlFor="i-stock" className="text-sm font-normal text-muted-foreground">Stock item</Label>
             </div>
           </div>
+          </div>
         </div>
 
-        <DialogFooter className="gap-2">
+        <DialogFooter className="gap-2 border-t pt-3">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving} className="h-11">
             Cancel
           </Button>
@@ -1173,11 +1180,13 @@ function WarehouseDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="flex max-h-[92dvh] flex-col overflow-hidden sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{warehouse ? `Edit ${warehouse.code}` : 'New Warehouse'}</DialogTitle>
           <DialogDescription>A physical stock location.</DialogDescription>
         </DialogHeader>
+        {/* Scrollable body — sticky footer keeps Save visible above the mobile keyboard */}
+        <div className="min-h-0 flex-1 overflow-y-auto erp-scroll-y">
         <div className="grid gap-4">
           <div className="space-y-1.5">
             <Label htmlFor="w-code">Code *</Label>
@@ -1192,7 +1201,8 @@ function WarehouseDialog({
             <Input id="w-loc" value={location} onChange={(e) => setLocation(e.target.value)} placeholder="Plant / city" className="h-11" />
           </div>
         </div>
-        <DialogFooter className="gap-2">
+        </div>
+        <DialogFooter className="gap-2 border-t pt-3">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving} className="h-11">
             Cancel
           </Button>
@@ -1252,12 +1262,12 @@ function ProcessesTab() {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="text-right">Seq</TableHead>
+                    <TableHead className="hidden text-right sm:table-cell">Seq</TableHead>
                     <TableHead>Code</TableHead>
                     <TableHead>Name</TableHead>
-                    <TableHead>Basis</TableHead>
+                    <TableHead className="hidden sm:table-cell">Basis</TableHead>
                     <TableHead className="text-right">Rate</TableHead>
-                    <TableHead className="text-right">Lot Charge</TableHead>
+                    <TableHead className="hidden text-right sm:table-cell">Lot Charge</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead className="w-36" />
                   </TableRow>
@@ -1268,16 +1278,16 @@ function ProcessesTab() {
                     .sort((a, b) => a.seq - b.seq)
                     .map((p) => (
                       <TableRow key={p.id}>
-                        <TableCell className="text-right tabular-nums">{p.seq}</TableCell>
+                        <TableCell className="hidden text-right tabular-nums sm:table-cell">{p.seq}</TableCell>
                         <TableCell className="font-mono text-xs font-medium">{p.code}</TableCell>
                         <TableCell className="font-medium">{p.name}</TableCell>
-                        <TableCell>
+                        <TableCell className="hidden sm:table-cell">
                           <Badge variant="secondary" className="text-[10px]">
                             {p.basis === 'WEIGHT' ? '₹ per KG' : '₹ per piece'}
                           </Badge>
                         </TableCell>
                         <TableCell className="text-right tabular-nums">₹ {money(p.rate)}</TableCell>
-                        <TableCell className="text-right tabular-nums">{p.lotCharge > 0 ? `₹ ${money(p.lotCharge)}` : '—'}</TableCell>
+                        <TableCell className="hidden text-right tabular-nums sm:table-cell">{p.lotCharge > 0 ? `₹ ${money(p.lotCharge)}` : '—'}</TableCell>
                         <TableCell>
                           <Badge variant={p.active ? 'default' : 'destructive'} className="text-[10px]">
                             {p.active ? 'ACTIVE' : 'INACTIVE'}
@@ -1373,11 +1383,13 @@ function ProcessDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="flex max-h-[92dvh] flex-col overflow-hidden sm:max-w-md">
         <DialogHeader>
           <DialogTitle>{process ? `Edit ${process.code}` : 'New Process'}</DialogTitle>
           <DialogDescription>A jobwork treatment step with its default rate.</DialogDescription>
         </DialogHeader>
+        {/* Scrollable body — sticky footer keeps Save visible above the mobile keyboard */}
+        <div className="min-h-0 flex-1 overflow-y-auto erp-scroll-y">
         <div className="grid gap-4">
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
@@ -1386,7 +1398,7 @@ function ProcessDialog({
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="pr-seq">Sequence</Label>
-              <Input id="pr-seq" type="number" value={seq} onChange={(e) => setSeq(e.target.value)} placeholder="1" className="h-11 text-right tabular-nums" />
+              <Input id="pr-seq" type="number" inputMode="decimal" value={seq} onChange={(e) => setSeq(e.target.value)} placeholder="1" className="h-11 text-right tabular-nums" />
             </div>
           </div>
           <div className="space-y-1.5">
@@ -1411,15 +1423,16 @@ function ProcessDialog({
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label htmlFor="pr-rate">Rate ₹</Label>
-              <Input id="pr-rate" type="number" min="0" step="any" value={rate} onChange={(e) => setRate(e.target.value)} placeholder="0" className="h-11 text-right tabular-nums" />
+              <Input id="pr-rate" type="number" inputMode="decimal" min="0" step="any" value={rate} onChange={(e) => setRate(e.target.value)} placeholder="0" className="h-11 text-right tabular-nums" />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="pr-lot">Lot Charge ₹</Label>
-              <Input id="pr-lot" type="number" min="0" step="any" value={lotCharge} onChange={(e) => setLotCharge(e.target.value)} placeholder="0" className="h-11 text-right tabular-nums" />
+              <Input id="pr-lot" type="number" inputMode="decimal" min="0" step="any" value={lotCharge} onChange={(e) => setLotCharge(e.target.value)} placeholder="0" className="h-11 text-right tabular-nums" />
             </div>
           </div>
         </div>
-        <DialogFooter className="gap-2">
+        </div>
+        <DialogFooter className="gap-2 border-t pt-3">
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving} className="h-11">
             Cancel
           </Button>
@@ -1519,9 +1532,9 @@ function PartyRatesTab() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Process</TableHead>
-                  <TableHead>Basis</TableHead>
-                  <TableHead className="text-right">Default Rate</TableHead>
-                  <TableHead className="text-right">Default Lot</TableHead>
+                  <TableHead className="hidden sm:table-cell">Basis</TableHead>
+                  <TableHead className="hidden text-right sm:table-cell">Default Rate</TableHead>
+                  <TableHead className="hidden text-right sm:table-cell">Default Lot</TableHead>
                   <TableHead className="w-32 text-right">Rate ₹</TableHead>
                   <TableHead className="w-32 text-right">Lot ₹</TableHead>
                   <TableHead>State</TableHead>
@@ -1536,16 +1549,17 @@ function PartyRatesTab() {
                         <span className="block font-medium">{r.name}</span>
                         <span className="block font-mono text-xs text-muted-foreground">{r.code}</span>
                       </TableCell>
-                      <TableCell>
+                      <TableCell className="hidden sm:table-cell">
                         <Badge variant="secondary" className="text-[10px]">
                           {r.basis === 'WEIGHT' ? 'per KG' : 'per piece'}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-right tabular-nums text-muted-foreground">₹ {money(r.defaultRate)}</TableCell>
-                      <TableCell className="text-right tabular-nums text-muted-foreground">₹ {money(r.defaultLot)}</TableCell>
+                      <TableCell className="hidden text-right tabular-nums text-muted-foreground sm:table-cell">₹ {money(r.defaultRate)}</TableCell>
+                      <TableCell className="hidden text-right tabular-nums text-muted-foreground sm:table-cell">₹ {money(r.defaultLot)}</TableCell>
                       <TableCell>
                         <Input
                           type="number"
+                          inputMode="decimal"
                           min="0"
                           step="any"
                           value={r.rate}
@@ -1557,6 +1571,7 @@ function PartyRatesTab() {
                       <TableCell>
                         <Input
                           type="number"
+                          inputMode="decimal"
                           min="0"
                           step="any"
                           value={r.lotCharge}

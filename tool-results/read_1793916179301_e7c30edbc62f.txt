@@ -1,0 +1,602 @@
+    44→    44→  toastError,
+    45→    45→  todayISO,
+    46→    46→  useApi,
+    47→    47→  useMasters,
+    48→    48→  type JobworkCertificate,
+    49→    49→  type JobworkInward,
+    50→    50→  type JobworkPendingRow,
+    51→    51→  type Process,
+    52→    52→  type SalesInvoice,
+    53→    53→} from './api'
+    54→    54→import { EmptyState, Money, ProgressBar, SectionHeading, StatusBadge, TableSkeleton } from './bits'
+    55→    55→import { useErpUi } from './store'
+    56→    56→import { dateStr, money, qty as qtyFmt } from '@/lib/erp'
+    57→    57→
+    58→    58→// ===========================================================================
+    59→    59→// Module view (tabs: inwards | pending)
+    60→    60→// ===========================================================================
+    61→    61→
+    62→    62→export function JobworkView() {
+    63→    63→  return (
+    64→    64→    <div className="space-y-4">
+    65→    65→      <SectionHeading
+    66→    66→        title="Jobwork"
+    67→    67→        description="Customer material inwards → multi-process job cards → certificate → GST invoice. The core manufacturing chain."
+    68→    68→      />
+    69→    69→      <Tabs defaultValue="inwards">
+    70→    70→        <TabsList className="h-11 w-full justify-start overflow-x-auto sm:w-auto">
+    71→    71→          <TabsTrigger value="inwards" className="h-9 gap-1.5">
+    72→    72→            <ClipboardList className="size-4" aria-hidden /> Inwards
+    73→    73→          </TabsTrigger>
+    74→    74→          <TabsTrigger value="pending" className="h-9 gap-1.5">
+    75→    75→            <Wrench className="size-4" aria-hidden /> Pending
+    76→    76→          </TabsTrigger>
+    77→    77→        </TabsList>
+    78→    78→        <TabsContent value="inwards" className="mt-4">
+    79→    79→          <InwardsTab />
+    80→    80→        </TabsContent>
+    81→    81→        <TabsContent value="pending" className="mt-4">
+    82→    82→          <PendingTab />
+    83→    83→        </TabsContent>
+    84→    84→      </Tabs>
+    85→    85→    </div>
+    86→    86→  )
+    87→    87→}
+    88→    88→
+    89→    89→// ---------- inwards list ----------
+    90→    90→
+    91→    91→function InwardsTab() {
+    92→    92→  const setView = useErpUi((s) => s.setView)
+    93→    93→  const list = useApi<JobworkInward[]>('/api/jobwork/inwards')
+    94→    94→  const [createOpen, setCreateOpen] = useState(false)
+    95→    95→  const inwards = list.data ?? []
+    96→    96→
+    97→    97→  const progressOf = (iw: JobworkInward) => {
+    98→    98→    const total = iw.items.reduce((s, i) => s + i.qty, 0)
+    99→    99→    const done = iw.items.reduce((s, i) => s + i.processedQty, 0)
+   100→   100→    return { total, done, pct: total > 0 ? (done / total) * 100 : 0 }
+   101→   101→  }
+   102→   102→  const cardValue = (iw: JobworkInward) => iw.jobCards.reduce((s, c) => s + c.totalAmount, 0)
+   103→   103→
+   104→   104→  return (
+   105→   105→    <div className="space-y-4">
+   106→   106→      <div className="flex items-center justify-between gap-2">
+   107→   107→        <p className="text-sm text-muted-foreground">
+   108→   108→          {inwards.length} inward{inwards.length === 1 ? '' : 's'} — customer-owned material, value-neutral stock.
+   109→   109→        </p>
+   110→   110→        <Button onClick={() => setCreateOpen(true)} className="h-11 gap-2">
+   111→   111→          <Plus className="size-4" aria-hidden /> New Inward
+   112→   112→        </Button>
+   113→   113→      </div>
+   114→   114→
+   115→   115→      <Card className="p-0">
+   116→   116→        <CardContent className="p-0">
+   117→   117→          {list.loading ? (
+   118→   118→            <TableSkeleton rows={5} cols={6} />
+   119→   119→          ) : inwards.length === 0 ? (
+   120→   120→            <div className="p-6">
+   121→   121→              <EmptyState
+   122→   122→                title="No inwards yet"
+   123→   123→                hint="Record a customer challan inward to start the jobwork chain."
+   124→   124→                icon={ClipboardList}
+   125→   125→                action={
+   126→   126→                  <Button variant="outline" onClick={() => setCreateOpen(true)} className="mt-2 h-11 gap-2">
+   127→   127→                    <Plus className="size-4" aria-hidden /> New Inward
+   128→   128→                  </Button>
+   129→   129→                }
+   130→   130→              />
+   131→   131→            </div>
+   132→   132→          ) : (
+   133→   133→            <div className="max-h-[62dvh] overflow-auto erp-scroll [&_[data-slot=table-container]]:overflow-visible">
+   134→   134→              <Table>
+   135→   135→                <TableHeader className="sticky top-0 z-10 bg-card">
+   136→   136→                  <TableRow>
+   137→   137→                    <TableHead>Inward No</TableHead>
+   138→   138→                    <TableHead>Date</TableHead>
+   139→   139→                    <TableHead>Party</TableHead>
+   140→   140→                    <TableHead className="text-right">Items</TableHead>
+   141→   141→                    <TableHead className="min-w-36">Progress</TableHead>
+   142→   142→                    <TableHead className="text-right">Card Value</TableHead>
+   143→   143→                    <TableHead>Status</TableHead>
+   144→   144→                  </TableRow>
+   145→   145→                </TableHeader>
+   146→   146→                <TableBody>
+   147→   147→                  {inwards.map((iw) => {
+   148→   148→                    const p = progressOf(iw)
+   149→   149→                    return (
+   150→   150→                      <TableRow key={iw.id} className="cursor-pointer" onClick={() => setView('jobwork-detail', { id: iw.id })}>
+   151→   151→                        <TableCell className="font-medium tabular-nums">{iw.inwardNo}</TableCell>
+   152→   152→                        <TableCell className="whitespace-nowrap">{dateStr(iw.date)}</TableCell>
+   153→   153→                        <TableCell>
+   154→   154→                          <span className="block max-w-40 truncate">{iw.party?.name ?? '—'}</span>
+   155→   155→                          <span className="block max-w-40 truncate text-xs text-muted-foreground">{iw.challanNo ? `Challan ${iw.challanNo}` : '—'}</span>
+   156→   156→                        </TableCell>
+   157→   157→                        <TableCell className="text-right tabular-nums">{iw.items.length}</TableCell>
+   158→   158→                        <TableCell>
+   159→   159→                          <div className="space-y-1">
+   160→   160→                            <ProgressBar value={p.pct} />
+   161→   161→                            <p className="text-xs tabular-nums text-muted-foreground">
+   162→   162→                              {qtyFmt(p.done)} / {qtyFmt(p.total)} pcs
+   163→   163→                            </p>
+   164→   164→                          </div>
+   165→   165→                        </TableCell>
+   166→   166→                        <TableCell className="text-right font-semibold tabular-nums">
+   167→   167→                          <Money value={cardValue(iw)} plain />
+   168→   168→                        </TableCell>
+   169→   169→                        <TableCell>
+   170→   170→                          <StatusBadge status={iw.status} />
+   171→   171→                        </TableCell>
+   172→   172→                      </TableRow>
+   173→   173→                    )
+   174→   174→                  })}
+   175→   175→                </TableBody>
+   176→   176→              </Table>
+   177→   177→            </div>
+   178→   178→          )}
+   179→   179→        </CardContent>
+   180→   180→      </Card>
+   181→   181→
+   182→   182→      <NewInwardDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={() => list.reload()} key={`inw-${createOpen}`} />
+   183→   183→    </div>
+   184→   184→  )
+   185→   185→}
+   186→   186→
+   187→   187→// ---------- new inward dialog ----------
+   188→   188→
+   189→   189→interface InwardRowDraft {
+   190→   190→  key: number
+   191→   191→  itemId: string
+   192→   192→  batchNo: string
+   193→   193→  qty: string
+   194→   194→  weight: string
+   195→   195→}
+   196→   196→
+   197→   197→function NewInwardDialog({
+   198→   198→  open,
+   199→   199→  onOpenChange,
+   200→   200→  onCreated,
+   201→   201→}: {
+   202→   202→  open: boolean
+   203→   203→  onOpenChange: (o: boolean) => void
+   204→   204→  onCreated: () => void
+   205→   205→}) {
+   206→   206→  const { parties, items, warehouses } = useMasters()
+   207→   207→  const customers = parties.filter((p) => p.active && partyTypes(p).includes('CUSTOMER'))
+   208→   208→
+   209→   209→  const [partyId, setPartyId] = useState('')
+   210→   210→  const [date, setDate] = useState(todayISO())
+   211→   211→  const [challanNo, setChallanNo] = useState('')
+   212→   212→  const [warehouseId, setWarehouseId] = useState('')
+   213→   213→  const [notes, setNotes] = useState('')
+   214→   214→  const [rows, setRows] = useState<InwardRowDraft[]>([{ key: 1, itemId: '', batchNo: '', qty: '', weight: '' }])
+   215→   215→  const [saving, setSaving] = useState(false)
+   216→   216→
+   217→   217→  const seq = rows.length ? Math.max(...rows.map((r) => r.key)) : 0
+   218→   218→  const setRow = (key: number, patch: Partial<InwardRowDraft>) =>
+   219→   219→    setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)))
+   220→   220→
+   221→   221→  const validRows = rows.filter((r) => r.itemId && num(r.qty) > 0)
+   222→   222→
+   223→   223→  const submit = async () => {
+   224→   224→    if (!partyId) {
+   225→   225→      toast.error('Select a customer party')
+   226→   226→      return
+   227→   227→    }
+   228→   228→    if (validRows.length === 0) {
+   229→   229→      toast.error('Add at least one item row with quantity > 0')
+   230→   230→      return
+   231→   231→    }
+   232→   232→    setSaving(true)
+   233→   233→    try {
+   234→   234→      const res = await apiPost<JobworkInward>('/api/jobwork/inwards', {
+   235→   235→        partyId,
+   236→   236→        date,
+   237→   237→        challanNo: challanNo.trim() || undefined,
+   238→   238→        warehouseId: warehouseId || undefined,
+   239→   239→        notes: notes.trim() || undefined,
+   240→   240→        items: validRows.map((r) => ({
+   241→   241→          itemId: r.itemId,
+   242→   242→          batchNo: r.batchNo.trim() || undefined,
+   243→   243→          qty: num(r.qty),
+   244→   244→          weight: num(r.weight),
+   245→   245→        })),
+   246→   246→      })
+   247→   247→      toast.success(`${res.inwardNo} recorded`, {
+   248→   248→        description: `${validRows.length} item line(s) — material received into the jobwork store, status OPEN.`,
+   249→   249→      })
+   250→   250→      onCreated()
+   251→   251→      onOpenChange(false)
+   252→   252→      setRows([{ key: seq + 1, itemId: '', batchNo: '', qty: '', weight: '' }])
+   253→   253→    } catch (e) {
+   254→   254→      toastError(e)
+   255→   255→    } finally {
+   256→   256→      setSaving(false)
+   257→   257→    }
+   258→   258→  }
+   259→   259→
+   260→   260→  return (
+   261→   261→    <Dialog open={open} onOpenChange={onOpenChange}>
+   262→   262→      <DialogContent className="flex max-h-[92dvh] flex-col overflow-hidden sm:max-w-3xl">
+   263→   263→        <DialogHeader>
+   264→   264→          <DialogTitle>New Jobwork Inward</DialogTitle>
+   265→   265→          <DialogDescription>
+   266→   266→            Record the customer challan — items are booked qty + weight into the jobwork store (customer-owned,
+   267→   267→            value-neutral).
+   268→   268→          </DialogDescription>
+   269→   269→        </DialogHeader>
+   270→   270→
+   271→   271→        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto erp-scroll-y pr-1">
+   272→   272→          <div className="grid gap-4 sm:grid-cols-2">
+   273→   273→            <div className="space-y-1.5">
+   274→   274→              <Label>Customer</Label>
+   275→   275→              <Select value={partyId || undefined} onValueChange={setPartyId}>
+   276→   276→                <SelectTrigger className="h-11 w-full">
+   277→   277→                  <SelectValue placeholder="Select customer…" />
+   278→   278→                </SelectTrigger>
+   279→   279→                <SelectContent>
+   280→   280→                  {customers.map((p) => (
+   281→   281→                    <SelectItem key={p.id} value={p.id}>
+   282→   282→                      {p.code} — {p.name}
+   283→   283→                    </SelectItem>
+   284→   284→                  ))}
+   285→   285→                </SelectContent>
+   286→   286→              </Select>
+   287→   287→            </div>
+   288→   288→            <div className="space-y-1.5">
+   289→   289→              <Label htmlFor="inw-date">Date</Label>
+   290→   290→              <Input id="inw-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-11" />
+   291→   291→            </div>
+   292→   292→            <div className="space-y-1.5">
+   293→   293→              <Label htmlFor="inw-challan">Challan No</Label>
+   294→   294→              <Input id="inw-challan" value={challanNo} onChange={(e) => setChallanNo(e.target.value)} placeholder="Customer challan ref" className="h-11" />
+   295→   295→            </div>
+   296→   296→            <div className="space-y-1.5">
+   297→   297→              <Label>Warehouse</Label>
+   298→   298→              <Select value={warehouseId || undefined} onValueChange={(v) => setWarehouseId(v === 'none' ? '' : v)}>
+   299→   299→                <SelectTrigger className="h-11 w-full">
+   300→   300→                  <SelectValue placeholder="Optional — jobwork store" />
+   301→   301→                </SelectTrigger>
+   302→   302→                <SelectContent>
+   303→   303→                  <SelectItem value="none">— skip —</SelectItem>
+   304→   304→                  {warehouses.map((w) => (
+   305→   305→                    <SelectItem key={w.id} value={w.id}>
+   306→   306→                      {w.code} — {w.name}
+   307→   307→                    </SelectItem>
+   308→   308→                  ))}
+   309→   309→                </SelectContent>
+   310→   310→              </Select>
+   311→   311→            </div>
+   312→   312→          </div>
+   313→   313→
+   314→   314→          <div className="overflow-x-auto rounded-md border">
+   315→   315→            <Table>
+   316→   316→              <TableHeader>
+   317→   317→                <TableRow>
+   318→   318→                  <TableHead className="min-w-44">Item</TableHead>
+   319→   319→                  <TableHead className="min-w-28">Batch No</TableHead>
+   320→   320→                  <TableHead className="w-24 text-right">Qty (pcs)</TableHead>
+   321→   321→                  <TableHead className="w-28 text-right">Weight (kg)</TableHead>
+   322→   322→                  <TableHead className="w-12" />
+   323→   323→                </TableRow>
+   324→   324→              </TableHeader>
+   325→   325→              <TableBody>
+   326→   326→                {rows.map((r) => (
+   327→   327→                  <TableRow key={r.key}>
+   328→   328→                    <TableCell>
+   329→   329→                      <Select value={r.itemId || undefined} onValueChange={(v) => setRow(r.key, { itemId: v })}>
+   330→   330→                        <SelectTrigger className="h-11 w-full min-w-40">
+   331→   331→                          <SelectValue placeholder="Pick item…" />
+   332→   332→                        </SelectTrigger>
+   333→   333→                        <SelectContent className="max-h-64">
+   334→   334→                          {items
+   335→   335→                            .filter((i) => i.active)
+   336→   336→                            .map((i) => (
+   337→   337→                              <SelectItem key={i.id} value={i.id}>
+   338→   338→                                {i.code} — {i.name}
+   339→   339→                              </SelectItem>
+   340→   340→                            ))}
+   341→   341→                        </SelectContent>
+   342→   342→                      </Select>
+   343→   343→                    </TableCell>
+   344→   344→                    <TableCell>
+   345→   345→                      <Input
+   346→   346→                        value={r.batchNo}
+   347→   347→                        onChange={(e) => setRow(r.key, { batchNo: e.target.value })}
+   348→   348→                        placeholder="Optional"
+   349→   349→                        className="h-11"
+   350→   350→                        aria-label="Batch number"
+   351→   351→                      />
+   352→   352→                    </TableCell>
+   353→   353→                    <TableCell>
+   354→   354→                      <Input
+   355→   355→                        type="number"
+   356→   356→                        min="0"
+   357→   357→                        step="any"
+   358→   358→                        value={r.qty}
+   359→   359→                        onChange={(e) => setRow(r.key, { qty: e.target.value })}
+   360→   360→                        placeholder="0"
+   361→   361→                        className="h-11 text-right tabular-nums"
+   362→   362→                        aria-label="Quantity"
+   363→   363→                      />
+   364→   364→                    </TableCell>
+   365→   365→                    <TableCell>
+   366→   366→                      <Input
+   367→   367→                        type="number"
+   368→   368→                        min="0"
+   369→   369→                        step="any"
+   370→   370→                        value={r.weight}
+   371→   371→                        onChange={(e) => setRow(r.key, { weight: e.target.value })}
+   372→   372→                        placeholder="0"
+   373→   373→                        className="h-11 text-right tabular-nums"
+   374→   374→                        aria-label="Weight in kg"
+   375→   375→                      />
+   376→   376→                    </TableCell>
+   377→   377→                    <TableCell>
+   378→   378→                      <Button
+   379→   379→                        variant="ghost"
+   380→   380→                        size="icon"
+   381→   381→                        className="size-11 text-muted-foreground hover:text-destructive md:size-9"
+   382→   382→                        onClick={() => setRows((rs) => (rs.length > 1 ? rs.filter((x) => x.key !== r.key) : rs))}
+   383→   383→                        disabled={rows.length === 1}
+   384→   384→                        aria-label={`Remove row ${r.key}`}
+   385→   385→                      >
+   386→   386→                        <Trash2 className="size-4" aria-hidden />
+   387→   387→                      </Button>
+   388→   388→                    </TableCell>
+   389→   389→                  </TableRow>
+   390→   390→                ))}
+   391→   391→              </TableBody>
+   392→   392→            </Table>
+   393→   393→          </div>
+   394→   394→          <Button variant="outline" onClick={() => setRows((rs) => [...rs, { key: seq + 1, itemId: '', batchNo: '', qty: '', weight: '' }])} className="h-11 gap-2">
+   395→   395→            <Plus className="size-4" aria-hidden /> Add item
+   396→   396→          </Button>
+   397→   397→
+   398→   398→          <div className="space-y-1.5">
+   399→   399→            <Label htmlFor="inw-notes">Notes</Label>
+   400→   400→            <Textarea id="inw-notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional — e.g. material condition, dispatch instructions" rows={2} />
+   401→   401→          </div>
+   402→   402→        </div>
+   403→   403→
+   404→   404→        <DialogFooter className="gap-2 border-t pt-3">
+   405→   405→          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving} className="h-11">
+   406→   406→            Cancel
+   407→   407→          </Button>
+   408→   408→          <Button onClick={submit} disabled={saving} className="h-11 gap-2">
+   409→   409→            {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+   410→   410→            {saving ? 'Saving…' : 'Record Inward'}
+   411→   411→          </Button>
+   412→   412→        </DialogFooter>
+   413→   413→      </DialogContent>
+   414→   414→    </Dialog>
+   415→   415→  )
+   416→   416→}
+   417→   417→
+   418→   418→// ---------- pending report tab ----------
+   419→   419→
+   420→   420→function PendingTab() {
+   421→   421→  const setView = useErpUi((s) => s.setView)
+   422→   422→  const { data, loading } = useApi<JobworkPendingRow[]>('/api/reports?type=jobwork-pending')
+   423→   423→  const rows = data ?? []
+   424→   424→
+   425→   425→  if (loading) return <Card className="p-0"><CardContent className="p-0"><TableSkeleton rows={5} cols={6} /></CardContent></Card>
+   426→   426→  if (rows.length === 0) {
+   427→   427→    return <EmptyState title="Nothing pending" hint="All inwards are fully processed and invoiced." icon={PackageCheck} />
+   428→   428→  }
+   429→   429→
+   430→   430→  return (
+   431→   431→    <div className="space-y-4">
+   432→   432→      {rows.map((r) => (
+   433→   433→        <Card key={r.inward.id} className="p-0">
+   434→   434→          <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 border-b py-3">
+   435→   435→            <CardTitle className="flex flex-wrap items-center gap-2 text-sm font-medium">
+   436→   436→              <button type="button" className="font-semibold tabular-nums underline-offset-2 hover:underline" onClick={() => setView('jobwork-detail', { id: r.inward.id })}>
+   437→   437→                {r.inward.inwardNo}
+   438→   438→              </button>
+   439→   439→              <StatusBadge status={r.inward.status} />
+   440→   440→              <span className="text-muted-foreground">
+   441→   441→                {r.inward.party.name} · {dateStr(r.inward.date)}
+   442→   442→              </span>
+   443→   443→            </CardTitle>
+   444→   444→            <span className="text-sm text-muted-foreground">
+   445→   445→              Card value <span className="font-semibold tabular-nums text-foreground">₹ {money(r.cardValue)}</span>
+   446→   446→            </span>
+   447→   447→          </CardHeader>
+   448→   448→          <CardContent className="p-0">
+   449→   449→            <div className="overflow-x-auto">
+   450→   450→              <Table>
+   451→   451→                <TableHeader>
+   452→   452→                  <TableRow>
+   453→   453→                    <TableHead>Item</TableHead>
+   454→   454→                    <TableHead>Batch</TableHead>
+   455→   455→                    <TableHead className="text-right">Received</TableHead>
+   456→   456→                    <TableHead className="text-right">Processed</TableHead>
+   457→   457→                    <TableHead className="text-right">Remaining</TableHead>
+   458→   458→                    <TableHead className="text-right">Weight Rem.</TableHead>
+   459→   459→                    <TableHead className="min-w-40">Pending Processes</TableHead>
+   460→   460→                  </TableRow>
+   461→   461→                </TableHeader>
+   462→   462→                <TableBody>
+   463→   463→                  {r.items.map((it, idx) => (
+   464→   464→                    <TableRow key={`${it.item.id}-${it.batchNo ?? ''}-${idx}`}>
+   465→   465→                      <TableCell>
+   466→   466→                        <span className="block max-w-40 truncate font-medium">{it.item.name}</span>
+   467→   467→                        <span className="block text-xs text-muted-foreground">{it.item.code}</span>
+   468→   468→                      </TableCell>
+   469→   469→                      <TableCell className="text-xs">{it.batchNo ?? '—'}</TableCell>
+   470→   470→                      <TableCell className="text-right tabular-nums">{qtyFmt(it.receivedQty)} {it.item.uom}</TableCell>
+   471→   471→                      <TableCell className="text-right tabular-nums">{qtyFmt(it.processedQty)}</TableCell>
+   472→   472→                      <TableCell className="text-right font-medium tabular-nums">{qtyFmt(it.remainingQty)}</TableCell>
+   473→   473→                      <TableCell className="text-right tabular-nums">{qtyFmt(it.remainingWeight)} kg</TableCell>
+   474→   474→                      <TableCell>
+   475→   475→                        <div className="flex flex-wrap gap-1">
+   476→   476→                          {it.pendingProcesses.length === 0 ? (
+   477→   477→                            <Badge variant="default" className="gap-1">
+   478→   478→                              <BadgeCheck className="size-3" aria-hidden /> All done
+   479→   479→                            </Badge>
+   480→   480→                          ) : (
+   481→   481→                            it.pendingProcesses.map((p) => (
+   482→   482→                              <Badge key={p.id} variant="outline" className="gap-1">
+   483→   483→                                <Wrench className="size-3" aria-hidden />
+   484→   484→                                {p.code}
+   485→   485→                              </Badge>
+   486→   486→                            ))
+   487→   487→                          )}
+   488→   488→                        </div>
+   489→   489→                      </TableCell>
+   490→   490→                    </TableRow>
+   491→   491→                  ))}
+   492→   492→                </TableBody>
+   493→   493→              </Table>
+   494→   494→            </div>
+   495→   495→          </CardContent>
+   496→   496→        </Card>
+   497→   497→      ))}
+   498→   498→    </div>
+   499→   499→  )
+   500→   500→}
+   501→   501→
+   502→   502→// ===========================================================================
+   503→   503→// Inward detail
+   504→   504→// ===========================================================================
+   505→   505→
+   506→   506→export function JobworkDetailView({ id }: { id: string }) {
+   507→   507→  const setView = useErpUi((s) => s.setView)
+   508→   508→  const inv = useApi<JobworkInward | null>(`/api/jobwork/inwards/${id}`)
+   509→   509→  const { processes } = useMasters()
+   510→   510→  const [cardOpen, setCardOpen] = useState(false)
+   511→   511→  const [busy, setBusy] = useState<'cert' | 'invoice' | null>(null)
+   512→   512→  const [cancelling, setCancelling] = useState(false)
+   513→   513→
+   514→   514→  if (inv.loading) {
+   515→   515→    return <TableSkeleton rows={8} cols={5} />
+   516→   516→  }
+   517→   517→  if (inv.error || !inv.data) {
+   518→   518→    return <EmptyState title="Inward not found" hint={inv.error ?? 'Unknown inward.'} icon={XCircle} />
+   519→   519→  }
+   520→   520→  const iw = inv.data
+   521→   521→  const completedCards = iw.jobCards.filter((c) => c.status === 'COMPLETED')
+   522→   522→  const hasActiveCert = iw.certificates.some((c) => c.status === 'ISSUED')
+   523→   523→  const anyRemaining = iw.items.some((i) => i.qty - i.processedQty > 0.0001)
+   524→   524→  const totalQty = iw.items.reduce((s, i) => s + i.qty, 0)
+   525→   525→  const totalWeight = iw.items.reduce((s, i) => s + i.weight, 0)
+   526→   526→  const processedQty = iw.items.reduce((s, i) => s + i.processedQty, 0)
+   527→   527→  const processedWeight = iw.items.reduce((s, i) => s + i.processedWeight, 0)
+   528→   528→  const cardValue = completedCards.reduce((s, c) => s + c.totalAmount, 0)
+   529→   529→  const pct = totalQty > 0 ? (processedQty / totalQty) * 100 : 0
+   530→   530→
+   531→   531→  const issueCertificate = async () => {
+   532→   532→    setBusy('cert')
+   533→   533→    try {
+   534→   534→      const res = await apiPost<JobworkCertificate>('/api/jobwork/certificates', { inwardId: id })
+   535→   535→      toast.success(`${res.certNo} issued`, {
+   536→   536→        description: `${qtyFmt(res.totalQty)} pcs · ${qtyFmt(res.totalWeight)} kg · ₹ ${money(res.totalAmount)} process value.`,
+   537→   537→      })
+   538→   538→      inv.reload()
+   539→   539→    } catch (e) {
+   540→   540→      toastError(e)
+   541→   541→    } finally {
+   542→   542→      setBusy(null)
+   543→   543→    }
+   544→   544→  }
+   545→   545→
+   546→   546→  const generateInvoice = async () => {
+   547→   547→    setBusy('invoice')
+   548→   548→    try {
+   549→   549→      const res = await apiPost<SalesInvoice>('/api/jobwork/invoices', { inwardId: id })
+   550→   550→      toast.success(`${res.invoiceNo} generated`, {
+   551→   551→        description: 'Jobwork invoice posted to Sales (source JOBWORK) — open the Sales module to view or print it.',
+   552→   552→      })
+   553→   553→      inv.reload()
+   554→   554→    } catch (e) {
+   555→   555→      toastError(e)
+   556→   556→    } finally {
+   557→   557→      setBusy(null)
+   558→   558→    }
+   559→   559→  }
+   560→   560→
+   561→   561→  const cancelInward = async () => {
+   562→   562→    setCancelling(true)
+   563→   563→    try {
+   564→   564→      await apiDelete(`/api/jobwork/inwards/${id}`)
+   565→   565→      toast.success(`${iw.inwardNo} cancelled`, { description: 'Reversal entries posted to the stock ledger.' })
+   566→   566→      setView('jobwork')
+   567→   567→    } catch (e) {
+   568→   568→      toastError(e)
+   569→   569→    } finally {
+   570→   570→      setCancelling(false)
+   571→   571→    }
+   572→   572→  }
+   573→   573→
+   574→   574→  const cancelCard = async (cardId: string, cardNo: string) => {
+   575→   575→    try {
+   576→   576→      await apiDelete(`/api/jobwork/job-cards/${cardId}`)
+   577→   577→      toast.success(`${cardNo} cancelled`, { description: 'Processed quantities rolled back on the inward items.' })
+   578→   578→      inv.reload()
+   579→   579→    } catch (e) {
+   580→   580→      toastError(e)
+   581→   581→    }
+   582→   582→  }
+   583→   583→
+   584→   584→  return (
+   585→   585→    <div className="space-y-4">
+   586→   586→      {/* header */}
+   587→   587→      <div className="flex flex-wrap items-start justify-between gap-2">
+   588→   588→        <div className="flex items-center gap-2">
+   589→   589→          <Button variant="ghost" size="icon" className="size-11" onClick={() => setView('jobwork')} aria-label="Back to inwards">
+   590→   590→            <ArrowLeft className="size-5" aria-hidden />
+   591→   591→          </Button>
+   592→   592→          <div>
+   593→   593→            <h2 className="flex items-center gap-2 text-lg font-semibold tabular-nums">
+   594→   594→              {iw.inwardNo} <StatusBadge status={iw.status} />
+   595→   595→            </h2>
+   596→   596→            <p className="text-sm text-muted-foreground">
+   597→   597→              {iw.party?.name} · {dateStr(iw.date)}
+   598→   598→              {iw.challanNo ? ` · Challan ${iw.challanNo}` : ''}
+   599→   599→            </p>
+   600→   600→          </div>
+   601→   601→        </div>
+   602→   602→        <div className="flex flex-wrap items-center gap-2">
+   603→   603→          <Button onClick={() => setCardOpen(true)} disabled={!anyRemaining || iw.status === 'CANCELLED' || iw.status === 'INVOICED'} className="h-11 gap-2">
+   604→   604→            <Wrench className="size-4" aria-hidden /> New Job Card
+   605→   605→          </Button>
+   606→   606→          <Button variant="outline" onClick={issueCertificate} disabled={completedCards.length === 0 || hasActiveCert || iw.status === 'CANCELLED' || busy !== null} className="h-11 gap-2">
+   607→   607→            {busy === 'cert' ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <FileCheck2 className="size-4" aria-hidden />}
+   608→   608→            Issue Certificate
+   609→   609→          </Button>
+   610→   610→          <Button variant="outline" onClick={generateInvoice} disabled={completedCards.length === 0 || iw.status === 'INVOICED' || iw.status === 'CANCELLED' || busy !== null} className="h-11 gap-2">
+   611→   611→            {busy === 'invoice' ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <ReceiptText className="size-4" aria-hidden />}
+   612→   612→            Generate Invoice
+   613→   613→          </Button>
+   614→   614→          <AlertDialog>
+   615→   615→            <AlertDialogTrigger asChild>
+   616→   616→              <Button variant="destructive" disabled={iw.status === 'CANCELLED' || cancelling} className="h-11 gap-2">
+   617→   617→                {cancelling ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <XCircle className="size-4" aria-hidden />}
+   618→   618→                Cancel Inward
+   619→   619→              </Button>
+   620→   620→            </AlertDialogTrigger>
+   621→   621→            <AlertDialogContent>
+   622→   622→              <AlertDialogHeader>
+   623→   623→                <AlertDialogTitle>Cancel {iw.inwardNo}?</AlertDialogTitle>
+   624→   624→                <AlertDialogDescription>
+   625→   625→                  Blocked if any completed job card exists. Cancellation posts a reversal to the stock ledger —
+   626→   626→                  the inward stays visible as an audit trail.
+   627→   627→                </AlertDialogDescription>
+   628→   628→              </AlertDialogHeader>
+   629→   629→              <AlertDialogFooter>
+   630→   630→                <AlertDialogCancel className="h-11">Keep inward</AlertDialogCancel>
+   631→   631→                <AlertDialogAction onClick={cancelInward} className="h-11" disabled={cancelling}>
+   632→   632→                  {cancelling ? 'Cancelling…' : 'Cancel inward'}
+   633→   633→                </AlertDialogAction>
+   634→   634→              </AlertDialogFooter>
+   635→   635→            </AlertDialogContent>
+   636→   636→          </AlertDialog>
+   637→   637→        </div>
+   638→   638→      </div>
+   639→   639→
+   640→   640→      {/* progress summary */}
+   641→   641→      <div className="grid gap-4 sm:grid-cols-3">
+   642→   642→        <Card className="p-4">
+   643→   643→          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Quantity processed</p>
+
+[showing lines 44-643 of 1196; use offset=644 with limit to continue reading]

@@ -97,13 +97,18 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         const taken = await db.orgUser.findUnique({ where: { email: body.email } })
         if (taken && taken.companyId !== id) return fail('This email belongs to another organization', 409)
         if (taken) {
-          await db.orgUser.update({ where: { id: taken.id }, data: { passwordHash: hashPassword(body.password) } })
+          // Bump tokenVersion: every live session for this user (including
+          // a stolen cookie) is revoked the moment the password changes.
+          await db.orgUser.update({
+            where: { id: taken.id },
+            data: { passwordHash: hashPassword(body.password), tokenVersion: { increment: 1 } },
+          })
         } else {
           await db.orgUser.create({
             data: { name: org.name, email: body.email, passwordHash: hashPassword(body.password), role: 'OWNER', companyId: id },
           })
         }
-        details = `owner login ${body.email} ${taken ? 'password reset' : 'created'}`
+        details = `owner login ${body.email} ${taken ? 'password reset (sessions revoked)' : 'created'}`
         break
       }
       case 'loginAs': {
@@ -121,7 +126,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         await logAudit('PLATFORM', 'OrgUser', target.id, `${org.name}: platform admin signed in as ${target.email}`)
         const session = await buildSessionInfo(target)
         const res: NextResponse = NextResponse.json({ success: true, data: session })
-        return setSessionCookie(res, createSessionToken(target.id, target.companyId))
+        return setSessionCookie(res, createSessionToken(target.id, target.companyId, target.tokenVersion))
       }
     }
 

@@ -1,11 +1,12 @@
 import { ok, handleError } from '@/lib/api'
 import { db } from '@/lib/db'
 import { z } from 'zod'
-import { assertCompanyAccess } from '@/lib/platform'
+import { assertCompanyAccess, assertMutationAccess } from '@/lib/platform'
 import { logAudit } from '@/lib/audit'
 
 export async function GET() {
   try {
+    await assertCompanyAccess()
     return ok(await db.process.findMany({ orderBy: { seq: 'asc' } }))
   } catch (e) {
     return handleError(e)
@@ -23,7 +24,7 @@ const processSchema = z.object({
 
 export async function POST(req: Request) {
   try {
-    await assertCompanyAccess()
+    await assertMutationAccess()
     const proc = await db.process.create({ data: processSchema.parse(await req.json()) })
     await logAudit('CREATE', 'Process', proc.id, `${proc.code} — ${proc.name}`)
     return ok(proc)

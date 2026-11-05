@@ -51,7 +51,7 @@ export function LoginView({
           companyName: null,
           usersExist: true,
           demoHint: false,
-          platformAdminEmail: null,
+          platformConfigured: false,
         })
       )
   }, [])
@@ -111,12 +111,6 @@ export function LoginView({
   const fillDemo = () => {
     setEmail('owner@shreeforge.example.com')
     setPassword('forge123')
-    setError('')
-  }
-
-  const fillPlatformAdmin = () => {
-    setEmail(status?.platformAdminEmail ?? 'admin@forgeplatform.example.com')
-    setPassword('platform123')
     setError('')
   }
 
@@ -256,29 +250,15 @@ export function LoginView({
                     {busy ? 'Signing in…' : 'Sign in'}
                   </Button>
                   {status?.demoHint ? (
-                    <div className="space-y-2">
-                      <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                        <span className="flex items-center gap-1.5">
-                          <KeyRound className="size-3.5 shrink-0" aria-hidden />
-                          Demo org: <span className="font-mono text-foreground">owner@shreeforge.example.com</span> ·{' '}
-                          <span className="font-mono text-foreground">forge123</span>
-                        </span>
-                        <Button type="button" variant="outline" size="sm" className="h-7 px-2.5" onClick={fillDemo}>
-                          Fill
-                        </Button>
-                      </div>
-                      {status.platformAdminEmail ? (
-                        <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-dashed bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-                          <span className="flex items-center gap-1.5">
-                            <ShieldAlert className="size-3.5 shrink-0" aria-hidden />
-                            Platform admin: <span className="font-mono text-foreground">{status.platformAdminEmail}</span> ·{' '}
-                            <span className="font-mono text-foreground">platform123</span>
-                          </span>
-                          <Button type="button" variant="outline" size="sm" className="h-7 px-2.5" onClick={fillPlatformAdmin}>
-                            Fill
-                          </Button>
-                        </div>
-                      ) : null}
+                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                      <span className="flex items-center gap-1.5">
+                        <KeyRound className="size-3.5 shrink-0" aria-hidden />
+                        Demo org: <span className="font-mono text-foreground">owner@shreeforge.example.com</span> ·{' '}
+                        <span className="font-mono text-foreground">forge123</span>
+                      </span>
+                      <Button type="button" variant="outline" size="sm" className="h-9 px-3 md:h-7 md:px-2.5" onClick={fillDemo}>
+                        Fill
+                      </Button>
                     </div>
                   ) : null}
                 </form>

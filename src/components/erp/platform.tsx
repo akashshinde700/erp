@@ -68,7 +68,6 @@ import { cn } from '@/lib/utils'
 import { dateStr, money } from '@/lib/erp'
 import {
   api,
-  downloadUrl,
   platformApi,
   toastError,
   type BlogPost,
@@ -81,6 +80,34 @@ import {
   PLAN_FEATURE_CATALOG,
 } from './api'
 import { CardSkeleton, EmptyState, TableSkeleton } from './bits'
+
+/** Download the JSON backup as a browser file. Authenticated via the
+ *  SUPER_ADMIN session cookie (or the x-platform-key HEADER when set) — the
+ *  key NEVER travels in the URL where it would leak into logs/history. */
+async function downloadBackup(apiKey: string | null | undefined): Promise<void> {
+  try {
+    const res = await fetch('/api/backup', {
+      headers: apiKey ? { 'x-platform-key': apiKey } : undefined,
+    })
+    if (!res.ok) {
+      const json = (await res.json().catch(() => null)) as { error?: string } | null
+      throw new Error(json?.error ?? `Backup failed (${res.status})`)
+    }
+    const blob = await res.blob()
+    const stamp = new Date().toISOString().slice(0, 10)
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `forgeerp-backup-${stamp}.json`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+    toast.success('Backup downloaded')
+  } catch (e) {
+    toastError(e)
+  }
+}
 
 type ConsoleTab = 'orgs' | 'plans' | 'inquiries' | 'blog'
 
@@ -831,7 +858,7 @@ function OrgsTab({
                           value={o.plan?.id ?? 'none'}
                           onValueChange={(v) => void onAction(o.id, { action: 'setPlan', planId: v === 'none' ? null : v }, 'Plan updated')}
                         >
-                          <SelectTrigger className="h-9 w-36" aria-label={`Plan for ${o.name}`}>
+                          <SelectTrigger className="h-11 w-full md:h-9 md:w-36" aria-label={`Plan for ${o.name}`}>
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
@@ -1375,7 +1402,7 @@ function PlansTab({ plans, apiKey, reload }: { plans: Plan[]; apiKey: string | u
                       </p>
                     </div>
                     <div className="flex shrink-0 gap-1.5">
-                      <Button size="sm" variant="outline" className="h-8 rounded-full px-3 text-xs" onClick={() => openEdit(p)}>
+                      <Button size="sm" variant="outline" className="h-11 md:h-8 rounded-full px-3 text-xs" onClick={() => openEdit(p)}>
                         <Pencil className="size-3.5" aria-hidden /> Edit
                       </Button>
                       <AlertDialog>
@@ -1383,7 +1410,7 @@ function PlansTab({ plans, apiKey, reload }: { plans: Plan[]; apiKey: string | u
                           <Button
                             size="sm"
                             variant="outline"
-                            className="h-8 rounded-full border-destructive/40 px-3 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+                            className="h-11 md:h-8 rounded-full border-destructive/40 px-3 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
                             disabled={(p._count?.companies ?? 0) > 0}
                             title={(p._count?.companies ?? 0) > 0 ? 'Plans in use by organizations cannot be deleted' : `Delete ${p.name}`}
                           >
@@ -1728,9 +1755,9 @@ function InquiriesTab({
                         {inq.message ? <p className="max-w-2xl text-sm text-muted-foreground">{inq.message}</p> : null}
                         <p className="text-xs text-muted-foreground/80">Received {dt(inq.createdAt)}</p>
                       </div>
-                      <div className="flex shrink-0 items-center gap-2">
+                      <div className="flex w-full shrink-0 flex-wrap items-center gap-2 sm:w-auto">
                         <Select value={inq.status} onValueChange={(v) => void setStatus(inq.id, v)}>
-                          <SelectTrigger className="h-9 w-32" aria-label={`Status for ${inq.name}`}>
+                          <SelectTrigger className="h-11 w-full md:h-9 md:w-32" aria-label={`Status for ${inq.name}`}>
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
@@ -1743,7 +1770,7 @@ function InquiriesTab({
                         <Button
                           size="sm"
                           variant="outline"
-                          className="h-9 rounded-full border-destructive/40 px-3 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          className="h-11 md:h-9 rounded-full border-destructive/40 px-3 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
                           onClick={() => setDeleting(inq)}
                         >
                           Delete
@@ -1760,7 +1787,7 @@ function InquiriesTab({
                       <Button
                         size="sm"
                         variant="outline"
-                        className="h-8 rounded-full px-3 text-xs"
+                        className="h-11 md:h-8 rounded-full px-3 text-xs"
                         onClick={() => {
                           setFollowUpFor(followUpFor === inq.id ? null : inq.id)
                           setNote('')
@@ -2039,7 +2066,7 @@ function BlogTab({ posts, apiKey, reload }: { posts: BlogPost[]; apiKey: string 
                   </p>
                 </div>
                 <div className="flex shrink-0 gap-1.5">
-                  <Button size="sm" variant="outline" className="h-9 rounded-full px-3 text-xs" onClick={() => openEdit(p)}>
+                  <Button size="sm" variant="outline" className="h-11 md:h-9 rounded-full px-3 text-xs" onClick={() => openEdit(p)}>
                     <Pencil className="size-3.5" aria-hidden /> Edit
                   </Button>
                   <AlertDialog>
@@ -2047,7 +2074,7 @@ function BlogTab({ posts, apiKey, reload }: { posts: BlogPost[]; apiKey: string 
                       <Button
                         size="sm"
                         variant="outline"
-                        className="h-9 rounded-full border-destructive/40 px-3 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        className="h-11 md:h-9 rounded-full border-destructive/40 px-3 text-xs text-destructive hover:bg-destructive/10 hover:text-destructive"
                       >
                         Delete
                       </Button>
@@ -2210,9 +2237,7 @@ function BackupCard({ apiKey }: { apiKey: string | undefined }) {
           <Button
             variant="outline"
             className="h-10 gap-2 rounded-full"
-            onClick={() =>
-              downloadUrl(apiKey ? `/api/backup?platformKey=${encodeURIComponent(apiKey)}` : '/api/backup')
-            }
+            onClick={() => void downloadBackup(apiKey)}
           >
             <DatabaseBackup className="size-4" aria-hidden /> Download backup
           </Button>

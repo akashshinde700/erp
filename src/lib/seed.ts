@@ -7,6 +7,7 @@
 import { db } from './db'
 import { makeGstin } from './erp'
 import { hashPassword } from './auth'
+import { ensurePlatformAdmin } from './platform'
 import {
   postOpeningStock,
   postPurchaseInvoice,
@@ -16,6 +17,7 @@ import {
   postJobCard,
   issueCertificate,
   generateJobworkInvoice,
+  syncPartyOpeningBalance,
 } from './services'
 
 const daysAgo = (n: number): Date => {
@@ -29,31 +31,43 @@ export async function seedDatabase(force = false) {
   // Only a customer organization counts as "seeded" (the platform company is
   // the operator's own and never the demo scenario).
   const existing = await db.company.findFirst({ where: { isPlatform: false } })
-  if (existing && !force) return { seeded: false, reason: 'Company already exists (use ?force=1 to reseed)' }
+  if (existing && !force) return { seeded: false, reason: 'Company already exists (platform admin ?force=1 reseeds)' }
 
   if (force) {
-    // FK-safe wipe order — destructive, hence opt-in only
-    await db.paymentAllocation.deleteMany()
-    await db.payment.deleteMany()
-    await db.jobCardProcess.deleteMany()
-    await db.jobCard.deleteMany()
-    await db.jobworkCertificate.deleteMany()
-    await db.jobworkInwardItem.deleteMany()
-    await db.jobworkInward.deleteMany()
-    await db.salesInvoiceItem.deleteMany()
-    await db.salesInvoice.deleteMany()
-    await db.purchaseInvoiceItem.deleteMany()
-    await db.purchaseInvoice.deleteMany()
-    await db.stockLedger.deleteMany()
-    await db.accountLedger.deleteMany()
-    await db.partyProcessRate.deleteMany()
-    await db.counter.deleteMany()
-    await db.item.deleteMany()
-    await db.process.deleteMany()
-    await db.warehouse.deleteMany()
-    await db.party.deleteMany()
-    await db.orgUser.deleteMany()
-    await db.company.deleteMany()
+    // FK-safe wipe inside ONE transaction — a crash mid-wipe can never leave
+    // a half-deleted database (transaction-safety invariant).
+    await db.$transaction(
+      async (tx) => {
+        await tx.paymentAllocation.deleteMany({})
+        await tx.payment.deleteMany({})
+        await tx.jobCardProcess.deleteMany({})
+        await tx.jobCard.deleteMany({})
+        await tx.jobworkCertificate.deleteMany({})
+        await tx.jobworkInwardItem.deleteMany({})
+        await tx.jobworkInward.deleteMany({})
+        await tx.salesInvoiceItem.deleteMany({})
+        await tx.salesInvoice.deleteMany({})
+        await tx.purchaseInvoiceItem.deleteMany({})
+        await tx.purchaseInvoice.deleteMany({})
+        await tx.stockLedger.deleteMany({})
+        await tx.accountLedger.deleteMany({})
+        await tx.partyProcessRate.deleteMany({})
+        await tx.counter.deleteMany({})
+        await tx.item.deleteMany({})
+        await tx.process.deleteMany({})
+        await tx.warehouse.deleteMany({})
+        await tx.party.deleteMany({})
+        // Platform-console rows have no FKs to business tables but DO have unique
+        // keys (blog slug) — a force reseed must wipe them too or the
+        // rebuild dies on P2002.
+        await tx.platformInquiryFollowUp.deleteMany({})
+        await tx.platformInquiry.deleteMany({})
+        await tx.platformBlogPost.deleteMany({})
+        await tx.orgUser.deleteMany({})
+        await tx.company.deleteMany({})
+      },
+      { timeout: 30_000 }
+    )
   }
 
   // ---------- Company ----------
@@ -86,21 +100,11 @@ export async function seedDatabase(force = false) {
     },
   })
 
-  // ---------- Platform administrator (SUPER_ADMIN, like the reference SaaS) ----------
-  // Created AFTER the operating org so Shree Forge stays the first company —
-  // the platform company is never billed, blocked or listed as a customer org.
-  const platformCompany = await db.company.create({
-    data: { name: 'Forge Platform Operations', email: 'admin@forgeplatform.example.com', isPlatform: true },
-  })
-  await db.orgUser.create({
-    data: {
-      name: 'Platform Admin',
-      email: 'admin@forgeplatform.example.com',
-      passwordHash: hashPassword('platform123'),
-      role: 'SUPER_ADMIN',
-      companyId: platformCompany.id,
-    },
-  })
+  // ---------- Platform administrator (SUPER_ADMIN) ----------
+  // Delegated to ensurePlatformAdmin: env password or a RANDOM one printed
+  // once in the server log — never a public repo constant. Created AFTER the
+  // operating org so Shree Forge stays the first company.
+  await ensurePlatformAdmin()
 
   // ---------- Warehouses ----------
   const main = await db.warehouse.create({ data: { code: 'MAIN', name: 'Main Stores', location: 'Pune Plant 1' } })
@@ -159,6 +163,12 @@ export async function seedDatabase(force = false) {
       openingBal: -25000, // payable
     },
   })
+
+  // ---------- GL-mirror every seeded opening balance ----------
+  const partiesWithOpening = await db.party.findMany({ where: { openingBal: { not: 0 } } })
+  for (const p of partiesWithOpening) {
+    await syncPartyOpeningBalance(p.id)
+  }
 
   // ---------- Items ----------
   const gearBlank = await db.item.create({

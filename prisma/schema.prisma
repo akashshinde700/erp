@@ -75,6 +75,7 @@ model OrgUser {
   role         String    @default("OWNER") // OWNER | ACCOUNTANT | VIEWER | SUPER_ADMIN (platform admin)
   companyId    String
   company      Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  tokenVersion Int       @default(0) // bump = revoke every live session for this user
   createdAt    DateTime  @default(now())
   lastLoginAt  DateTime?
 }

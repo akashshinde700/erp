@@ -103,15 +103,24 @@ export function makeGstin(stateCode: string, base: string): string {
   return first14 + gstinCheckDigit(first14)
 }
 
+/** True when the string is a numeric 2-digit Indian state code (place of
+ *  supply / party state). Used to keep POS honest — a non-numeric code would
+ *  silently flip CGST+SGST to IGST on a domestic supply. */
+export function isStateCode(v: string | null | undefined): boolean {
+  return typeof v === 'string' && /^\d{2}$/.test(v) && Number(v) >= 1 && Number(v) <= 38
+}
+
 export const stateFromGstin = (gstin: string): string => (gstin || '').slice(0, 2)
 
 // ---------- Financial year (Apr–Mar, Indian) ----------
 
-/** '2025-11-20' → '2526' (FY 2025-26). Month ≥ 4 belongs to next FY. */
+/** '2025-11-20' → '2526' (FY 2025-26). Month ≥ 4 belongs to next FY.
+ *  Uses the date's own UTC parts so the FY key is deterministic regardless of
+ *  the server's timezone (dates arrive as ISO/UTC everywhere). */
 export function fyCode(date: Date | string): string {
   const d = typeof date === 'string' ? new Date(date) : date
-  const y = d.getFullYear()
-  const m = d.getMonth() + 1
+  const y = d.getUTCFullYear()
+  const m = d.getUTCMonth() + 1
   const start = m >= 4 ? y : y - 1
   return `${String(start).slice(2)}${String(start + 1).slice(2)}`
 }

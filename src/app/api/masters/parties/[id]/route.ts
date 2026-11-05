@@ -2,8 +2,9 @@ import { ok, fail, handleError } from '@/lib/api'
 import { db } from '@/lib/db'
 import { z } from 'zod'
 import { gstinChecksumValid } from '@/lib/erp'
-import { assertCompanyAccess } from '@/lib/platform'
+import { assertCompanyAccess, assertMutationAccess } from '@/lib/platform'
 import { logAudit } from '@/lib/audit'
+import { syncPartyOpeningBalance } from '@/lib/services'
 
 const partyUpdateSchema = z.object({
   code: z.string().min(1).max(20).optional(),
@@ -33,7 +34,7 @@ function parsePin(raw: unknown): string | null | undefined {
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
-    await assertCompanyAccess()
+    await assertMutationAccess()
     const body = partyUpdateSchema.parse(await req.json())
     if (body.gstin && !gstinChecksumValid(body.gstin)) {
       return fail('Invalid GSTIN — checksum failed')
@@ -44,6 +45,11 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
     const pin = parsePin(body.pincode)
     if (pin !== undefined) data.pincode = pin
     const party = await db.party.update({ where: { id }, data })
+    // Opening balance changed (or legacy party never GL-posted) → mirror it
+    // into the GL so outstanding / party ledger reconcile with trial balance.
+    if (body.openingBal !== undefined) {
+      await syncPartyOpeningBalance(id)
+    }
     await logAudit('UPDATE', 'Party', id, `${party.code} — ${party.name}`)
     return ok(party)
   } catch (e) {
@@ -55,7 +61,7 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
-    await assertCompanyAccess()
+    await assertMutationAccess()
     const url = new URL(req.url)
     const activate = url.searchParams.get('activate') === '1'
     const party = await db.party.update({ where: { id }, data: { active: activate } })

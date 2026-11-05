@@ -1,10 +1,12 @@
 import { ok, fail, handleError } from '@/lib/api'
 import { db } from '@/lib/db'
 import { z } from 'zod'
+import { assertCompanyAccess, assertMutationAccess } from '@/lib/platform'
 
 /** GET ?partyId=… → full rate grid for a party (process defaults included). */
 export async function GET(req: Request) {
   try {
+    await assertCompanyAccess()
     const partyId = new URL(req.url).searchParams.get('partyId')
     if (!partyId) return fail('partyId is required')
     const [party, processes, rates] = await Promise.all([
@@ -38,18 +40,21 @@ export async function GET(req: Request) {
 
 const bulkSchema = z.object({
   partyId: z.string().min(1),
-  rates: z.array(
-    z.object({
-      processId: z.string().min(1),
-      rate: z.number().min(0),
-      lotCharge: z.number().min(0),
-    })
-  ),
+  rates: z
+    .array(
+      z.object({
+        processId: z.string().min(1),
+        rate: z.number().min(0).finite().max(1_000_000),
+        lotCharge: z.number().min(0).finite().max(1_000_000),
+      })
+    )
+    .max(200, 'Too many rate rows'),
 })
 
 /** PUT — full-list upsert: sets the party's rate grid exactly as submitted. */
 export async function PUT(req: Request) {
   try {
+    await assertMutationAccess()
     const body = bulkSchema.parse(await req.json())
     const party = await db.party.findUnique({ where: { id: body.partyId } })
     if (!party) return fail('Party not found', 404)

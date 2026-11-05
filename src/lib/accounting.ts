@@ -15,6 +15,7 @@ import { r2 } from './erp'
 export const ACCOUNTS = {
   DEBT: { code: 'DEBT', name: 'Sundry Debtors', group: 'Current Assets' },
   CRED: { code: 'CRED', name: 'Sundry Creditors', group: 'Current Liabilities' },
+  STKV: { code: 'STKV', name: 'Stock (Inventory) Account', group: 'Current Assets' },
   SALS: { code: 'SALS', name: 'Sales Account', group: 'Direct Income' },
   JWIN: { code: 'JWIN', name: 'Jobwork Income', group: 'Direct Income' },
   PURC: { code: 'PURC', name: 'Purchase Account', group: 'Direct Expenses' },

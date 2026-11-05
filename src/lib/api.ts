@@ -20,7 +20,8 @@ export function handleError(e: unknown) {
     if (e.code === 'P2002') return fail('A record with this code/number already exists', 409)
     if (e.code === 'P2025') return fail('Record not found', 404)
   }
+  // Log the real cause server-side; the client gets a generic message (no file
+  // paths or Prisma internals leak into responses).
   console.error('[api]', e)
-  const msg = e instanceof Error ? e.message : 'Internal server error'
-  return fail(msg, 500)
+  return fail('Something went wrong on the server — try again (details are in the server log)', 500)
 }

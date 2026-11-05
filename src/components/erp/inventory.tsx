@@ -38,9 +38,9 @@ export function InventoryView() {
       />
       <Tabs defaultValue="summary">
         <TabsList className="h-11 w-full justify-start overflow-x-auto sm:w-auto">
-          <TabsTrigger value="summary" className="h-9">Stock Summary</TabsTrigger>
-          <TabsTrigger value="ledger" className="h-9">Stock Ledger</TabsTrigger>
-          <TabsTrigger value="opening" className="h-9">Opening Stock</TabsTrigger>
+          <TabsTrigger value="summary" className="h-11 sm:h-9">Stock Summary</TabsTrigger>
+          <TabsTrigger value="ledger" className="h-11 sm:h-9">Stock Ledger</TabsTrigger>
+          <TabsTrigger value="opening" className="h-11 sm:h-9">Opening Stock</TabsTrigger>
         </TabsList>
         <TabsContent value="summary" className="mt-4">
           <StockSummaryTab />
@@ -87,13 +87,13 @@ function StockSummaryTab() {
             <TableHeader className="sticky top-0 z-10 bg-card">
               <TableRow>
                 <TableHead>Item</TableHead>
-                <TableHead>HSN</TableHead>
+                <TableHead className="hidden sm:table-cell">HSN</TableHead>
                 <TableHead>UOM</TableHead>
                 <TableHead className="text-right">In</TableHead>
                 <TableHead className="text-right">Out</TableHead>
                 <TableHead className="text-right">Closing</TableHead>
-                <TableHead className="text-right">Avg Cost</TableHead>
-                <TableHead className="text-right">Closing Value</TableHead>
+                <TableHead className="hidden text-right sm:table-cell">Avg Cost</TableHead>
+                <TableHead className="hidden text-right sm:table-cell">Closing Value</TableHead>
                 <TableHead>Stock Health</TableHead>
               </TableRow>
             </TableHeader>
@@ -111,15 +111,15 @@ function StockSummaryTab() {
                       </span>
                     ) : null}
                   </TableCell>
-                  <TableCell className="tabular-nums">{r.item.hsn ?? '—'}</TableCell>
+                  <TableCell className="hidden tabular-nums sm:table-cell">{r.item.hsn ?? '—'}</TableCell>
                   <TableCell>{r.item.uom}</TableCell>
                   <TableCell className="text-right tabular-nums">{qtyFmt(r.inQty)}</TableCell>
                   <TableCell className="text-right tabular-nums">{qtyFmt(r.outQty)}</TableCell>
                   <TableCell className="text-right font-medium tabular-nums">{qtyFmt(r.closing)}</TableCell>
-                  <TableCell className="text-right tabular-nums">
+                  <TableCell className="hidden text-right tabular-nums sm:table-cell">
                     <Money value={r.avgCost} plain />
                   </TableCell>
-                  <TableCell className="text-right font-semibold tabular-nums">
+                  <TableCell className="hidden text-right font-semibold tabular-nums sm:table-cell">
                     <Money value={r.closingValue} plain />
                   </TableCell>
                   <TableCell>
@@ -134,9 +134,10 @@ function StockSummaryTab() {
                 </TableRow>
               ))}
               <TableRow className="bg-muted/40 font-semibold">
-                <TableCell colSpan={7} className="text-right">Total closing value</TableCell>
+                <TableCell colSpan={7} className="hidden text-right sm:table-cell">Total closing value</TableCell>
+                <TableCell colSpan={5} className="text-right sm:hidden">Total closing value</TableCell>
                 <TableCell className="text-right tabular-nums">₹ {money(totalValue)}</TableCell>
-                <TableCell />
+                <TableCell className="hidden sm:table-cell" />
               </TableRow>
             </TableBody>
           </Table>
@@ -378,7 +379,77 @@ function OpeningStockTab() {
         </div>
       </div>
 
-      <div className="overflow-x-auto rounded-md border">
+      {/* Mobile (below sm): stacked cards per row — same state wiring as the table. */}
+      <div className="space-y-3 sm:hidden">
+        {rows.map((r) => (
+          <div key={r.key} className="space-y-3 rounded-md border p-3">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <Select value={r.itemId} onValueChange={(v) => onItemPick(r.key, v)}>
+                  <SelectTrigger className="h-11 w-full" aria-label={`Item for row ${r.key}`}>
+                    <SelectValue placeholder="Pick stock item…" />
+                  </SelectTrigger>
+                  <SelectContent className="max-h-64">
+                    {stockItems.map((i) => (
+                      <SelectItem key={i.id} value={i.id}>
+                        {i.code} — {i.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-11 shrink-0 text-muted-foreground hover:text-destructive"
+                onClick={() => setRows((rs) => (rs.length > 1 ? rs.filter((x) => x.key !== r.key) : rs))}
+                disabled={rows.length === 1}
+                aria-label={`Remove row ${r.key}`}
+              >
+                <Trash2 className="size-4" aria-hidden />
+              </Button>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <Label htmlFor={`os-mqty-${r.key}`} className="text-xs text-muted-foreground">Qty</Label>
+                <Input
+                  id={`os-mqty-${r.key}`}
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="any"
+                  value={r.qty}
+                  onChange={(e) => setRow(r.key, { qty: e.target.value })}
+                  placeholder="0"
+                  className="h-11 text-right tabular-nums"
+                  aria-label="Quantity"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor={`os-mrate-${r.key}`} className="text-xs text-muted-foreground">Rate ₹</Label>
+                <Input
+                  id={`os-mrate-${r.key}`}
+                  type="number"
+                  inputMode="decimal"
+                  min="0"
+                  step="any"
+                  value={r.rate}
+                  onChange={(e) => setRow(r.key, { rate: e.target.value })}
+                  placeholder="0"
+                  className="h-11 text-right tabular-nums"
+                  aria-label="Rate"
+                />
+              </div>
+            </div>
+            <p className="flex items-center justify-between border-t pt-2 text-xs text-muted-foreground">
+              <span>Value</span>
+              <span className="font-medium tabular-nums text-foreground">₹ {money(num(r.qty) * num(r.rate))}</span>
+            </p>
+          </div>
+        ))}
+      </div>
+      {/* Desktop (sm+): classic row editor */}
+      <div className="hidden overflow-x-auto rounded-md border sm:block">
         <Table>
           <TableHeader>
             <TableRow>
@@ -409,6 +480,7 @@ function OpeningStockTab() {
                 <TableCell>
                   <Input
                     type="number"
+                    inputMode="decimal"
                     min="0"
                     step="any"
                     value={r.qty}
@@ -421,6 +493,7 @@ function OpeningStockTab() {
                 <TableCell>
                   <Input
                     type="number"
+                    inputMode="decimal"
                     min="0"
                     step="any"
                     value={r.rate}

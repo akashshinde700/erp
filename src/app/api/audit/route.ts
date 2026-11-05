@@ -1,5 +1,6 @@
 import { handleError, ok } from '@/lib/api'
 import { db } from '@/lib/db'
+import { assertCompanyAccess } from '@/lib/platform'
 
 /**
  * GET /api/audit?entity=&action=&limit= (default 200, max 500)
@@ -7,6 +8,7 @@ import { db } from '@/lib/db'
  */
 export async function GET(req: Request) {
   try {
+    await assertCompanyAccess()
     const sp = new URL(req.url).searchParams
     const entity = sp.get('entity')
     const action = sp.get('action')

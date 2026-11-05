@@ -2,11 +2,12 @@ import { ok, handleError } from '@/lib/api'
 import { db } from '@/lib/db'
 import { z } from 'zod'
 import { postPayment } from '@/lib/services'
-import { assertCompanyAccess } from '@/lib/platform'
+import { assertCompanyAccess, assertMutationAccess } from '@/lib/platform'
 import { logAudit } from '@/lib/audit'
 
 export async function GET(req: Request) {
   try {
+    await assertCompanyAccess()
     const sp = new URL(req.url).searchParams
     const where: any = {}
     const partyId = sp.get('partyId')
@@ -32,24 +33,25 @@ const postSchema = z.object({
   type: z.enum(['RECEIPT', 'PAYMENT']),
   partyId: z.string().min(1, 'Party is required'),
   date: z.string().optional(),
-  amount: z.number().positive('Amount must be > 0'),
+  amount: z.number().positive('Amount must be > 0').finite().max(1_000_000_000),
   mode: z.enum(['CASH', 'BANK', 'UPI', 'CHEQUE']).optional(),
-  refNo: z.string().optional().nullable(),
-  notes: z.string().optional().nullable(),
+  refNo: z.string().max(60).optional().nullable(),
+  notes: z.string().max(500).optional().nullable(),
   allocations: z
     .array(
       z.object({
         invoiceType: z.enum(['SALES', 'PURCHASE']),
-        invoiceNo: z.string().min(1),
-        amount: z.number().positive(),
+        invoiceNo: z.string().min(1).max(40),
+        amount: z.number().positive().finite().max(1_000_000_000),
       })
     )
+    .max(100, 'Too many allocations')
     .optional(),
 })
 
 export async function POST(req: Request) {
   try {
-    await assertCompanyAccess()
+    await assertMutationAccess()
     const res = await postPayment(postSchema.parse(await req.json()))
     await logAudit('POST', 'Payment', res.id, `${res.paymentNo} — ₹${res.amount}`)
     return ok(res)

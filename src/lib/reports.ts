@@ -177,28 +177,56 @@ export async function trialBalanceReport(from?: string, to?: string) {
   }
 }
 
+// ---------- helpers: GL-backed opening balances ----------
+
+/** Opening amount already posted to the GL for a party (voucherType OPENING).
+ *  When non-zero the GL rows already carry the opening balance, so reports
+ *  must NOT also add Party.openingBal (double count). Zero → legacy party
+ *  whose opening was never GL-posted; fall back to the column value. */
+async function glOpeningForParties(): Promise<Map<string, number>> {
+  const rows = await db.accountLedger.findMany({
+    where: { voucherType: 'OPENING', isCancelled: false, partyId: { not: null } },
+    select: { partyId: true, debit: true, credit: true },
+  })
+  const map = new Map<string, number>()
+  for (const r of rows) {
+    if (!r.partyId) continue
+    map.set(r.partyId, r2((map.get(r.partyId) ?? 0) + r.debit - r.credit))
+  }
+  return map
+}
+
 // ---------- Outstanding (receivables / payables) ----------
 
 export async function outstandingReport() {
   const parties = await db.party.findMany({ where: { active: true }, orderBy: { name: 'asc' } })
   const sales = await db.salesInvoice.findMany({ where: { status: 'POSTED' } })
   const purchases = await db.purchaseInvoice.findMany({ where: { status: 'POSTED' } })
+  const glOpening = await glOpeningForParties()
   const bySales = new Map<string, number>()
   for (const s of sales) bySales.set(s.partyId, r2((bySales.get(s.partyId) ?? 0) + s.grandTotal - s.paidAmount))
   const byPurch = new Map<string, number>()
   for (const p of purchases) byPurch.set(p.partyId, r2((byPurch.get(p.partyId) ?? 0) + p.grandTotal - p.paidAmount))
+  // Opening contribution — counted exactly ONCE: the GL-posted amount when
+  // it exists, else the legacy column value. (The voucher sums above are
+  // computed from invoice/payment tables and never include GL opening rows.)
+  const openingFor = (p: { id: string; openingBal: number }): number => {
+    const gl = glOpening.get(p.id)
+    if (gl !== undefined && Math.abs(gl) > 0.004) return gl
+    return p.openingBal
+  }
   const customers = parties
     .filter((p) => p.types.includes('CUSTOMER'))
     .map((p) => ({
       party: { id: p.id, code: p.code, name: p.name, stateCode: p.stateCode, openingBal: p.openingBal },
-      amount: r2((bySales.get(p.id) ?? 0) + Math.max(0, p.openingBal)),
+      amount: r2((bySales.get(p.id) ?? 0) + Math.max(0, openingFor(p))),
     }))
     .filter((r) => r.amount > 0.004)
   const suppliers = parties
     .filter((p) => p.types.includes('SUPPLIER'))
     .map((p) => ({
       party: { id: p.id, code: p.code, name: p.name, stateCode: p.stateCode, openingBal: p.openingBal },
-      amount: r2((byPurch.get(p.id) ?? 0) + Math.max(0, -p.openingBal)),
+      amount: r2((byPurch.get(p.id) ?? 0) + Math.max(0, -openingFor(p))),
     }))
     .filter((r) => r.amount > 0.004)
   return {
@@ -251,7 +279,16 @@ export async function partyLedgerReport(partyId: string) {
     where: { partyId, isCancelled: false },
     orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
   })
-  let bal = party.openingBal // + receivable
+  // Opening balance: when it has been GL-posted (OPENING rows with this
+  // partyId) it is already inside `rows` — start from zero so it is not
+  // counted twice. Legacy parties (never GL-posted) keep the column value.
+  const glOpening = r2(
+    rows
+      .filter((r) => r.voucherType === 'OPENING')
+      .reduce((s, r) => s + r.debit - r.credit, 0)
+  )
+  const glPosted = Math.abs(glOpening) > 0.004
+  let bal = glPosted ? 0 : party.openingBal // + receivable
   const out = rows.map((r) => {
     bal = r2(bal + r.debit - r.credit)
     return { ...r, balance: bal }

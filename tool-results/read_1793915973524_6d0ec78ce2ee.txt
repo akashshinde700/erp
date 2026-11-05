@@ -1,0 +1,702 @@
+     1→'use client'
+     2→
+     3→/**
+     4→ * ForgeERP — application shell.
+     5→ * Single-page module registry: sidebar (desktop) / drawer (mobile), header,
+     6→ * view switch via zustand, sticky footer, first-boot setup screen.
+     7→ */
+     8→
+     9→import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+    10→import { toast } from 'sonner'
+    11→import {
+    12→  BarChart3,
+    13→  Boxes,
+    14→  Calculator,
+    15→  Database,
+    16→  Factory,
+    17→  LayoutDashboard,
+    18→  Loader2,
+    19→  LogOut,
+    20→  Menu,
+    21→  ReceiptText,
+    22→  ScrollText,
+    23→  ShieldAlert,
+    24→  ShoppingCart,
+    25→  Sparkles,
+    26→  Truck,
+    27→} from 'lucide-react'
+    28→import { Badge } from '@/components/ui/badge'
+    29→import { Button } from '@/components/ui/button'
+    30→import {
+    31→  DropdownMenu,
+    32→  DropdownMenuContent,
+    33→  DropdownMenuItem,
+    34→  DropdownMenuSeparator,
+    35→  DropdownMenuTrigger,
+    36→} from '@/components/ui/dropdown-menu'
+    37→import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
+    38→import { Skeleton } from '@/components/ui/skeleton'
+    39→import { api, apiPost, toastError, useApi, useMounted, type Company, type SessionInfo } from './api'
+    40→import { CompanyProvider } from './company'
+    41→import { LoginView, ManualSetupView } from './login'
+    42→import { OrgPortal } from './portal'
+    43→import { useErpUi, type ErpView } from './store'
+    44→import { GOTO_KEYS, isTypingTarget, pushRecent, setCreatePreset } from './nav'
+    45→import { CommandPalette, ShortcutsHelpDialog } from './palette'
+    46→import { cn } from '@/lib/utils'
+    47→import { fyCode, dateStr } from '@/lib/erp'
+    48→
+    49→// Module views are lazy-loaded: the initial payload carries only the shell +
+    50→// dashboard, and each heavy module (masters, jobwork, invoice editor, charts)
+    51→// arrives as its own chunk on first navigation. State lives in zustand, so
+    52→// lazy mounting cannot lose user data. (Declarations below, after NavList.)
+    53→
+    54→// ---------- navigation registry ----------
+    55→
+    56→interface NavEntry {
+    57→  view: ErpView
+    58→  label: string
+    59→  icon: typeof LayoutDashboard
+    60→}
+    61→
+    62→const NAV_GROUPS: { group: string; entries: NavEntry[] }[] = [
+    63→  {
+    64→    group: 'Overview',
+    65→    entries: [{ view: 'dashboard', label: 'Dashboard', icon: LayoutDashboard }],
+    66→  },
+    67→  {
+    68→    group: 'Transactions',
+    69→    entries: [
+    70→      { view: 'sales', label: 'Sales', icon: ReceiptText },
+    71→      { view: 'purchase', label: 'Purchase', icon: ShoppingCart },
+    72→      { view: 'jobwork', label: 'Jobwork', icon: Factory },
+    73→    ],
+    74→  },
+    75→  {
+    76→    group: 'Books',
+    77→    entries: [
+    78→      { view: 'inventory', label: 'Inventory', icon: Boxes },
+    79→      { view: 'accounting', label: 'Accounting', icon: Calculator },
+    80→      { view: 'reports', label: 'Reports', icon: BarChart3 },
+    81→    ],
+    82→  },
+    83→  {
+    84→    group: 'Setup & Platform',
+    85→    entries: [
+    86→      { view: 'masters', label: 'Masters', icon: Database },
+    87→      { view: 'tally', label: 'Tally Export', icon: Truck },
+    88→      { view: 'audit', label: 'Audit Trail', icon: ScrollText },
+    89→    ],
+    90→  },
+    91→]
+    92→
+    93→function NavList({ onNavigate }: { onNavigate?: () => void }) {
+    94→  const { view, setView } = useErpUi()
+    95→  return (
+    96→    <nav aria-label="ERP modules" className="flex flex-col gap-0.5 p-2">
+    97→      {NAV_GROUPS.map((g) => (
+    98→        <div key={g.group} className="mb-1">
+    99→          <p className="px-3 pb-1 pt-3 text-[11px] font-semibold uppercase tracking-wider text-sidebar-foreground/50">
+   100→            {g.group}
+   101→          </p>
+   102→          {g.entries.map((e) => {
+   103→            const active = view === e.view || view === `${e.view}-detail`
+   104→            return (
+   105→              <button
+   106→                key={e.view}
+   107→                type="button"
+   108→                onClick={() => {
+   109→                  setView(e.view)
+   110→                  onNavigate?.()
+   111→                }}
+   112→                aria-current={active ? 'page' : undefined}
+   113→                className={cn(
+   114→                  'flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-sm text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+   115→                  active && 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
+   116→                )}
+   117→              >
+   118→                <e.icon className="size-4 shrink-0" aria-hidden />
+   119→                <span className="truncate">{e.label}</span>
+   120→                {active ? <span className="ml-auto size-1.5 rounded-full bg-sidebar-primary" aria-hidden /> : null}
+   121→              </button>
+   122→            )
+   123→          })}
+   124→        </div>
+   125→      ))}
+   126→    </nav>
+   127→  )
+   128→}
+   129→
+   130→// ---------- mobile bottom navigation (frequent modules only) ----------
+   131→
+   132→const BOTTOM_NAV: { view: ErpView; label: string; icon: typeof LayoutDashboard }[] = [
+   133→  { view: 'dashboard', label: 'Home', icon: LayoutDashboard },
+   134→  { view: 'sales', label: 'Sales', icon: ReceiptText },
+   135→  { view: 'purchase', label: 'Purchase', icon: ShoppingCart },
+   136→  { view: 'jobwork', label: 'Jobwork', icon: Factory },
+   137→  { view: 'inventory', label: 'Stock', icon: Boxes },
+   138→]
+   139→
+   140→function BottomNav() {
+   141→  const { view, setView } = useErpUi()
+   142→  return (
+   143→    <nav
+   144→      aria-label="Frequent modules"
+   145→      className="fixed inset-x-0 bottom-0 z-40 border-t bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/90 md:hidden"
+   146→    >
+   147→      <div className="mx-auto grid max-w-md grid-cols-5 pb-[env(safe-area-inset-bottom)]">
+   148→        {BOTTOM_NAV.map((e) => {
+   149→          const active = view === e.view || view === `${e.view}-detail`
+   150→          return (
+   151→            <button
+   152→              key={e.view}
+   153→              type="button"
+   154→              onClick={() => setView(e.view)}
+   155→              aria-current={active ? 'page' : undefined}
+   156→              aria-label={e.label}
+   157→              className={cn(
+   158→                'flex min-h-14 flex-col items-center justify-center gap-0.5 px-1 py-1.5 text-[10px] font-medium transition-colors',
+   159→                active ? 'text-primary' : 'text-muted-foreground hover:text-foreground'
+   160→              )}
+   161→            >
+   162→              <e.icon className="size-5 shrink-0" aria-hidden />
+   163→              <span className="truncate">{e.label}</span>
+   164→              {active ? <span className="sr-only">(current)</span> : null}
+   165→            </button>
+   166→          )
+   167→        })}
+   168→      </div>
+   169→    </nav>
+   170→  )
+   171→}
+   172→
+   173→// ---------- lazy module views (code splitting) ----------
+   174→
+   175→const DashboardView = lazy(() => import('./dashboard').then((m) => ({ default: m.DashboardView })))
+   176→const SalesView = lazy(() => import('./sales').then((m) => ({ default: m.SalesView })))
+   177→const SalesDetailView = lazy(() => import('./sales').then((m) => ({ default: m.SalesDetailView })))
+   178→const PurchaseView = lazy(() => import('./purchase').then((m) => ({ default: m.PurchaseView })))
+   179→const PurchaseDetailView = lazy(() => import('./purchase').then((m) => ({ default: m.PurchaseDetailView })))
+   180→const InventoryView = lazy(() => import('./inventory').then((m) => ({ default: m.InventoryView })))
+   181→const JobworkView = lazy(() => import('./jobwork').then((m) => ({ default: m.JobworkView })))
+   182→const JobworkDetailView = lazy(() => import('./jobwork').then((m) => ({ default: m.JobworkDetailView })))
+   183→const AccountingView = lazy(() => import('./accounting').then((m) => ({ default: m.AccountingView })))
+   184→const ReportsView = lazy(() => import('./reports').then((m) => ({ default: m.ReportsView })))
+   185→const MastersView = lazy(() => import('./masters').then((m) => ({ default: m.MastersView })))
+   186→const TallyView = lazy(() => import('./tally').then((m) => ({ default: m.TallyView })))
+   187→const PlatformView = lazy(() => import('./platform').then((m) => ({ default: m.PlatformView })))
+   188→const AuditView = lazy(() => import('./audit').then((m) => ({ default: m.AuditView })))
+   189→const DocsView = lazy(() => import('./docs').then((m) => ({ default: m.DocsView })))
+   190→
+   191→function ViewSkeleton() {
+   192→  return (
+   193→    <div className="space-y-4" aria-busy="true" aria-label="Loading module">
+   194→      <Skeleton className="h-8 w-48" />
+   195→      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
+   196→        {Array.from({ length: 6 }).map((_, i) => (
+   197→          <Skeleton key={i} className="h-24 rounded-xl" />
+   198→        ))}
+   199→      </div>
+   200→      <Skeleton className="h-72 rounded-xl" />
+   201→    </div>
+   202→  )
+   203→}
+   204→
+   205→// ---------- org user menu (header) ----------
+   206→
+   207→function UserMenu({ session, onLogout }: { session: SessionInfo; onLogout: () => void }) {
+   208→  const initials = (session.user.name.split(/\s+/).map((w) => w[0]).join('') || 'U').slice(0, 2).toUpperCase()
+   209→  const role = session.user.role === 'OWNER' ? 'Owner' : session.user.role === 'ACCOUNTANT' ? 'Accountant' : session.user.role
+   210→  return (
+   211→    <DropdownMenu>
+   212→      <DropdownMenuTrigger asChild>
+   213→        <button
+   214→          type="button"
+   215→          className="flex size-10 items-center justify-center rounded-full bg-primary text-xs font-bold uppercase text-primary-foreground transition-opacity hover:opacity-90"
+   216→          aria-label={`Account — ${session.user.name}`}
+   217→          title={session.user.email}
+   218→        >
+   219→          {initials}
+   220→        </button>
+   221→      </DropdownMenuTrigger>
+   222→      <DropdownMenuContent align="end" className="w-64">
+   223→        <div className="px-3 py-2.5">
+   224→          <p className="truncate text-sm font-semibold">{session.user.name}</p>
+   225→          <p className="truncate text-xs text-muted-foreground">{session.user.email}</p>
+   226→          <div className="mt-1.5 flex items-center gap-1.5">
+   227→            <Badge variant="secondary" className="font-normal">{role}</Badge>
+   228→            <span className="truncate text-xs text-muted-foreground">{session.company.name}</span>
+   229→          </div>
+   230→        </div>
+   231→        <DropdownMenuSeparator />
+   232→        <DropdownMenuItem onSelect={() => onLogout()} className="gap-2 text-destructive focus:text-destructive">
+   233→          <LogOut className="size-4" aria-hidden /> Sign out
+   234→        </DropdownMenuItem>
+   235→      </DropdownMenuContent>
+   236→    </DropdownMenu>
+   237→  )
+   238→}
+   239→
+   240→// ---------- first-boot setup screen ----------
+   241→
+   242→function SetupScreen({ onDone, onManual }: { onDone: () => void; onManual: () => void }) {
+   243→  const [seeding, setSeeding] = useState(false)
+   244→  const seed = async () => {
+   245→    setSeeding(true)
+   246→    try {
+   247→      await apiPost<{ company: string }>('/api/seed?force=1', {})
+   248→      onDone()
+   249→    } catch (e) {
+   250→      toastError(e)
+   251→      setSeeding(false)
+   252→    }
+   253→  }
+   254→  return (
+   255→    <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-background p-6 text-center">
+   256→      <div className="flex size-16 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
+   257→        <Factory className="size-8" aria-hidden />
+   258→      </div>
+   259→      <div className="space-y-2">
+   260→        <h1 className="text-2xl font-semibold">Welcome to ForgeERP</h1>
+   261→        <p className="max-w-md text-sm text-muted-foreground">
+   262→          No company is configured yet. Load the seeded demo data (company &ldquo;Shree Forge Industries&rdquo;
+   263→          with parties, items, processes, invoices and a full jobwork chain), or start with a blank company.
+   264→        </p>
+   265→      </div>
+   266→      <div className="flex flex-col gap-2 sm:flex-row">
+   267→        <Button onClick={seed} disabled={seeding} size="lg" className="min-w-48">
+   268→          {seeding ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Sparkles className="size-4" aria-hidden />}
+   269→          {seeding ? 'Seeding demo data…' : 'Load demo data'}
+   270→        </Button>
+   271→        <Button onClick={onManual} disabled={seeding} variant="outline" size="lg" className="min-w-48">
+   272→          Set up company manually
+   273→        </Button>
+   274→      </div>
+   275→    </div>
+   276→  )
+   277→}
+   278→
+   279→// ---------- app ----------
+   280→
+   281→export function ErpApp() {
+   282→  const { view, params, setView } = useErpUi()
+   283→  const company = useApi<Company | null>('/api/masters/company')
+   284→  const [manualSetup, setManualSetup] = useState(false)
+   285→  const [drawerOpen, setDrawerOpen] = useState(false)
+   286→  const mounted = useMounted()
+   287→
+   288→  // ---------- organization login (SaaS) ----------
+   289→  // undefined = session probe in flight · null = signed out · info = signed in.
+   290→  // Platform Admin is a SEPARATE console (platformMode) — never inside the ERP.
+   291→  // A SUPER_ADMIN session opens the console directly (like the reference SaaS).
+   292→  const [session, setSession] = useState<SessionInfo | null | undefined>(undefined)
+   293→  const [platformMode, setPlatformMode] = useState(false)
+   294→
+   295→  useEffect(() => {
+   296→    let cancelled = false
+   297→    api<SessionInfo | null>('/api/auth/session')
+   298→      .then((s) => {
+   299→        if (!cancelled) setSession(s)
+   300→      })
+   301→      .catch(() => {
+   302→        if (!cancelled) setSession(null)
+   303→      })
+   304→    return () => {
+   305→      cancelled = true
+   306→    }
+   307→  }, [])
+   308→
+   309→  const logout = async () => {
+   310→    try {
+   311→      await apiPost('/api/auth/logout', {})
+   312→      toast.success('Signed out')
+   313→    } catch {
+   314→      toast.error('Could not sign out — try again')
+   315→    }
+   316→    setSession(null)
+   317→    setView('dashboard')
+   318→  }
+   319→
+   320→  useEffect(() => {
+   321→    window.scrollTo({ top: 0 })
+   322→  }, [view])
+   323→
+   324→  // ---------- global keyboard: palette (Ctrl/⌘+K, /), g+key goto, ? help, Alt+S/Alt+P ----------
+   325→  const [paletteOpen, setPaletteOpen] = useState(false)
+   326→  const [helpOpen, setHelpOpen] = useState(false)
+   327→  const gotoArmed = useRef(0)
+   328→
+   329→  const openSalesCreate = useCallback(() => {
+   330→    setCreatePreset({ type: 'sales-invoice' })
+   331→    setView('sales')
+   332→  }, [setView])
+   333→  const openPurchaseCreate = useCallback(() => {
+   334→    setCreatePreset({ type: 'purchase-invoice' })
+   335→    setView('purchase')
+   336→  }, [setView])
+   337→
+   338→  useEffect(() => {
+   339→    const onKey = (e: KeyboardEvent) => {
+   340→      // Ctrl/⌘ + K → palette (always)
+   341→      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+   342→        e.preventDefault()
+   343→        setPaletteOpen(true)
+   344→        return
+   345→      }
+   346→      if (isTypingTarget(e)) return
+   347→      // Alt+S / Alt+P → new documents from anywhere
+   348→      if (e.altKey && e.key.toLowerCase() === 's') {
+   349→        e.preventDefault()
+   350→        openSalesCreate()
+   351→        return
+   352→      }
+   353→      if (e.altKey && e.key.toLowerCase() === 'p') {
+   354→        e.preventDefault()
+   355→        openPurchaseCreate()
+   356→        return
+   357→      }
+   358→      // "?" → shortcuts help
+   359→      if (e.key === '?') {
+   360→        e.preventDefault()
+   361→        setHelpOpen(true)
+   362→        return
+   363→      }
+   364→      // "/" → palette
+   365→      if (e.key === '/') {
+   366→        e.preventDefault()
+   367→        setPaletteOpen(true)
+   368→        return
+   369→      }
+   370→      // g + key → module (Gmail style, 1.5 s window)
+   371→      if (e.key.toLowerCase() === 'g' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+   372→        gotoArmed.current = Date.now()
+   373→        return
+   374→      }
+   375→      const goto = GOTO_KEYS[e.key.toLowerCase()]
+   376→      if (goto && Date.now() - gotoArmed.current < 1500 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+   377→        e.preventDefault()
+   378→        gotoArmed.current = 0
+   379→        setView(goto.view)
+   380→      }
+   381→    }
+   382→    window.addEventListener('keydown', onKey)
+   383→    return () => window.removeEventListener('keydown', onKey)
+   384→  }, [setView, openSalesCreate, openPurchaseCreate])
+   385→
+   386→  // Track recent views for the palette
+   387→  useEffect(() => {
+   388→    pushRecent(view)
+   389→  }, [view])
+   390→
+   391→  // Boot probe: company fetch + session fetch must both settle before deciding.
+   392→  if (company.loading || session === undefined) {
+   393→    return (
+   394→      <div className="flex min-h-screen flex-col gap-4 p-6">
+   395→        <Skeleton className="h-14 w-full rounded-lg" />
+   396→        <div className="flex flex-1 gap-4">
+   397→          <Skeleton className="hidden h-96 w-60 rounded-lg md:block" />
+   398→          <Skeleton className="h-96 flex-1 rounded-lg" />
+   399→        </div>
+   400→      </div>
+   401→    )
+   402→  }
+   403→
+   404→  // First boot, no company yet → demo seed or manual setup wizard.
+   405→  if (company.data === null) {
+   406→    if (manualSetup) {
+   407→      return (
+   408→        <ManualSetupView
+   409→          onDone={() => {
+   410→            setManualSetup(false)
+   411→            company.reload()
+   412→          }}
+   413→          onBack={() => setManualSetup(false)}
+   414→        />
+   415→      )
+   416→    }
+   417→    return (
+   418→      <SetupScreen
+   419→        onDone={() => {
+   420→          setManualSetup(false)
+   421→          company.reload()
+   422→        }}
+   423→        onManual={() => setManualSetup(true)}
+   424→      />
+   425→    )
+   426→  }
+   427→
+   428→  // Platform Admin — SEPARATE console (own header + pill nav), opened from the
+   429→  // login screen or a SUPER_ADMIN sign-in; never inside an organization's ERP.
+   430→  // Exiting while a SUPER_ADMIN session is active signs the admin out — the
+   431→  // console is their home, not the org ERP.
+   432→  const exitPlatform = async () => {
+   433→    const wasSuperAdmin = !!session && session.user.role === 'SUPER_ADMIN'
+   434→    setPlatformMode(false)
+   435→    if (wasSuperAdmin) {
+   436→      try {
+   437→        await apiPost('/api/auth/logout', {})
+   438→      } catch {
+   439→        /* best effort — the console may already have logged out */
+   440→      }
+   441→      setSession(null)
+   442→      return
+   443→    }
+   444→    // Key-mode exit: stay honest about the cookie the console may have swapped.
+   445→    api<SessionInfo | null>('/api/auth/session')
+   446→      .then((s) => setSession(s))
+   447→      .catch(() => setSession(null))
+   448→  }
+   449→
+   450→  const platformConsole = platformMode || (!!session && session.user.role === 'SUPER_ADMIN')
+   451→
+   452→  if (platformConsole) {
+   453→    return (
+   454→      <Suspense
+   455→        fallback={
+   456→          <div className="flex min-h-dvh items-center justify-center p-6">
+   457→            <Skeleton className="h-96 w-full max-w-6xl rounded-xl" />
+   458→          </div>
+   459→        }
+   460→      >
+   461→        <PlatformView
+   462→          onExit={() => void exitPlatform()}
+   463→          onLoginAs={(s) => {
+   464→            // Impersonation handover: the console set the session cookie for the
+   465→            // target org's owner — hand the browser to their workspace.
+   466→            setSession(s)
+   467→            setPlatformMode(false)
+   468→          }}
+   469→        />
+   470→      </Suspense>
+   471→    )
+   472→  }
+   473→
+   474→  // Not signed in → organization login screen (SaaS entry).
+   475→  if (!session) {
+   476→    return (
+   477→      <LoginView
+   478→        onLogin={(s) => setSession(s)}
+   479→        onOpenPlatform={() => setPlatformMode(true)}
+   480→        onPlatformLogin={(s) => {
+   481→          setSession(s)
+   482→          setPlatformMode(true)
+   483→        }}
+   484→      />
+   485→    )
+   486→  }
+   487→
+   488→  // Signed in to an org that is NOT the operating org → honest org portal
+   489→  // (real profile/subscription data, never another org's books).
+   490→  if (!session.operating) {
+   491→    return <OrgPortal session={session} onLogout={() => void logout()} />
+   492→  }
+   493→
+   494→  const fy = mounted ? fyCode(new Date()) : '····'
+   495→  const today = mounted ? dateStr(new Date()) : ''
+   496→
+   497→  const chip = (children: React.ReactNode) => (
+   498→    <span className="hidden items-center gap-1.5 rounded-md border bg-card px-2 py-1 text-xs text-muted-foreground lg:inline-flex">
+   499→      {children}
+   500→    </span>
+   501→  )
+   502→
+   503→  let content: React.ReactNode
+   504→  switch (view) {
+   505→    case 'sales':
+   506→      content = <SalesView />
+   507→      break
+   508→    case 'sales-detail':
+   509→      content = <SalesDetailView id={params.id ?? ''} />
+   510→      break
+   511→    case 'purchase':
+   512→      content = <PurchaseView />
+   513→      break
+   514→    case 'purchase-detail':
+   515→      content = <PurchaseDetailView id={params.id ?? ''} />
+   516→      break
+   517→    case 'jobwork':
+   518→      content = <JobworkView />
+   519→      break
+   520→    case 'jobwork-detail':
+   521→      content = <JobworkDetailView id={params.id ?? ''} />
+   522→      break
+   523→    case 'inventory':
+   524→      content = <InventoryView />
+   525→      break
+   526→    case 'accounting':
+   527→      content = <AccountingView />
+   528→      break
+   529→    case 'reports':
+   530→      content = <ReportsView />
+   531→      break
+   532→    case 'masters':
+   533→      content = <MastersView />
+   534→      break
+   535→    case 'tally':
+   536→      content = <TallyView />
+   537→      break
+   538→    case 'audit':
+   539→      content = <AuditView />
+   540→      break
+   541→    case 'docs':
+   542→      content = <DocsView />
+   543→      break
+   544→    default:
+   545→      content = <DashboardView />
+   546→  }
+   547→
+   548→  const headerChip = (label: string, value: string) => (
+   549→    <span className="hidden items-center gap-1.5 rounded-md border bg-card px-2 py-1 text-xs text-muted-foreground lg:inline-flex">
+   550→      <span className="font-medium text-foreground">{label}</span>
+   551→      <span className="tabular-nums">{value}</span>
+   552→    </span>
+   553→  )
+   554→
+   555→  return (
+   556→    <CompanyProvider company={company.data ?? null}>
+   557→      <div className="flex min-h-screen flex-col bg-background">
+   558→        {company.data?.access?.blocked ? (
+   559→          <div
+   560→            role="alert"
+   561→            className="flex items-center gap-2 border-b border-destructive/40 bg-destructive/10 px-4 py-2 text-sm text-destructive"
+   562→          >
+   563→            <ShieldAlert className="size-4 shrink-0" aria-hidden />
+   564→            <span className="font-medium">{company.data.access.message}</span>
+   565→          </div>
+   566→        ) : company.data?.access?.state === 'TRIAL' ? (
+   567→          <div
+   568→            role="status"
+   569→            className="flex flex-wrap items-center gap-2 border-b border-amber-300/60 bg-amber-50 px-4 py-2 text-sm text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-400"
+   570→          >
+   571→            <ShieldAlert className="size-4 shrink-0" aria-hidden />
+   572→            <span>
+   573→              Free trial{company.data.trialEndsAt ? ` until ${dateStr(company.data.trialEndsAt)}` : ''} — pick a plan to keep going.
+   574→            </span>
+   575→          </div>
+   576→        ) : null}
+   577→        <header className="sticky top-0 z-40 border-b bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/85">
+   578→          <div className="flex h-14 items-center gap-3 px-4">
+   579→            <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
+   580→              <SheetTrigger asChild>
+   581→                <Button variant="ghost" size="icon" className="size-11 md:hidden" aria-label="Open navigation">
+   582→                  <Menu className="size-5" aria-hidden />
+   583→                </Button>
+   584→              </SheetTrigger>
+   585→              <SheetContent side="left" className="w-64 border-sidebar-border bg-sidebar p-0 text-sidebar-foreground">
+   586→                <SheetHeader className="border-b border-sidebar-border px-4 py-3">
+   587→                  <SheetTitle className="flex items-center gap-2 text-sidebar-foreground">
+   588→                    <span className="flex size-7 items-center justify-center rounded-md bg-sidebar-primary text-sidebar-primary-foreground">
+   589→                      <Factory className="size-4" aria-hidden />
+   590→                    </span>
+   591→                    ForgeERP
+   592→                  </SheetTitle>
+   593→                </SheetHeader>
+   594→                <div className="overflow-y-auto erp-scroll-y">
+   595→                  <NavList onNavigate={() => setDrawerOpen(false)} />
+   596→                </div>
+   597→              </SheetContent>
+   598→            </Sheet>
+   599→
+   600→            <button
+   601→              type="button"
+   602→              onClick={() => setView('dashboard')}
+   603→              className="flex min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left"
+   604→              aria-label="ForgeERP home"
+   605→            >
+   606→              <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
+   607→                <Factory className="size-4" aria-hidden />
+   608→              </span>
+   609→              {/* Wordmark hidden on the narrowest phones so the header never
+   610→                  overflows 320px viewports (menu button + company + avatar fit). */}
+   611→              <span className="hidden text-sm font-semibold tracking-tight sm:inline sm:text-base">ForgeERP</span>
+   612→            </button>
+   613→
+   614→            <div className="ml-auto flex items-center gap-2">
+   615→              <button
+   616→                type="button"
+   617→                onClick={() => setPaletteOpen(true)}
+   618→                className="hidden h-9 w-56 items-center gap-2 rounded-md border bg-muted/40 px-3 text-left text-xs text-muted-foreground transition-colors hover:bg-accent md:flex"
+   619→                aria-label="Open command palette (Ctrl+K)"
+   620→              >
+   621→                <span className="sr-only">Open command palette</span>
+   622→                <svg viewBox="0 0 24 24" className="size-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+   623→                  <circle cx="11" cy="11" r="7" />
+   624→                  <path d="m21 21-4.3-4.3" />
+   625→                </svg>
+   626→                <span className="flex-1 truncate">Search or jump to…</span>
+   627→                <kbd className="rounded border bg-background px-1 font-mono text-[10px]">Ctrl K</kbd>
+   628→              </button>
+   629→              {company.data ? (
+   630→                <>
+   631→                  {chip(
+   632→                    <>
+   633→                      <span className="font-medium text-foreground">GSTIN</span>
+   634→                      <span className="tabular-nums">{company.data.gstin ?? '—'}</span>
+   635→                    </>
+   636→                  )}
+   637→                  {chip(
+   638→                    <>
+   639→                      <span className="font-medium text-foreground">FY</span>
+   640→                      <span className="tabular-nums">{fy}</span>
+   641→                    </>
+   642→                  )}
+   643→                  {chip(<span className="tabular-nums">{today}</span>)}
+   644→                </>
+   645→              ) : (
+   646→                <span className="hidden rounded-md border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 sm:inline-flex dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-400">
+   647→                  Company not set up
+   648→                </span>
+   649→              )}
+   650→              <span className="max-w-36 truncate text-sm font-medium min-[380px]:max-w-40 sm:max-w-40 lg:max-w-none">
+   651→                {company.data?.name ?? ''}
+   652→              </span>
+   653→              <UserMenu session={session} onLogout={() => void logout()} />
+   654→            </div>
+   655→          </div>
+   656→        </header>
+   657→
+   658→        {/* min-h-0 lets this row shrink to the leftover viewport space so the
+   659→            footer always sits at the viewport bottom on short pages; the sidebar
+   660→            caps at viewport height and scrolls internally when needed. */}
+   661→        <div className="flex min-h-0 flex-1">
+   662→          <aside className="sticky top-14 hidden h-auto max-h-[calc(100dvh-3.5rem)] w-60 shrink-0 overflow-y-auto border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:block lg:w-64 erp-scroll-y">
+   663→            <NavList />
+   664→          </aside>
+   665→
+   666→          <main className="min-w-0 flex-1 p-4 sm:p-6">
+   667→            <div className="mx-auto w-full max-w-7xl">
+   668→              <Suspense fallback={<ViewSkeleton />}>{content}</Suspense>
+   669→            </div>
+   670→          </main>
+   671→        </div>
+   672→
+   673→        <footer className="mt-auto border-t bg-card pb-[max(0.75rem,env(safe-area-inset-bottom))]">
+   674→          <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-1.5 px-4 py-3 text-center text-xs text-muted-foreground sm:flex-row sm:text-left">
+   675→            <span className="font-medium text-foreground">ForgeERP</span>
+   676→            <span>Manufacturing · Jobwork · GST · Double-Entry</span>
+   677→            <button
+   678→              type="button"
+   679→              className="underline-offset-2 hover:text-foreground hover:underline"
+   680→              onClick={() => setView('docs')}
+   681→            >
+   682→              Built from repository reverse-engineering — see Docs
+   683→            </button>
+   684→          </div>
+   685→          <div className="mx-auto max-w-7xl px-4 pb-2 text-center text-[10px] text-muted-foreground/70 sm:text-left">
+   686→            Append-only ledgers · FY-aware gapless numbering · one shared GST engine (report ≡ print ≡ invoice)
+   687→          </div>
+   688→        </footer>
+   689→
+   690→        {/* Mobile bottom nav (frequent modules) + spacer so it never covers the
+   691→            footer — h-14 + nav border + safe-area inset keeps the last content
+   692→            fully visible above the fixed bar at scroll-bottom. */}
+   693→        <div aria-hidden className="h-[calc(3.5rem+1px+env(safe-area-inset-bottom))] shrink-0 md:hidden" />
+   694→        <BottomNav />
+   695→
+   696→        <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+   697→        <ShortcutsHelpDialog open={helpOpen} onOpenChange={setHelpOpen} />
+   698→      </div>
+   699→    </CompanyProvider>
+   700→  )
+   701→}
+   702→

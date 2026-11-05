@@ -1,5 +1,5 @@
 import { ok, fail, handleError } from '@/lib/api'
-import { assertFeature } from '@/lib/platform'
+import { assertCompanyAccess, assertFeature } from '@/lib/platform'
 import {
   stockLedgerReport,
   stockSummaryReport,
@@ -13,6 +13,7 @@ import {
 
 export async function GET(req: Request) {
   try {
+    await assertCompanyAccess()
     await assertFeature('advancedReports')
     const url = new URL(req.url)
     const sp = url.searchParams

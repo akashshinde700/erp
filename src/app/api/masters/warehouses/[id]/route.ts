@@ -1,7 +1,7 @@
 import { ok, handleError } from '@/lib/api'
 import { db } from '@/lib/db'
 import { z } from 'zod'
-import { assertCompanyAccess } from '@/lib/platform'
+import { assertMutationAccess } from '@/lib/platform'
 import { logAudit } from '@/lib/audit'
 
 const whSchema = z.object({
@@ -14,7 +14,7 @@ const whSchema = z.object({
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
-    await assertCompanyAccess()
+    await assertMutationAccess()
     const body = whSchema.parse(await req.json())
     const data: any = { ...body }
     if (body.location !== undefined) data.location = body.location || null
@@ -29,7 +29,7 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
-    await assertCompanyAccess()
+    await assertMutationAccess()
     const url = new URL(req.url)
     const activate = url.searchParams.get('activate') === '1'
     const wh = await db.warehouse.update({ where: { id }, data: { active: activate } })

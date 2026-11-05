@@ -1,0 +1,1003 @@
+     1→     1→/**
+     2→     2→ * ForgeERP — Transactional posting services.
+     3→     3→ * Every voucher writes its document + stock ledger + GL entries inside ONE
+     4→     4→ * prisma.$transaction (core invariant #1). Ledgers are append-only: cancel
+     5→     5→ * writes mirrored reversal rows and flags, never deletes (invariant #2).
+     6→     6→ * Numbering is atomic via the Counter table inside the same transaction (invariant #3).
+     7→     7→ * All business guards are enforced SERVER-side; client input is untrusted.
+     8→     8→ */
+     9→     9→import { db } from './db'
+    10→    10→import { Prisma } from '@prisma/client'
+    11→    11→import { r2, fyCode, computeInvoiceTotals, EPS, DEFAULT_WAREHOUSE_CODE } from './erp'
+    12→    12→import { BusinessError, AccountCode, postGl, cancelGlForVoucher } from './accounting'
+    13→    13→
+    14→    14→type Tx = Prisma.TransactionClient
+    15→    15→
+    16→    16→export { DEFAULT_WAREHOUSE_CODE }
+    17→    17→
+    18→    18→// ---------- helpers ----------
+    19→    19→
+    20→    20→async function getCompany(tx: Tx) {
+    21→    21→  const company = await tx.company.findFirst()
+    22→    22→  if (!company) throw new BusinessError('Company profile is not set up yet. Complete setup in Masters → Company.', 409)
+    23→    23→  return company
+    24→    24→}
+    25→    25→
+    26→    26→async function defaultWarehouseId(tx: Tx): Promise<string> {
+    27→    27→  const w = await tx.warehouse.findFirst({ where: { code: DEFAULT_WAREHOUSE_CODE } })
+    28→    28→  if (w) return w.id
+    29→    29→  const any = await tx.warehouse.findFirst({ orderBy: { code: 'asc' } })
+    30→    30→  if (!any) throw new BusinessError('No warehouse defined. Create one in Masters first.', 409)
+    31→    31→  return any.id
+    32→    32→}
+    33→    33→
+    34→    34→/** Atomic gapless-forward document number: INV-2526-003 */
+    35→    35→async function nextDocNo(tx: Tx, prefix: string, date: Date): Promise<string> {
+    36→    36→  const fy = fyCode(date)
+    37→    37→  const key = `${prefix}-${fy}`
+    38→    38→  const counter = await tx.counter.upsert({
+    39→    39→    where: { key },
+    40→    40→    create: { key, value: 1 },
+    41→    41→    update: { value: { increment: 1 } },
+    42→    42→  })
+    43→    43→  return `${key}-${String(counter.value).padStart(3, '0')}`
+    44→    44→}
+    45→    45→
+    46→    46→interface StockStats { avail: number; avgCost: number }
+    47→    47→
+    48→    48→async function stockStats(tx: Tx, itemId: string, warehouseId: string): Promise<StockStats> {
+    49→    49→  const rows = await tx.stockLedger.findMany({
+    50→    50→    where: { itemId, warehouseId, isCancelled: false },
+    51→    51→    select: { qtyIn: true, qtyOut: true, rate: true },
+    52→    52→  })
+    53→    53→  let qtyIn = 0
+    54→    54→  let qtyOut = 0
+    55→    55→  let inValue = 0
+    56→    56→  for (const r of rows) {
+    57→    57→    qtyIn += r.qtyIn
+    58→    58→    qtyOut += r.qtyOut
+    59→    59→    inValue += r.qtyIn * r.rate
+    60→    60→  }
+    61→    61→  return {
+    62→    62→    avail: r2(qtyIn - qtyOut),
+    63→    63→    avgCost: qtyIn > EPS ? r2(inValue / qtyIn) : 0,
+    64→    64→  }
+    65→    65→}
+    66→    66→
+    67→    67→async function requireAvailability(tx: Tx, itemId: string, itemName: string, warehouseId: string, need: number) {
+    68→    68→  const { avail } = await stockStats(tx, itemId, warehouseId)
+    69→    69→  if (avail + EPS < need) {
+    70→    70→    throw new BusinessError(
+    71→    71→      `Insufficient stock for "${itemName}" (also check warehouse): available ${avail}, required ${need}`
+    72→    72→    )
+    73→    73→  }
+    74→    74→}
+    75→    75→
+    76→    76→/** Cancel path for stock rows of a voucher: mirror + flag both sides. */
+    77→    77→async function cancelStockForVoucher(tx: Tx, voucherType: string, voucherNo: string, date: Date) {
+    78→    78→  const originals = await tx.stockLedger.findMany({
+    79→    79→    where: { voucherType, voucherNo, isCancelled: false },
+    80→    80→  })
+    81→    81→  if (originals.length === 0) return
+    82→    82→  for (const o of originals) {
+    83→    83→    await tx.stockLedger.create({
+    84→    84→      data: {
+    85→    85→        postingDate: date,
+    86→    86→        voucherType,
+    87→    87→        voucherNo,
+    88→    88→        itemId: o.itemId,
+    89→    89→        warehouseId: o.warehouseId,
+    90→    90→        qtyIn: o.qtyOut, // mirrored
+    91→    91→        qtyOut: o.qtyIn,
+    92→    92→        rate: o.rate,
+    93→    93→        remarks: `Reversal of ${voucherNo}`,
+    94→    94→        isCancelled: true,
+    95→    95→      },
+    96→    96→    })
+    97→    97→  }
+    98→    98→  await tx.stockLedger.updateMany({
+    99→    99→    where: { voucherType, voucherNo, isCancelled: false },
+   100→   100→    data: { isCancelled: true },
+   101→   101→  })
+   102→   102→}
+   103→   103→
+   104→   104→const iso = (d?: string | Date): Date => (d ? new Date(d) : new Date())
+   105→   105→
+   106→   106→// ---------- Sales invoices (W1) ----------
+   107→   107→
+   108→   108→export interface SalesLineInput {
+   109→   109→  itemId: string
+   110→   110→  detail?: string | null
+   111→   111→  qty: number
+   112→   112→  rate: number
+   113→   113→  discPct?: number
+   114→   114→}
+   115→   115→
+   116→   116→export interface PostSalesInput {
+   117→   117→  partyId: string
+   118→   118→  date?: string | Date
+   119→   119→  pos?: string
+   120→   120→  poNo?: string | null
+   121→   121→  taxInclusive?: boolean
+   122→   122→  warehouseId?: string | null
+   123→   123→  remarks?: string | null
+   124→   124→  source?: string
+   125→   125→  lines: SalesLineInput[]
+   126→   126→}
+   127→   127→
+   128→   128→export async function postSalesInvoice(input: PostSalesInput) {
+   129→   129→  return db.$transaction(async (tx) => postSalesInvoiceTx(tx, input))
+   130→   130→}
+   131→   131→
+   132→   132→/** Internal: runs inside a caller-owned transaction (used by jobwork invoicing). */
+   133→   133→export async function postSalesInvoiceTx(tx: Tx, input: PostSalesInput) {
+   134→   134→  if (!input.lines?.length) throw new BusinessError('Invoice needs at least one line item')
+   135→   135→  {
+   136→   136→    const company = await getCompany(tx)
+   137→   137→    const party = await tx.party.findUnique({ where: { id: input.partyId } })
+   138→   138→    if (!party) throw new BusinessError('Party not found', 404)
+   139→   139→    if (!party.active) throw new BusinessError(`Party "${party.name}" is inactive`)
+   140→   140→
+   141→   141→    const items = await tx.item.findMany({ where: { id: { in: input.lines.map((l) => l.itemId) } } })
+   142→   142→    const itemMap = new Map(items.map((i) => [i.id, i]))
+   143→   143→    for (const l of input.lines) {
+   144→   144→      const it = itemMap.get(l.itemId)
+   145→   145→      if (!it) throw new BusinessError(`Item ${l.itemId} not found`, 404)
+   146→   146→      if (!(l.qty > 0)) throw new BusinessError(`Quantity must be positive for "${it.name}"`)
+   147→   147→      if (l.rate < 0) throw new BusinessError(`Rate cannot be negative for "${it.name}"`)
+   148→   148→    }
+   149→   149→
+   150→   150→    const date = iso(input.date)
+   151→   151→    const pos = input.pos ?? party.stateCode
+   152→   152→    const interState = pos !== company.stateCode
+   153→   153→    const taxInclusive = input.taxInclusive ?? false
+   154→   154→
+   155→   155→    const totals = computeInvoiceTotals(
+   156→   156→      input.lines.map((l) => ({
+   157→   157→        qty: l.qty,
+   158→   158→        rate: l.rate,
+   159→   159→        discPct: l.discPct ?? 0,
+   160→   160→        gstRate: itemMap.get(l.itemId)!.gstRate,
+   161→   161→      })),
+   162→   162→      { taxInclusive, interState }
+   163→   163→    )
+   164→   164→
+   165→   165→    const invoiceNo = await nextDocNo(tx, 'INV', date)
+   166→   166→    const source = input.source ?? 'MANUAL'
+   167→   167→    const incomeAccount: AccountCode = source === 'JOBWORK' ? 'JWIN' : 'SALS'
+   168→   168→
+   169→   169→    const invoice = await tx.salesInvoice.create({
+   170→   170→      data: {
+   171→   171→        invoiceNo,
+   172→   172→        date,
+   173→   173→        partyId: party.id,
+   174→   174→        poNo: input.poNo ?? null,
+   175→   175→        pos,
+   176→   176→        interState,
+   177→   177→        taxInclusive,
+   178→   178→        taxable: totals.taxable,
+   179→   179→        discount: totals.discount,
+   180→   180→        cgst: totals.cgst,
+   181→   181→        sgst: totals.sgst,
+   182→   182→        igst: totals.igst,
+   183→   183→        roundOff: totals.roundOff,
+   184→   184→        grandTotal: totals.grandTotal,
+   185→   185→        source,
+   186→   186→        remarks: input.remarks ?? null,
+   187→   187→        items: {
+   188→   188→          create: input.lines.map((l, idx) => {
+   189→   189→            const it = itemMap.get(l.itemId)!
+   190→   190→            const t = totals.lines[idx]
+   191→   191→            return {
+   192→   192→              itemId: l.itemId,
+   193→   193→              detail: l.detail ?? null,
+   194→   194→              hsn: it.hsn,
+   195→   195→              uom: it.uom,
+   196→   196→              qty: l.qty,
+   197→   197→              rate: l.rate,
+   198→   198→              discPct: l.discPct ?? 0,
+   199→   199→              discAmt: t.discAmt,
+   200→   200→              taxable: t.taxable,
+   201→   201→              gstRate: it.gstRate,
+   202→   202→              cgst: t.cgst,
+   203→   203→              sgst: t.sgst,
+   204→   204→              igst: t.igst,
+   205→   205→              total: t.total,
+   206→   206→            }
+   207→   207→          }),
+   208→   208→        },
+   209→   209→      },
+   210→   210→      include: { items: true },
+   211→   211→    })
+   212→   212→
+   213→   213→    // Stock ledger: qtyOut @ weighted-average cost, availability-guarded
+   214→   214→    const warehouseId = input.warehouseId ?? (await defaultWarehouseId(tx))
+   215→   215→    const qtyByItem = new Map<string, number>()
+   216→   216→    for (const l of input.lines) {
+   217→   217→      const it = itemMap.get(l.itemId)!
+   218→   218→      if (it.isService || !it.isStockItem) continue
+   219→   219→      qtyByItem.set(l.itemId, r2((qtyByItem.get(l.itemId) ?? 0) + l.qty))
+   220→   220→    }
+   221→   221→    for (const [itemId, q] of qtyByItem) {
+   222→   222→      const it = itemMap.get(itemId)!
+   223→   223→      await requireAvailability(tx, itemId, it.name, warehouseId, q)
+   224→   224→      const { avgCost } = await stockStats(tx, itemId, warehouseId)
+   225→   225→      await tx.stockLedger.create({
+   226→   226→        data: {
+   227→   227→          postingDate: date,
+   228→   228→          voucherType: 'SALES',
+   229→   229→          voucherNo: invoiceNo,
+   230→   230→          itemId,
+   231→   231→          warehouseId,
+   232→   232→          qtyOut: q,
+   233→   233→          rate: avgCost,
+   234→   234→          remarks: `Sale to ${party.name}`,
+   235→   235→        },
+   236→   236→      })
+   237→   237→    }
+   238→   238→
+   239→   239→    // GL: Dr DEBT / Cr income + output GST / RND
+   240→   240→    const gl: Parameters<typeof postGl>[2] = [
+   241→   241→      { account: 'DEBT', partyId: party.id, debit: totals.grandTotal, remarks: `Invoice ${invoiceNo}` },
+   242→   242→      { account: incomeAccount, credit: totals.taxable },
+   243→   243→      { account: 'CGSTP', credit: totals.cgst },
+   244→   244→      { account: 'SGSTP', credit: totals.sgst },
+   245→   245→      { account: 'IGSTP', credit: totals.igst },
+   246→   246→    ]
+   247→   247→    if (Math.abs(totals.roundOff) > 0.004) {
+   248→   248→      if (totals.roundOff > 0) gl.push({ account: 'RND', credit: totals.roundOff })
+   249→   249→      else gl.push({ account: 'RND', debit: -totals.roundOff })
+   250→   250→    }
+   251→   251→    await postGl(tx, { date, voucherType: 'SALES_INVOICE', voucherNo: invoiceNo }, gl)
+   252→   252→
+   253→   253→    return invoice
+   254→   254→  }
+   255→   255→}
+   256→   256→
+   257→   257→export async function cancelSalesInvoice(id: string) {
+   258→   258→  return db.$transaction(async (tx) => {
+   259→   259→    const inv = await tx.salesInvoice.findUnique({ where: { id }, include: { items: true } })
+   260→   260→    if (!inv) throw new BusinessError('Invoice not found', 404)
+   261→   261→    if (inv.status === 'CANCELLED') throw new BusinessError('Invoice is already cancelled')
+   262→   262→    if (inv.paidAmount > 0.004) {
+   263→   263→      throw new BusinessError('Invoice has payments against it — cancel those payments first')
+   264→   264→    }
+   265→   265→    const now = new Date()
+   266→   266→    await cancelStockForVoucher(tx, 'SALES', inv.invoiceNo, now)
+   267→   267→    await cancelGlForVoucher(tx, 'SALES_INVOICE', inv.invoiceNo, now)
+   268→   268→    return tx.salesInvoice.update({ where: { id }, data: { status: 'CANCELLED' }, include: { items: true } })
+   269→   269→  })
+   270→   270→}
+   271→   271→
+   272→   272→// ---------- Purchase invoices (W2) ----------
+   273→   273→
+   274→   274→export interface PostPurchaseInput {
+   275→   275→  partyId: string
+   276→   276→  date?: string | Date
+   277→   277→  poNo?: string | null
+   278→   278→  taxInclusive?: boolean
+   279→   279→  warehouseId?: string | null
+   280→   280→  remarks?: string | null
+   281→   281→  lines: SalesLineInput[]
+   282→   282→}
+   283→   283→
+   284→   284→export async function postPurchaseInvoice(input: PostPurchaseInput) {
+   285→   285→  if (!input.lines?.length) throw new BusinessError('Invoice needs at least one line item')
+   286→   286→  return db.$transaction(async (tx) => {
+   287→   287→    const company = await getCompany(tx)
+   288→   288→    const party = await tx.party.findUnique({ where: { id: input.partyId } })
+   289→   289→    if (!party) throw new BusinessError('Party not found', 404)
+   290→   290→    if (!party.active) throw new BusinessError(`Party "${party.name}" is inactive`)
+   291→   291→
+   292→   292→    const items = await tx.item.findMany({ where: { id: { in: input.lines.map((l) => l.itemId) } } })
+   293→   293→    const itemMap = new Map(items.map((i) => [i.id, i]))
+   294→   294→    for (const l of input.lines) {
+   295→   295→      const it = itemMap.get(l.itemId)
+   296→   296→      if (!it) throw new BusinessError(`Item ${l.itemId} not found`, 404)
+   297→   297→      if (!(l.qty > 0)) throw new BusinessError(`Quantity must be positive for "${it.name}"`)
+   298→   298→      if (l.rate < 0) throw new BusinessError(`Rate cannot be negative for "${it.name}"`)
+   299→   299→    }
+   300→   300→
+   301→   301→    const date = iso(input.date)
+   302→   302→    const interState = party.stateCode !== company.stateCode // supplier state drives input tax
+   303→   303→    const taxInclusive = input.taxInclusive ?? false
+   304→   304→
+   305→   305→    const totals = computeInvoiceTotals(
+   306→   306→      input.lines.map((l) => ({
+   307→   307→        qty: l.qty,
+   308→   308→        rate: l.rate,
+   309→   309→        discPct: l.discPct ?? 0,
+   310→   310→        gstRate: itemMap.get(l.itemId)!.gstRate,
+   311→   311→      })),
+   312→   312→      { taxInclusive, interState }
+   313→   313→    )
+   314→   314→
+   315→   315→    const invoiceNo = await nextDocNo(tx, 'PIN', date)
+   316→   316→    const invoice = await tx.purchaseInvoice.create({
+   317→   317→      data: {
+   318→   318→        invoiceNo,
+   319→   319→        date,
+   320→   320→        partyId: party.id,
+   321→   321→        poNo: input.poNo ?? null,
+   322→   322→        interState,
+   323→   323→        taxInclusive,
+   324→   324→        taxable: totals.taxable,
+   325→   325→        discount: totals.discount,
+   326→   326→        cgst: totals.cgst,
+   327→   327→        sgst: totals.sgst,
+   328→   328→        igst: totals.igst,
+   329→   329→        roundOff: totals.roundOff,
+   330→   330→        grandTotal: totals.grandTotal,
+   331→   331→        remarks: input.remarks ?? null,
+   332→   332→        items: {
+   333→   333→          create: input.lines.map((l, idx) => {
+   334→   334→            const it = itemMap.get(l.itemId)!
+   335→   335→            const t = totals.lines[idx]
+   336→   336→            return {
+   337→   337→              itemId: l.itemId,
+   338→   338→              detail: l.detail ?? null,
+   339→   339→              hsn: it.hsn,
+   340→   340→              uom: it.uom,
+   341→   341→              qty: l.qty,
+   342→   342→              rate: l.rate,
+   343→   343→              discPct: l.discPct ?? 0,
+   344→   344→              discAmt: t.discAmt,
+   345→   345→              taxable: t.taxable,
+   346→   346→              gstRate: it.gstRate,
+   347→   347→              cgst: t.cgst,
+   348→   348→              sgst: t.sgst,
+   349→   349→              igst: t.igst,
+   350→   350→              total: t.total,
+   351→   351→            }
+   352→   352→          }),
+   353→   353→        },
+   354→   354→      },
+   355→   355→      include: { items: true },
+   356→   356→    })
+   357→   357→
+   358→   358→    // Stock: qtyIn @ effective line cost (taxable / qty)
+   359→   359→    const warehouseId = input.warehouseId ?? (await defaultWarehouseId(tx))
+   360→   360→    const qtyByItem = new Map<string, { qty: number; value: number }>()
+   361→   361→    for (const [idx, l] of input.lines.entries()) {
+   362→   362→      const it = itemMap.get(l.itemId)!
+   363→   363→      if (it.isService || !it.isStockItem) continue
+   364→   364→      const prev = qtyByItem.get(l.itemId) ?? { qty: 0, value: 0 }
+   365→   365→      qtyByItem.set(l.itemId, {
+   366→   366→        qty: r2(prev.qty + l.qty),
+   367→   367→        value: r2(prev.value + totals.lines[idx].taxable),
+   368→   368→      })
+   369→   369→    }
+   370→   370→    for (const [itemId, agg] of qtyByItem) {
+   371→   371→      const cost = agg.qty > EPS ? r2(agg.value / agg.qty) : 0
+   372→   372→      await tx.stockLedger.create({
+   373→   373→        data: {
+   374→   374→          postingDate: date,
+   375→   375→          voucherType: 'PURCHASE',
+   376→   376→          voucherNo: invoiceNo,
+   377→   377→          itemId,
+   378→   378→          warehouseId,
+   379→   379→          qtyIn: agg.qty,
+   380→   380→          rate: cost,
+   381→   381→          remarks: `Purchase from ${party.name}`,
+   382→   382→        },
+   383→   383→      })
+   384→   384→    }
+   385→   385→
+   386→   386→    // GL: Dr PURC + input GST / Cr CRED / RND
+   387→   387→    const gl: Parameters<typeof postGl>[2] = [
+   388→   388→      { account: 'PURC', debit: totals.taxable },
+   389→   389→      { account: 'CGSTI', debit: totals.cgst },
+   390→   390→      { account: 'SGSTI', debit: totals.sgst },
+   391→   391→      { account: 'IGSTI', debit: totals.igst },
+   392→   392→      { account: 'CRED', partyId: party.id, credit: totals.grandTotal, remarks: `Invoice ${invoiceNo}` },
+   393→   393→    ]
+   394→   394→    if (Math.abs(totals.roundOff) > 0.004) {
+   395→   395→      if (totals.roundOff > 0) gl.push({ account: 'RND', credit: totals.roundOff })
+   396→   396→      else gl.push({ account: 'RND', debit: -totals.roundOff })
+   397→   397→    }
+   398→   398→    await postGl(tx, { date, voucherType: 'PURCHASE_INVOICE', voucherNo: invoiceNo }, gl)
+   399→   399→
+   400→   400→    return invoice
+   401→   401→  })
+   402→   402→}
+   403→   403→
+   404→   404→export async function cancelPurchaseInvoice(id: string) {
+   405→   405→  return db.$transaction(async (tx) => {
+   406→   406→    const inv = await tx.purchaseInvoice.findUnique({ where: { id } })
+   407→   407→    if (!inv) throw new BusinessError('Invoice not found', 404)
+   408→   408→    if (inv.status === 'CANCELLED') throw new BusinessError('Invoice is already cancelled')
+   409→   409→    if (inv.paidAmount > 0.004) {
+   410→   410→      throw new BusinessError('Invoice has payments against it — cancel those payments first')
+   411→   411→    }
+   412→   412→    const now = new Date()
+   413→   413→    await cancelStockForVoucher(tx, 'PURCHASE', inv.invoiceNo, now)
+   414→   414→    await cancelGlForVoucher(tx, 'PURCHASE_INVOICE', inv.invoiceNo, now)
+   415→   415→    return tx.purchaseInvoice.update({ where: { id }, data: { status: 'CANCELLED' } })
+   416→   416→  })
+   417→   417→}
+   418→   418→
+   419→   419→// ---------- Payments + allocations (W3) ----------
+   420→   420→
+   421→   421→export interface PostPaymentInput {
+   422→   422→  type: 'RECEIPT' | 'PAYMENT'
+   423→   423→  partyId: string
+   424→   424→  date?: string | Date
+   425→   425→  amount: number
+   426→   426→  mode?: string
+   427→   427→  refNo?: string | null
+   428→   428→  notes?: string | null
+   429→   429→  allocations?: { invoiceType: 'SALES' | 'PURCHASE'; invoiceNo: string; amount: number }[]
+   430→   430→}
+   431→   431→
+   432→   432→export async function postPayment(input: PostPaymentInput) {
+   433→   433→  return db.$transaction(async (tx) => {
+   434→   434→    await getCompany(tx) // company must exist
+   435→   435→    const party = await tx.party.findUnique({ where: { id: input.partyId } })
+   436→   436→    if (!party) throw new BusinessError('Party not found', 404)
+   437→   437→    if (!(input.amount > 0)) throw new BusinessError('Payment amount must be positive')
+   438→   438→
+   439→   439→    const date = iso(input.date)
+   440→   440→    const prefix = input.type === 'RECEIPT' ? 'RCP' : 'PAY'
+   441→   441→    const paymentNo = await nextDocNo(tx, prefix, date)
+   442→   442→
+   443→   443→    // Validate allocations against live outstanding (laserp guard pattern)
+   444→   444→    const allocations = input.allocations ?? []
+   445→   445→    const allocSum = r2(allocations.reduce((s, a) => s + a.amount, 0))
+   446→   446→    if (allocSum > input.amount + 0.005) {
+   447→   447→      throw new BusinessError(`Allocated (${allocSum}) exceeds payment amount (${r2(input.amount)})`)
+   448→   448→    }
+   449→   449→    for (const a of allocations) {
+   450→   450→      if (!(a.amount > 0)) throw new BusinessError('Allocation amount must be positive')
+   451→   451→      if (a.invoiceType === 'SALES') {
+   452→   452→        const inv = await tx.salesInvoice.findUnique({ where: { invoiceNo: a.invoiceNo } })
+   453→   453→        if (!inv) throw new BusinessError(`Sales invoice ${a.invoiceNo} not found`, 404)
+   454→   454→        if (inv.partyId !== party.id) throw new BusinessError(`Invoice ${a.invoiceNo} belongs to a different party`)
+   455→   455→        if (inv.status !== 'POSTED') throw new BusinessError(`Invoice ${a.invoiceNo} is not active`)
+   456→   456→        const outstanding = r2(inv.grandTotal - inv.paidAmount)
+   457→   457→        if (a.amount > outstanding + 0.005) {
+   458→   458→          throw new BusinessError(`Invoice ${a.invoiceNo} outstanding is only ${outstanding}`)
+   459→   459→        }
+   460→   460→        await tx.salesInvoice.update({ where: { id: inv.id }, data: { paidAmount: r2(inv.paidAmount + a.amount) } })
+   461→   461→      } else if (a.invoiceType === 'PURCHASE') {
+   462→   462→        const inv = await tx.purchaseInvoice.findUnique({ where: { invoiceNo: a.invoiceNo } })
+   463→   463→        if (!inv) throw new BusinessError(`Purchase invoice ${a.invoiceNo} not found`, 404)
+   464→   464→        if (inv.partyId !== party.id) throw new BusinessError(`Invoice ${a.invoiceNo} belongs to a different party`)
+   465→   465→        if (inv.status !== 'POSTED') throw new BusinessError(`Invoice ${a.invoiceNo} is not active`)
+   466→   466→        const outstanding = r2(inv.grandTotal - inv.paidAmount)
+   467→   467→        if (a.amount > outstanding + 0.005) {
+   468→   468→          throw new BusinessError(`Invoice ${a.invoiceNo} outstanding is only ${outstanding}`)
+   469→   469→        }
+   470→   470→        await tx.purchaseInvoice.update({ where: { id: inv.id }, data: { paidAmount: r2(inv.paidAmount + a.amount) } })
+   471→   471→      } else {
+   472→   472→        throw new BusinessError('Invalid allocation invoice type')
+   473→   473→      }
+   474→   474→    }
+   475→   475→
+   476→   476→    const payment = await tx.payment.create({
+   477→   477→      data: {
+   478→   478→        paymentNo,
+   479→   479→        date,
+   480→   480→        type: input.type,
+   481→   481→        partyId: party.id,
+   482→   482→        amount: r2(input.amount),
+   483→   483→        mode: input.mode ?? 'CASH',
+   484→   484→        refNo: input.refNo ?? null,
+   485→   485→        notes: input.notes ?? null,
+   486→   486→        allocations: allocations.length
+   487→   487→          ? { create: allocations.map((a) => ({ invoiceType: a.invoiceType, invoiceNo: a.invoiceNo, amount: r2(a.amount) })) }
+   488→   488→          : undefined,
+   489→   489→      },
+   490→   490→      include: { allocations: true },
+   491→   491→    })
+   492→   492→
+   493→   493→    // GL: RECEIPT → Dr CASH/BANK, Cr DEBT ; PAYMENT → Dr CRED, Cr CASH/BANK
+   494→   494→    const cashAccount: AccountCode = input.mode === 'CASH' ? 'CASH' : 'BANK'
+   495→   495→    const gl: Parameters<typeof postGl>[2] =
+   496→   496→      input.type === 'RECEIPT'
+   497→   497→        ? [
+   498→   498→            { account: cashAccount, debit: payment.amount, remarks: `${paymentNo} (${input.mode})` },
+   499→   499→            { account: 'DEBT', partyId: party.id, credit: payment.amount },
+   500→   500→          ]
+   501→   501→        : [
+   502→   502→            { account: 'CRED', partyId: party.id, debit: payment.amount },
+   503→   503→            { account: cashAccount, credit: payment.amount, remarks: `${paymentNo} (${input.mode})` },
+   504→   504→          ]
+   505→   505→    await postGl(tx, { date, voucherType: 'PAYMENT', voucherNo: paymentNo }, gl)
+   506→   506→
+   507→   507→    return payment
+   508→   508→  })
+   509→   509→}
+   510→   510→
+   511→   511→export async function cancelPayment(id: string) {
+   512→   512→  return db.$transaction(async (tx) => {
+   513→   513→    const pay = await tx.payment.findUnique({ where: { id }, include: { allocations: true } })
+   514→   514→    if (!pay) throw new BusinessError('Payment not found', 404)
+   515→   515→    if (pay.status === 'CANCELLED') throw new BusinessError('Payment is already cancelled')
+   516→   516→    for (const a of pay.allocations) {
+   517→   517→      if (a.invoiceType === 'SALES') {
+   518→   518→        await tx.salesInvoice.updateMany({
+   519→   519→          where: { invoiceNo: a.invoiceNo },
+   520→   520→          data: { paidAmount: { decrement: a.amount } },
+   521→   521→        })
+   522→   522→      } else if (a.invoiceType === 'PURCHASE') {
+   523→   523→        await tx.purchaseInvoice.updateMany({
+   524→   524→          where: { invoiceNo: a.invoiceNo },
+   525→   525→          data: { paidAmount: { decrement: a.amount } },
+   526→   526→        })
+   527→   527→      }
+   528→   528→    }
+   529→   529→    await cancelGlForVoucher(tx, 'PAYMENT', pay.paymentNo, new Date())
+   530→   530→    return tx.payment.update({ where: { id }, data: { status: 'CANCELLED' }, include: { allocations: true } })
+   531→   531→  })
+   532→   532→}
+   533→   533→
+   534→   534→// ---------- Jobwork: Inward (W5.1) ----------
+   535→   535→
+   536→   536→export interface PostInwardInput {
+   537→   537→  partyId: string
+   538→   538→  date?: string | Date
+   539→   539→  challanNo?: string | null
+   540→   540→  warehouseId?: string | null
+   541→   541→  notes?: string | null
+   542→   542→  items: { itemId: string; batchNo?: string | null; qty: number; weight: number; remarks?: string | null }[]
+   543→   543→}
+   544→   544→
+   545→   545→export async function postJobworkInward(input: PostInwardInput) {
+   546→   546→  if (!input.items?.length) throw new BusinessError('Inward needs at least one item')
+   547→   547→  return db.$transaction(async (tx) => {
+   548→   548→    await getCompany(tx)
+   549→   549→    const party = await tx.party.findUnique({ where: { id: input.partyId } })
+   550→   550→    if (!party) throw new BusinessError('Party not found', 404)
+   551→   551→    const items = await tx.item.findMany({ where: { id: { in: input.items.map((i) => i.itemId) } } })
+   552→   552→    const itemMap = new Map(items.map((i) => [i.id, i]))
+   553→   553→    for (const i of input.items) {
+   554→   554→      const it = itemMap.get(i.itemId)
+   555→   555→      if (!it) throw new BusinessError(`Item ${i.itemId} not found`, 404)
+   556→   556→      if (!(i.qty > 0)) throw new BusinessError(`Quantity must be positive for "${it.name}"`)
+   557→   557→      if (i.weight < 0) throw new BusinessError(`Weight cannot be negative for "${it.name}"`)
+   558→   558→    }
+   559→   559→
+   560→   560→    const date = iso(input.date)
+   561→   561→    const inwardNo = await nextDocNo(tx, 'JWI', date)
+   562→   562→    const warehouseId = input.warehouseId ?? (await defaultWarehouseId(tx))
+   563→   563→
+   564→   564→    const inward = await tx.jobworkInward.create({
+   565→   565→      data: {
+   566→   566→        inwardNo,
+   567→   567→        date,
+   568→   568→        partyId: party.id,
+   569→   569→        challanNo: input.challanNo ?? null,
+   570→   570→        warehouseId,
+   571→   571→        notes: input.notes ?? null,
+   572→   572→        items: {
+   573→   573→          create: input.items.map((i) => ({
+   574→   574→            itemId: i.itemId,
+   575→   575→            batchNo: i.batchNo ?? null,
+   576→   576→            qty: i.qty,
+   577→   577→            weight: i.weight,
+   578→   578→            remarks: i.remarks ?? null,
+   579→   579→          })),
+   580→   580→        },
+   581→   581→      },
+   582→   582→      include: { items: true },
+   583→   583→    })
+   584→   584→
+   585→   585→    // Customer-owned material: value-neutral qtyIn @ 0 (tracked, not owned)
+   586→   586→    for (const i of input.items) {
+   587→   587→      const it = itemMap.get(i.itemId)!
+   588→   588→      if (it.isService || !it.isStockItem) continue
+   589→   589→      await tx.stockLedger.create({
+   590→   590→        data: {
+   591→   591→          postingDate: date,
+   592→   592→          voucherType: 'JOBWORK_IN',
+   593→   593→          voucherNo: inwardNo,
+   594→   594→          itemId: i.itemId,
+   595→   595→          warehouseId,
+   596→   596→          qtyIn: i.qty,
+   597→   597→          rate: 0,
+   598→   598→          remarks: `Jobwork inward from ${party.name}`,
+   599→   599→        },
+   600→   600→      })
+   601→   601→    }
+   602→   602→
+   603→   603→    return inward
+   604→   604→  })
+   605→   605→}
+   606→   606→
+   607→   607→export async function cancelJobworkInward(id: string) {
+   608→   608→  return db.$transaction(async (tx) => {
+   609→   609→    const inward = await tx.jobworkInward.findUnique({
+   610→   610→      where: { id },
+   611→   611→      include: { items: true, jobCards: true, certificates: true },
+   612→   612→    })
+   613→   613→    if (!inward) throw new BusinessError('Inward not found', 404)
+   614→   614→    if (inward.status === 'CANCELLED') throw new BusinessError('Inward is already cancelled')
+   615→   615→    const doneCards = inward.jobCards.filter((c) => c.status === 'COMPLETED')
+   616→   616→    if (doneCards.length > 0) {
+   617→   617→      throw new BusinessError('Inward has completed job cards — cancel those first (certificate/invoice blocks may apply)')
+   618→   618→    }
+   619→   619→    const now = new Date()
+   620→   620→    await cancelStockForVoucher(tx, 'JOBWORK_IN', inward.inwardNo, now)
+   621→   621→    return tx.jobworkInward.update({ where: { id }, data: { status: 'CANCELLED' }, include: { items: true } })
+   622→   622→  })
+   623→   623→}
+   624→   624→
+   625→   625→// ---------- Jobwork: Job Card (W5.2) ----------
+   626→   626→
+   627→   627→export interface PostJobCardInput {
+   628→   628→  inwardId: string
+   629→   629→  date?: string | Date
+   630→   630→  notes?: string | null
+   631→   631→  lines: { inwardItemId: string; qty: number; weight: number; processIds: string[] }[]
+   632→   632→}
+   633→   633→
+   634→   634→const OVER_TOLERANCE = 1.05 // 5% over-processing allowance (ERPNext pattern)
+   635→   635→
+   636→   636→export async function postJobCard(input: PostJobCardInput) {
+   637→   637→  if (!input.lines?.length) throw new BusinessError('Job card needs at least one line')
+   638→   638→  return db.$transaction(async (tx) => {
+   639→   639→    const inward = await tx.jobworkInward.findUnique({
+   640→   640→      where: { id: input.inwardId },
+   641→   641→      include: { items: true },
+   642→   642→    })
+   643→   643→    if (!inward) throw new BusinessError('Inward not found', 404)
+   644→   644→    if (inward.status === 'CANCELLED') throw new BusinessError('Inward is cancelled')
+   645→   645→    if (inward.status === 'INVOICED') throw new BusinessError('Inward is already invoiced')
+   646→   646→
+   647→   647→    const inwardItemMap = new Map(inward.items.map((i) => [i.id, i]))
+   648→   648→    for (const l of input.lines) {
+   649→   649→      const it = inwardItemMap.get(l.inwardItemId)
+   650→   650→      if (!it) throw new BusinessError('Line item does not belong to this inward', 400)
+   651→   651→      if (!(l.qty > 0)) throw new BusinessError(`Quantity must be positive`)
+   652→   652→      if (l.weight < 0) throw new BusinessError('Weight cannot be negative')
+   653→   653→      if (!l.processIds?.length) throw new BusinessError('Select at least one process per line')
+   654→   654→    }
+   655→   655→
+   656→   656→    // Aggregate qty/weight per inward item (server-side trust boundary)
+   657→   657→    const agg = new Map<string, { qty: number; weight: number }>()
+   658→   658→    for (const l of input.lines) {
+   659→   659→      const prev = agg.get(l.inwardItemId) ?? { qty: 0, weight: 0 }
+   660→   660→      agg.set(l.inwardItemId, { qty: r2(prev.qty + l.qty), weight: r2(prev.weight + l.weight) })
+   661→   661→    }
+   662→   662→    for (const [itemId, a] of agg) {
+   663→   663→      const it = inwardItemMap.get(itemId)!
+   664→   664→      if (it.processedQty + a.qty > it.qty * OVER_TOLERANCE + EPS) {
+   665→   665→        throw new BusinessError(
+   666→   666→          `Over-processing: item "${it.batchNo ? it.batchNo + ' — ' : ''}processed ${it.processedQty} + new ${a.qty} exceeds received ${it.qty} (5% tolerance)`
+   667→   667→        )
+   668→   668→      }
+   669→   669→    }
+   670→   670→
+   671→   671→    // Resolve processes + party-specific rates
+   672→   672→    const allProcessIds = [...new Set(input.lines.flatMap((l) => l.processIds))]
+   673→   673→    const processes = await tx.process.findMany({ where: { id: { in: allProcessIds } } })
+   674→   674→    const processMap = new Map(processes.map((p) => [p.id, p]))
+   675→   675→    for (const pid of allProcessIds) {
+   676→   676→      if (!processMap.has(pid)) throw new BusinessError(`Process ${pid} not found`, 404)
+   677→   677→    }
+   678→   678→    const rates = await tx.partyProcessRate.findMany({
+   679→   679→      where: { partyId: inward.partyId, processId: { in: allProcessIds } },
+   680→   680→    })
+   681→   681→    const rateMap = new Map(rates.map((r) => [r.processId, r]))
+   682→   682→
+   683→   683→    const date = iso(input.date)
+   684→   684→    const cardNo = await nextDocNo(tx, 'JC', date)
+   685→   685→
+   686→   686→    // Build aggregated rows: one row per (inwardItem, process); same-process merges
+   687→   687→    interface Row { inwardItemId: string; processId: string; qty: number; weight: number }
+   688→   688→    const rowMap = new Map<string, Row>()
+   689→   689→    for (const l of input.lines) {
+   690→   690→      for (const pid of l.processIds) {
+   691→   691→        const key = `${l.inwardItemId}|${pid}`
+   692→   692→        const prev = rowMap.get(key) ?? { inwardItemId: l.inwardItemId, processId: pid, qty: 0, weight: 0 }
+   693→   693→        rowMap.set(key, { ...prev, qty: r2(prev.qty + l.qty), weight: r2(prev.weight + l.weight) })
+   694→   694→      }
+   695→   695→    }
+   696→   696→
+   697→   697→    // Lot charge: once per distinct process per card
+   698→   698→    let lotTotal = 0
+   699→   699→    for (const pid of allProcessIds) {
+   700→   700→      const pr = rateMap.get(pid)
+   701→   701→      lotTotal = r2(lotTotal + (pr?.lotCharge ?? processMap.get(pid)!.lotCharge))
+   702→   702→    }
+   703→   703→
+   704→   704→    const rows = [...rowMap.values()].map((r) => {
+   705→   705→      const process = processMap.get(r.processId)!
+   706→   706→      const partyRate = rateMap.get(r.processId)
+   707→   707→      const rate = partyRate?.rate ?? process.rate
+   708→   708→      const basis = process.basis
+   709→   709→      const amount = r2(basis === 'WEIGHT' ? r.weight * rate : r.qty * rate)
+   710→   710→      return { ...r, basis, rate, amount }
+   711→   711→    })
+   712→   712→    const totalAmount = r2(rows.reduce((s, r) => s + r.amount, 0) + lotTotal)
+   713→   713→
+   714→   714→    const card = await tx.jobCard.create({
+   715→   715→      data: {
+   716→   716→        cardNo,
+   717→   717→        inwardId: inward.id,
+   718→   718→        date,
+   719→   719→        status: 'COMPLETED',
+   720→   720→        totalAmount,
+   721→   721→        notes: input.notes ?? null,
+   722→   722→        processes: { create: rows.map((r) => ({ ...r, lotCharge: 0 })) },
+   723→   723→      },
+   724→   724→      include: { processes: { include: { process: true } } },
+   725→   725→    })
+   726→   726→
+   727→   727→    // Bump processed quantities (per inward item, once — not per process row)
+   728→   728→    for (const [itemId, a] of agg) {
+   729→   729→      const it = inwardItemMap.get(itemId)!
+   730→   730→      await tx.jobworkInwardItem.update({
+   731→   731→        where: { id: itemId },
+   732→   732→        data: { processedQty: r2(it.processedQty + a.qty), processedWeight: r2(it.processedWeight + a.weight) },
+   733→   733→      })
+   734→   734→    }
+   735→   735→
+   736→   736→    // Derived status (ERPNext pattern): all items fully processed → COMPLETED
+   737→   737→    const refreshed = await tx.jobworkInward.findUnique({ where: { id: inward.id }, include: { items: true } })
+   738→   738→    const fullyProcessed = refreshed!.items.every((i) => i.processedQty >= i.qty - EPS)
+   739→   739→    await tx.jobworkInward.update({
+   740→   740→      where: { id: inward.id },
+   741→   741→      data: { status: fullyProcessed ? 'COMPLETED' : 'IN_PROGRESS' },
+   742→   742→    })
+   743→   743→
+   744→   744→    return { ...card, inwardStatus: fullyProcessed ? 'COMPLETED' : 'IN_PROGRESS' }
+   745→   745→  })
+   746→   746→}
+   747→   747→
+   748→   748→export async function cancelJobCard(id: string) {
+   749→   749→  return db.$transaction(async (tx) => {
+   750→   750→    const card = await tx.jobCard.findUnique({
+   751→   751→      where: { id },
+   752→   752→      include: { processes: true, inward: { include: { items: true, certificates: true } } },
+   753→   753→    })
+   754→   754→    if (!card) throw new BusinessError('Job card not found', 404)
+   755→   755→    if (card.status === 'CANCELLED') throw new BusinessError('Job card is already cancelled')
+   756→   756→    const activeCert = card.inward.certificates.find((c) => c.status === 'ISSUED')
+   757→   757→    if (activeCert) {
+   758→   758→      throw new BusinessError(`Certificate ${activeCert.certNo} has been issued on this inward — card cannot be cancelled`)
+   759→   759→    }
+   760→   760→
+   761→   761→    // Roll back processed qty/weight per inward item
+   762→   762→    const agg = new Map<string, { qty: number; weight: number }>()
+   763→   763→    for (const p of card.processes) {
+   764→   764→      const prev = agg.get(p.inwardItemId) ?? { qty: 0, weight: 0 }
+   765→   765→      agg.set(p.inwardItemId, { qty: r2(prev.qty + p.qty), weight: r2(prev.weight + p.weight) })
+   766→   766→    }
+   767→   767→    for (const [itemId, delta] of agg) {
+   768→   768→      const it = card.inward.items.find((i) => i.id === itemId)
+   769→   769→      if (!it) continue
+   770→   770→      await tx.jobworkInwardItem.update({
+   771→   771→        where: { id: itemId },
+   772→   772→        data: {
+   773→   773→          processedQty: Math.max(0, r2(it.processedQty - delta.qty)),
+   774→   774→          processedWeight: Math.max(0, r2(it.processedWeight - delta.weight)),
+   775→   775→        },
+   776→   776→      })
+   777→   777→    }
+   778→   778→
+   779→   779→    const refreshed = await tx.jobworkInward.findUnique({ where: { id: card.inwardId }, include: { items: true } })
+   780→   780→    const anyProcessed = refreshed!.items.some((i) => i.processedQty > EPS)
+   781→   781→    const fullyProcessed = refreshed!.items.every((i) => i.processedQty >= i.qty - EPS)
+   782→   782→    const newStatus = fullyProcessed ? 'COMPLETED' : anyProcessed ? 'IN_PROGRESS' : 'OPEN'
+   783→   783→    await tx.jobworkInward.update({ where: { id: card.inwardId }, data: { status: newStatus } })
+   784→   784→
+   785→   785→    return tx.jobCard.update({ where: { id }, data: { status: 'CANCELLED' } })
+   786→   786→  })
+   787→   787→}
+   788→   788→
+   789→   789→// ---------- Jobwork: Certificate (W5.3) ----------
+   790→   790→
+   791→   791→export async function issueCertificate(inwardId: string, date?: string | Date) {
+   792→   792→  return db.$transaction(async (tx) => {
+   793→   793→    const inward = await tx.jobworkInward.findUnique({
+   794→   794→      where: { id: inwardId },
+   795→   795→      include: {
+   796→   796→        items: true,
+   797→   797→        jobCards: { where: { status: 'COMPLETED' }, include: { processes: { include: { process: true } } } },
+   798→   798→        certificates: true,
+   799→   799→      },
+   800→   800→    })
+   801→   801→    if (!inward) throw new BusinessError('Inward not found', 404)
+   802→   802→    if (inward.status === 'CANCELLED') throw new BusinessError('Inward is cancelled')
+   803→   803→    const activeCert = inward.certificates.find((c) => c.status === 'ISSUED')
+   804→   804→    if (activeCert) throw new BusinessError(`Certificate ${activeCert.certNo} already issued for this inward`)
+   805→   805→    if (inward.jobCards.length === 0) {
+   806→   806→      throw new BusinessError('No completed job cards on this inward — complete a job card first')
+   807→   807→    }
+   808→   808→
+   809→   809→    const d = iso(date)
+   810→   810→    const certNo = await nextDocNo(tx, 'CERT', d)
+   811→   811→
+   812→   812→    // Process-wise aggregation
+   813→   813→    const byProcess = new Map<string, { code: string; name: string; qty: number; weight: number; amount: number }>()
+   814→   814→    let totalAmount = 0
+   815→   815→    for (const card of inward.jobCards) {
+   816→   816→      for (const p of card.processes) {
+   817→   817→        const key = p.processId
+   818→   818→        const prev = byProcess.get(key) ?? {
+   819→   819→          code: p.process.code,
+   820→   820→          name: p.process.name,
+   821→   821→          qty: 0,
+   822→   822→          weight: 0,
+   823→   823→          amount: 0,
+   824→   824→        }
+   825→   825→        byProcess.set(key, {
+   826→   826→          ...prev,
+   827→   827→          qty: r2(prev.qty + p.qty),
+   828→   828→          weight: r2(prev.weight + p.weight),
+   829→   829→          amount: r2(prev.amount + p.amount),
+   830→   830→        })
+   831→   831→        totalAmount = r2(totalAmount + p.amount)
+   832→   832→      }
+   833→   833→    }
+   834→   834→    // Lot charges (once per process per card)
+   835→   835→    for (const card of inward.jobCards) {
+   836→   836→      const seen = new Set<string>()
+   837→   837→      const prates = await tx.partyProcessRate.findMany({ where: { partyId: inward.partyId } })
+   838→   838→      const rateMap = new Map(prates.map((r) => [r.processId, r]))
+   839→   839→      for (const p of card.processes) {
+   840→   840→        if (seen.has(p.processId)) continue
+   841→   841→        seen.add(p.processId)
+   842→   842→        const lot = rateMap.get(p.processId)?.lotCharge ?? p.process.lotCharge
+   843→   843→        totalAmount = r2(totalAmount + lot)
+   844→   844→        const entry = byProcess.get(p.processId)!
+   845→   845→        entry.amount = r2(entry.amount + lot)
+   846→   846→      }
+   847→   847→    }
+   848→   848→
+   849→   849→    const totalQty = r2(inward.items.reduce((s, i) => s + i.processedQty, 0))
+   850→   850→    const totalWeight = r2(inward.items.reduce((s, i) => s + i.processedWeight, 0))
+   851→   851→    const details = JSON.stringify([...byProcess.values()])
+   852→   852→
+   853→   853→    return tx.jobworkCertificate.create({
+   854→   854→      data: {
+   855→   855→        certNo,
+   856→   856→        inwardId: inward.id,
+   857→   857→        date: d,
+   858→   858→        totalQty,
+   859→   859→        totalWeight,
+   860→   860→        totalAmount,
+   861→   861→        details,
+   862→   862→      },
+   863→   863→    })
+   864→   864→  })
+   865→   865→}
+   866→   866→
+   867→   867→// ---------- Jobwork → Invoice (W5.4) ----------
+   868→   868→
+   869→   869→export async function generateJobworkInvoice(inwardId: string, date?: string | Date) {
+   870→   870→  return db.$transaction(async (tx) => {
+   871→   871→    const inward = await tx.jobworkInward.findUnique({
+   872→   872→      where: { id: inwardId },
+   873→   873→      include: {
+   874→   874→        party: true,
+   875→   875→        items: true,
+   876→   876→        jobCards: { where: { status: 'COMPLETED' }, include: { processes: { include: { process: true } } } },
+   877→   877→        certificates: true,
+   878→   878→      },
+   879→   879→    })
+   880→   880→    if (!inward) throw new BusinessError('Inward not found', 404)
+   881→   881→    if (inward.status === 'INVOICED') throw new BusinessError('Inward is already invoiced')
+   882→   882→    if (inward.status === 'CANCELLED') throw new BusinessError('Inward is cancelled')
+   883→   883→    if (inward.jobCards.length === 0) {
+   884→   884→      throw new BusinessError('No completed job cards on this inward — complete a job card first')
+   885→   885→    }
+   886→   886→
+   887→   887→    const serviceItem = await tx.item.findFirst({ where: { code: 'JW-SERVICE' } })
+   888→   888→    if (!serviceItem) {
+   889→   889→      throw new BusinessError('Service item "JW-SERVICE" is missing — seed masters first', 409)
+   890→   890→    }
+   891→   891→
+   892→   892→    // Aggregate per process: amount (+ party-rate lot charge) → one service line each
+   893→   893→    const partyRates = await tx.partyProcessRate.findMany({ where: { partyId: inward.partyId } })
+   894→   894→    const rateMap = new Map(partyRates.map((r) => [r.processId, r]))
+   895→   895→    const byProcess = new Map<string, { name: string; amount: number }>()
+   896→   896→    for (const card of inward.jobCards) {
+   897→   897→      const seen = new Set<string>()
+   898→   898→      for (const p of card.processes) {
+   899→   899→        const prev = byProcess.get(p.processId) ?? { name: p.process.name, amount: 0 }
+   900→   900→        byProcess.set(p.processId, { ...prev, amount: r2(prev.amount + p.amount) })
+   901→   901→        // lot charge: once per process per card, party rate first
+   902→   902→        if (!seen.has(p.processId)) {
+   903→   903→          seen.add(p.processId)
+   904→   904→          const lot = rateMap.get(p.processId)?.lotCharge ?? p.process.lotCharge
+   905→   905→          if (lot > 0) {
+   906→   906→            const entry = byProcess.get(p.processId)!
+   907→   907→            entry.amount = r2(entry.amount + lot)
+   908→   908→          }
+   909→   909→        }
+   910→   910→      }
+   911→   911→    }
+   912→   912→
+   913→   913→    const lines = [...byProcess.values()].map((v) => ({
+   914→   914→      itemId: serviceItem.id,
+   915→   915→      detail: `${v.name} — Jobwork ${inward.inwardNo}`,
+   916→   916→      qty: 1,
+   917→   917→      rate: v.amount,
+   918→   918→    }))
+   919→   919→    if (lines.length === 0) throw new BusinessError('Nothing to invoice')
+   920→   920→
+   921→   921→    // Certificate is expected before invoice (compliance chain) but not hard-blocked in MVP
+   922→   922→    await tx.jobworkInward.update({ where: { id: inward.id }, data: { status: 'INVOICED' } })
+   923→   923→
+   924→   924→    // Reuse the full sales posting pipeline INSIDE this transaction (stock skip: service item; GL income → JWIN)
+   925→   925→    return postSalesInvoiceTx(tx, {
+   926→   926→      partyId: inward.partyId,
+   927→   927→      date: date ?? new Date(),
+   928→   928→      pos: inward.party.stateCode,
+   929→   929→      taxInclusive: false,
+   930→   930→      remarks: `Jobwork invoice for inward ${inward.inwardNo}`,
+   931→   931→      source: 'JOBWORK',
+   932→   932→      lines,
+   933→   933→    })
+   934→   934→  })
+   935→   935→}
+   936→   936→
+   937→   937→// ---------- Opening stock (W4) ----------
+   938→   938→
+   939→   939→export interface PostOpeningInput {
+   940→   940→  date?: string | Date
+   941→   941→  warehouseId?: string | null
+   942→   942→  rows: { itemId: string; qty: number; rate: number }[]
+   943→   943→}
+   944→   944→
+   945→   945→export async function postOpeningStock(input: PostOpeningInput) {
+   946→   946→  if (!input.rows?.length) throw new BusinessError('Opening stock needs at least one row')
+   947→   947→  return db.$transaction(async (tx) => {
+   948→   948→    await getCompany(tx)
+   949→   949→    const date = iso(input.date)
+   950→   950→    const warehouseId = input.warehouseId ?? (await defaultWarehouseId(tx))
+   951→   951→    const voucherNo = await nextDocNo(tx, 'OPN', date)
+   952→   952→
+   953→   953→    for (const r of input.rows) {
+   954→   954→      const it = await tx.item.findUnique({ where: { id: r.itemId } })
+   955→   955→      if (!it) throw new BusinessError(`Item ${r.itemId} not found`, 404)
+   956→   956→      if (!(r.qty > 0)) throw new BusinessError(`Quantity must be positive for "${it.name}"`)
+   957→   957→      if (r.rate < 0) throw new BusinessError(`Rate cannot be negative for "${it.name}"`)
+   958→   958→
+   959→   959→      // Replace any previous live OPENING rows for (item, warehouse)
+   960→   960→      const prev = await tx.stockLedger.findMany({
+   961→   961→        where: { itemId: r.itemId, warehouseId, voucherType: 'OPENING', isCancelled: false },
+   962→   962→      })
+   963→   963→      for (const p of prev) {
+   964→   964→        await tx.stockLedger.create({
+   965→   965→          data: {
+   966→   966→            postingDate: date,
+   967→   967→            voucherType: 'OPENING',
+   968→   968→            voucherNo: p.voucherNo,
+   969→   969→            itemId: p.itemId,
+   970→   970→            warehouseId: p.warehouseId,
+   971→   971→            qtyIn: p.qtyOut,
+   972→   972→            qtyOut: p.qtyIn,
+   973→   973→            rate: p.rate,
+   974→   974→            remarks: `Reversal of opening ${p.voucherNo}`,
+   975→   975→            isCancelled: true,
+   976→   976→          },
+   977→   977→        })
+   978→   978→      }
+   979→   979→      if (prev.length > 0) {
+   980→   980→        await tx.stockLedger.updateMany({
+   981→   981→          where: { itemId: r.itemId, warehouseId, voucherType: 'OPENING', isCancelled: false },
+   982→   982→          data: { isCancelled: true },
+   983→   983→        })
+   984→   984→      }
+   985→   985→
+   986→   986→      await tx.stockLedger.create({
+   987→   987→        data: {
+   988→   988→          postingDate: date,
+   989→   989→          voucherType: 'OPENING',
+   990→   990→          voucherNo,
+   991→   991→          itemId: r.itemId,
+   992→   992→          warehouseId,
+   993→   993→          qtyIn: r.qty,
+   994→   994→          rate: r2(r.rate),
+   995→   995→          remarks: 'Opening stock',
+   996→   996→        },
+   997→   997→      })
+   998→   998→    }
+   999→   999→
+  1000→  1000→    return { voucherNo, rows: input.rows.length }
+  1001→  1001→  })
+  1002→  1002→}
+  1003→  1003→

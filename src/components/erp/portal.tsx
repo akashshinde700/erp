@@ -69,7 +69,7 @@ export function OrgPortal({ session, onLogout }: { session: SessionInfo; onLogou
               <p className="truncate text-xs text-muted-foreground">{session.user.name}</p>
             </div>
           </div>
-          <Button variant="outline" onClick={onLogout} className="h-9 shrink-0 gap-2 rounded-full px-4 text-destructive hover:text-destructive">
+          <Button variant="outline" onClick={onLogout} className="h-11 md:h-9 shrink-0 gap-2 rounded-full px-4 text-destructive hover:text-destructive">
             <LogOut className="size-4" aria-hidden /> Logout
           </Button>
         </div>

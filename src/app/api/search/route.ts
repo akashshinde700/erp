@@ -1,5 +1,6 @@
 import { ok, handleError } from '@/lib/api'
 import { db } from '@/lib/db'
+import { assertCompanyAccess } from '@/lib/platform'
 
 /**
  * GET /api/search?q=<query> — global cross-module search for the command
@@ -7,6 +8,7 @@ import { db } from '@/lib/db'
  */
 export async function GET(req: Request) {
   try {
+    await assertCompanyAccess()
     const q = (new URL(req.url).searchParams.get('q') ?? '').trim()
     if (q.length < 2) return ok({ parties: [], items: [], salesInvoices: [], purchaseInvoices: [], inwards: [] })
     const contains = { contains: q }

@@ -1,12 +1,15 @@
 import { ok, handleError } from '@/lib/api'
 import { db } from '@/lib/db'
-import { currentSession } from '@/lib/auth'
+import { resolveSession } from '@/lib/auth'
 import { buildSessionInfo } from '../_session'
 
-/** GET /api/auth/session — current org login (null when signed out / expired). */
+/** GET /api/auth/session — current org login (null when signed out / expired / revoked). */
 export async function GET() {
   try {
-    const session = await currentSession()
+    // resolveSession verifies signature AND the DB (user exists, tokenVersion
+    // matches) so a password reset or admin revocation signs this browser out
+    // on the very next poll.
+    const session = await resolveSession()
     if (!session) return ok(null)
     const user = await db.orgUser.findUnique({
       where: { id: session.uid },

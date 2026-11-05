@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server'
 import { handleError, ok } from '@/lib/api'
 import { db } from '@/lib/db'
+import { z } from 'zod'
 import { logAudit } from '@/lib/audit'
-import { assertFeature } from '@/lib/platform'
+import { assertCompanyAccess, assertMutationAccess, assertFeature } from '@/lib/platform'
 import {
   getCompany,
   loadInvoiceVoucher,
@@ -16,9 +17,12 @@ import {
 /**
  * GET /api/tally/voucher?doc=SALES|PURCHASE|PAYMENT&id=<id>
  *   &format=xml|json|csv (default xml) · &preview=1 → {voucher, warnings}
+ * Pure download/preview — NO writes. Export stamps are set by the explicit
+ * POST action (GET stays safe for link navigation / sameSite=lax).
  */
 export async function GET(req: Request) {
   try {
+    await assertCompanyAccess()
     await assertFeature('exportData')
     const sp = new URL(req.url).searchParams
     const doc = (sp.get('doc') ?? 'SALES').toUpperCase() as TallyDocKind
@@ -38,7 +42,6 @@ export async function GET(req: Request) {
     }
 
     if (format === 'json') {
-      await stampExport(doc, id)
       return new NextResponse(JSON.stringify(voucher, null, 2), {
         status: 200,
         headers: {
@@ -51,7 +54,6 @@ export async function GET(req: Request) {
 
     const company = await getCompany()
     const body = format === 'csv' ? voucherToCsv(voucher) : vouchersToXml([voucher], company?.tallyCompanyName ?? null)
-    await stampExport(doc, id)
     return new NextResponse(body, {
       status: 200,
       headers: {
@@ -65,32 +67,36 @@ export async function GET(req: Request) {
   }
 }
 
-/** POST /api/tally/voucher {doc, id, action: 'mark-sent' | 'unmark'} — Tally sent stamps. */
+const actionSchema = z.object({
+  doc: z.enum(['SALES', 'PURCHASE', 'PAYMENT']),
+  id: z.string().min(1),
+  action: z.enum(['mark-sent', 'unmark', 'mark-exported']),
+})
+
+/** POST /api/tally/voucher {doc, id, action} — explicit Tally stamp actions. */
 export async function POST(req: Request) {
   try {
-    const body = (await req.json()) as { doc?: string; id?: string; action?: string }
-    const doc = (body.doc ?? '').toUpperCase()
-    const id = body.id ?? ''
-    const action = body.action ?? ''
-    if (!id || !['SALES', 'PURCHASE', 'PAYMENT'].includes(doc)) {
-      return NextResponse.json({ success: false, error: 'doc and id are required' }, { status: 400 })
-    }
+    await assertMutationAccess()
+    await assertFeature('exportData')
+    const body = actionSchema.parse(await req.json())
+    const { doc, id, action } = body
     if (doc === 'PAYMENT') return ok({ stamp: null })
-    const now = action === 'mark-sent' ? new Date() : null
-    if (doc === 'SALES') {
-      await db.salesInvoice.update({ where: { id }, data: { tallySentAt: now } })
+
+    const now = new Date()
+    if (action === 'mark-sent') {
+      if (doc === 'SALES') await db.salesInvoice.update({ where: { id }, data: { tallySentAt: now } })
+      else await db.purchaseInvoice.update({ where: { id }, data: { tallySentAt: now } })
+    } else if (action === 'unmark') {
+      if (doc === 'SALES') await db.salesInvoice.update({ where: { id }, data: { tallySentAt: null } })
+      else await db.purchaseInvoice.update({ where: { id }, data: { tallySentAt: null } })
     } else {
-      await db.purchaseInvoice.update({ where: { id }, data: { tallySentAt: now } })
+      // mark-exported: only when not already sent to Tally
+      if (doc === 'SALES') await db.salesInvoice.updateMany({ where: { id, tallySentAt: null }, data: { tallyExportedAt: now } })
+      else await db.purchaseInvoice.updateMany({ where: { id, tallySentAt: null }, data: { tallyExportedAt: now } })
     }
     await logAudit(action === 'mark-sent' ? 'EXPORT' : 'UPDATE', `Tally:${doc}`, id, action)
-    return ok({ stamp: now })
+    return ok({ stamp: action === 'unmark' ? null : now })
   } catch (e) {
     return handleError(e)
   }
-}
-
-async function stampExport(doc: string, id: string): Promise<void> {
-  const now = new Date()
-  if (doc === 'SALES') await db.salesInvoice.updateMany({ where: { id, tallySentAt: null }, data: { tallyExportedAt: now } })
-  else if (doc === 'PURCHASE') await db.purchaseInvoice.updateMany({ where: { id, tallySentAt: null }, data: { tallyExportedAt: now } })
 }

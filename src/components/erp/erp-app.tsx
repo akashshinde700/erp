@@ -36,7 +36,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
-import { api, apiPost, toastError, useApi, useMounted, type Company, type SessionInfo } from './api'
+import { api, apiPost, toastError, useApi, useMounted, type AuthStatus, type Company, type SessionInfo } from './api'
 import { CompanyProvider } from './company'
 import { LoginView, ManualSetupView } from './login'
 import { OrgPortal } from './portal'
@@ -244,7 +244,9 @@ function SetupScreen({ onDone, onManual }: { onDone: () => void; onManual: () =>
   const seed = async () => {
     setSeeding(true)
     try {
-      await apiPost<{ company: string }>('/api/seed?force=1', {})
+      // Plain POST: seeds only when no company exists yet (honest no-op
+      // otherwise). The destructive ?force=1 wipe is platform-admin-only.
+      await apiPost<{ company: string }>('/api/seed', {})
       onDone()
     } catch (e) {
       toastError(e)
@@ -280,10 +282,6 @@ function SetupScreen({ onDone, onManual }: { onDone: () => void; onManual: () =>
 
 export function ErpApp() {
   const { view, params, setView } = useErpUi()
-  const company = useApi<Company | null>('/api/masters/company')
-  const [manualSetup, setManualSetup] = useState(false)
-  const [drawerOpen, setDrawerOpen] = useState(false)
-  const mounted = useMounted()
 
   // ---------- organization login (SaaS) ----------
   // undefined = session probe in flight · null = signed out · info = signed in.
@@ -291,6 +289,16 @@ export function ErpApp() {
   // A SUPER_ADMIN session opens the console directly (like the reference SaaS).
   const [session, setSession] = useState<SessionInfo | null | undefined>(undefined)
   const [platformMode, setPlatformMode] = useState(false)
+
+  // Boot routing uses the PUBLIC status probe (no sensitive data): it tells
+  // first-boot (no company) apart from signed-out without ever touching the
+  // company profile. The full profile (bank details included) is fetched ONLY
+  // for a signed-in operating-org session — never anonymously.
+  const status = useApi<AuthStatus | null>('/api/auth/status')
+  const company = useApi<Company | null>(session === undefined ? null : session ? '/api/masters/company' : null)
+  const [manualSetup, setManualSetup] = useState(false)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const mounted = useMounted()
 
   useEffect(() => {
     let cancelled = false
@@ -388,8 +396,9 @@ export function ErpApp() {
     pushRecent(view)
   }, [view])
 
-  // Boot probe: company fetch + session fetch must both settle before deciding.
-  if (company.loading || session === undefined) {
+  // Boot probe: session + status must both settle before deciding. The
+  // company profile loads lazily behind the session.
+  if (session === undefined || (status.data === null && !status.error)) {
     return (
       <div className="flex min-h-screen flex-col gap-4 p-6">
         <Skeleton className="h-14 w-full rounded-lg" />
@@ -401,14 +410,26 @@ export function ErpApp() {
     )
   }
 
+  // Status endpoint unreachable → honest offline/error screen (never a
+  // wrong setup wizard).
+  if (status.error && status.data === null) {
+    return (
+      <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
+        <ShieldAlert className="size-10 text-destructive" aria-hidden />
+        <h1 className="text-lg font-semibold">Cannot reach the server</h1>
+        <p className="max-w-md text-sm text-muted-foreground">{status.error}</p>
+      </div>
+    )
+  }
+
   // First boot, no company yet → demo seed or manual setup wizard.
-  if (company.data === null) {
+  if (status.data && !status.data.companyExists) {
     if (manualSetup) {
       return (
         <ManualSetupView
           onDone={() => {
             setManualSetup(false)
-            company.reload()
+            status.reload()
           }}
           onBack={() => setManualSetup(false)}
         />
@@ -418,7 +439,7 @@ export function ErpApp() {
       <SetupScreen
         onDone={() => {
           setManualSetup(false)
-          company.reload()
+          status.reload()
         }}
         onManual={() => setManualSetup(true)}
       />

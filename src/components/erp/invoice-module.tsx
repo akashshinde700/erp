@@ -295,7 +295,7 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="hidden size-9 text-muted-foreground hover:text-foreground md:inline-flex md:size-8"
+                            className="hidden size-11 text-muted-foreground hover:text-foreground md:inline-flex md:size-8"
                             onClick={() => setView(isSales ? 'sales-detail' : 'purchase-detail', { id: inv.id })}
                             aria-label={`View ${inv.invoiceNo}`}
                             title="View detail"
@@ -305,7 +305,7 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="size-9 text-muted-foreground hover:text-foreground md:size-8"
+                            className="size-11 text-muted-foreground hover:text-foreground md:size-8"
                             onClick={() => void duplicate(inv)}
                             disabled={inv.status === 'CANCELLED'}
                             aria-label={`Duplicate ${inv.invoiceNo}`}
@@ -318,7 +318,7 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                className="size-9 text-muted-foreground hover:text-foreground md:size-8"
+                                className="size-11 text-muted-foreground hover:text-foreground md:size-8"
                                 disabled={inv.status === 'CANCELLED'}
                                 aria-label={`Tally export ${inv.invoiceNo}`}
                                 title="Tally export"
@@ -710,6 +710,7 @@ function CreateInvoiceDialog({
                         <Input
                           id={`mline-qty-${l.key}`}
                           type="number"
+                          inputMode="decimal"
                           min="0"
                           step="any"
                           value={l.qty}
@@ -723,6 +724,7 @@ function CreateInvoiceDialog({
                         <Input
                           id={`mline-rate-${l.key}`}
                           type="number"
+                          inputMode="decimal"
                           min="0"
                           step="any"
                           value={l.rate}
@@ -736,6 +738,7 @@ function CreateInvoiceDialog({
                         <Input
                           id={`mline-disc-${l.key}`}
                           type="number"
+                          inputMode="decimal"
                           min="0"
                           max="100"
                           step="any"
@@ -818,6 +821,7 @@ function CreateInvoiceDialog({
                         <TableCell>
                           <Input
                             type="number"
+                            inputMode="decimal"
                             min="0"
                             step="any"
                             value={l.qty}
@@ -830,6 +834,7 @@ function CreateInvoiceDialog({
                         <TableCell>
                           <Input
                             type="number"
+                            inputMode="decimal"
                             min="0"
                             step="any"
                             value={l.rate}
@@ -842,6 +847,7 @@ function CreateInvoiceDialog({
                         <TableCell>
                           <Input
                             type="number"
+                            inputMode="decimal"
                             min="0"
                             max="100"
                             step="any"

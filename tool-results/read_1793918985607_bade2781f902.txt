@@ -1,0 +1,683 @@
+     1→'use client'
+     2→
+     3→/**
+     4→ * ForgeERP — Accounting view.
+     5→ * Tabs: Payments (list + create with open-invoice allocation) and Party
+     6→ * Ledger (chronological vouchers with running balance).
+     7→ */
+     8→
+     9→import { useEffect, useMemo, useState } from 'react'
+    10→import { toast } from 'sonner'
+    11→import {
+    12→  ArrowDownCircle,
+    13→  ArrowUpCircle,
+    14→  BookOpen,
+    15→  Loader2,
+    16→  Plus,
+    17→  Scale,
+    18→  XCircle,
+    19→} from 'lucide-react'
+    20→import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
+    21→import { Badge } from '@/components/ui/badge'
+    22→import { Button } from '@/components/ui/button'
+    23→import { Card, CardContent } from '@/components/ui/card'
+    24→import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+    25→import { Input } from '@/components/ui/input'
+    26→import { Label } from '@/components/ui/label'
+    27→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+    28→import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+    29→import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+    30→import {
+    31→  apiDelete,
+    32→  apiPost,
+    33→  num,
+    34→  partyTypes,
+    35→  toastError,
+    36→  todayISO,
+    37→  useApi,
+    38→  useMasters,
+    39→  type Party,
+    40→  type PartyLedger,
+    41→  type Payment,
+    42→  type PurchaseInvoice,
+    43→  type SalesInvoice,
+    44→} from './api'
+    45→import { EmptyState, Money, SectionHeading, StatusBadge, TableSkeleton } from './bits'
+    46→import { onPreset, takeCreatePreset } from './nav'
+    47→import { dateStr, money, PAYMENT_MODES } from '@/lib/erp'
+    48→
+    49→type AnyInvoice = SalesInvoice | PurchaseInvoice
+    50→
+    51→export function AccountingView() {
+    52→  const [tab, setTab] = useState<'payments' | 'ledger'>('payments')
+    53→  const [paymentPreset, setPaymentPreset] = useState<PaymentPreset | null>(null)
+    54→  const [ledgerPartyId, setLedgerPartyId] = useState('')
+    55→
+    56→  // Cross-module presets: "Receive Payment" from an invoice detail opens the
+    57→  // payment dialog prefilled; "Party ledger" jumps straight to the ledger tab.
+    58→  useEffect(() => {
+    59→    const apply = (p: CreatePreset) => {
+    60→      if (p.type === 'payment') {
+    61→        setTab('payments')
+    62→        setPaymentPreset({
+    63→          partyId: p.partyId,
+    64→          paymentType: p.paymentType,
+    65→          amount: p.amount,
+    66→          allocations: p.allocations,
+    67→          stamp: Date.now(),
+    68→        })
+    69→      } else if (p.type === 'party-ledger') {
+    70→        setTab('ledger')
+    71→        setLedgerPartyId(p.partyId ?? '')
+    72→      }
+    73→    }
+    74→    const pending = takeCreatePreset()
+    75→    if (pending) apply(pending)
+    76→    return onPreset(apply)
+    77→  }, [])
+    78→
+    79→  return (
+    80→    <div className="space-y-4">
+    81→      <SectionHeading
+    82→        title="Accounting"
+    83→        description="Double-entry payments with invoice allocation, and per-party ledgers with running balances."
+    84→      />
+    85→      <Tabs value={tab} onValueChange={(v) => setTab(v as 'payments' | 'ledger')}>
+    86→        <TabsList className="h-11 w-full justify-start overflow-x-auto sm:w-auto">
+    87→          <TabsTrigger value="payments" className="h-9">Payments</TabsTrigger>
+    88→          <TabsTrigger value="ledger" className="h-9">Party Ledger</TabsTrigger>
+    89→        </TabsList>
+    90→        <TabsContent value="payments" className="mt-4">
+    91→          <PaymentsTab preset={paymentPreset} onPresetConsumed={() => setPaymentPreset(null)} />
+    92→        </TabsContent>
+    93→        <TabsContent value="ledger" className="mt-4">
+    94→          {/* keyed remount: a preset partyId arrives as fresh initial state */}
+    95→          <PartyLedgerTab key={ledgerPartyId} presetPartyId={ledgerPartyId} />
+    96→        </TabsContent>
+    97→      </Tabs>
+    98→    </div>
+    99→  )
+   100→}
+   101→
+   102→// ---------- payments ----------
+   103→
+   104→function TypeBadge({ type }: { type: string }) {
+   105→  return type === 'RECEIPT' ? (
+   106→    <Badge className="gap-1">
+   107→      <ArrowDownCircle className="size-3" aria-hidden /> RECEIPT
+   108→    </Badge>
+   109→  ) : (
+   110→    <Badge variant="secondary" className="gap-1">
+   111→      <ArrowUpCircle className="size-3" aria-hidden /> PAYMENT
+   112→    </Badge>
+   113→  )
+   114→}
+   115→
+   116→export interface PaymentPreset {
+   117→  partyId?: string
+   118→  paymentType?: 'RECEIPT' | 'PAYMENT'
+   119→  amount?: number
+   120→  allocations?: { invoiceNo: string; amount: number }[]
+   121→  stamp: number
+   122→}
+   123→
+   124→function PaymentsTab({ preset, onPresetConsumed }: { preset: PaymentPreset | null; onPresetConsumed: () => void }) {
+   125→  const list = useApi<Payment[]>('/api/payments')
+   126→  const [manualOpen, setManualOpen] = useState(false)
+   127→  const payments = list.data ?? []
+   128→  // A cross-module preset forces the dialog open (derived, not synced).
+   129→  const open = manualOpen || !!preset
+   130→
+   131→  const cancelPayment = async (p: Payment) => {
+   132→    try {
+   133→      await apiDelete(`/api/payments/${p.id}`)
+   134→      toast.success(`${p.paymentNo} cancelled`, {
+   135→        description: 'Allocations reversed and invoice paid amounts rolled back.',
+   136→      })
+   137→      list.reload()
+   138→    } catch (e) {
+   139→      toastError(e)
+   140→    }
+   141→  }
+   142→
+   143→  return (
+   144→    <div className="space-y-4">
+   145→      <div className="flex items-center justify-between gap-2">
+   146→        <p className="text-sm text-muted-foreground">
+   147→          {payments.length} voucher{payments.length === 1 ? '' : 's'} — receipts & payments with allocation.
+   148→        </p>
+   149→        <Button onClick={() => setManualOpen(true)} className="h-11 gap-2">
+   150→          <Plus className="size-4" aria-hidden /> New Payment
+   151→        </Button>
+   152→      </div>
+   153→
+   154→      <Card className="p-0">
+   155→        <CardContent className="p-0">
+   156→          {list.loading ? (
+   157→            <TableSkeleton rows={6} cols={6} />
+   158→          ) : payments.length === 0 ? (
+   159→            <div className="p-6">
+   160→              <EmptyState
+   161→                title="No payments yet"
+   162→                hint="Record receipts from customers or payments to suppliers, allocated against open invoices."
+   163→                action={
+   164→                  <Button variant="outline" onClick={() => setManualOpen(true)} className="mt-2 h-11 gap-2">
+   165→                    <Plus className="size-4" aria-hidden /> New Payment
+   166→                  </Button>
+   167→                }
+   168→              />
+   169→            </div>
+   170→          ) : (
+   171→            <div className="max-h-[62dvh] overflow-auto erp-scroll [&_[data-slot=table-container]]:overflow-visible">
+   172→              <Table>
+   173→                <TableHeader className="sticky top-0 z-10 bg-card">
+   174→                  <TableRow>
+   175→                    <TableHead>Voucher No</TableHead>
+   176→                    <TableHead>Date</TableHead>
+   177→                    <TableHead>Type</TableHead>
+   178→                    <TableHead>Party</TableHead>
+   179→                    <TableHead className="text-right">Amount</TableHead>
+   180→                    <TableHead className="hidden md:table-cell">Mode / Ref</TableHead>
+   181→                    <TableHead className="hidden text-right md:table-cell">Allocated</TableHead>
+   182→                    <TableHead>Status</TableHead>
+   183→                    <TableHead className="w-12" />
+   184→                  </TableRow>
+   185→                </TableHeader>
+   186→                <TableBody>
+   187→                  {payments.map((p) => {
+   188→                    const alloc = (p.allocations ?? []).reduce((s, a) => s + a.amount, 0)
+   189→                    return (
+   190→                      <TableRow key={p.id}>
+   191→                        <TableCell className="font-medium tabular-nums">{p.paymentNo}</TableCell>
+   192→                        <TableCell className="whitespace-nowrap">{dateStr(p.date)}</TableCell>
+   193→                        <TableCell>
+   194→                          <TypeBadge type={p.type} />
+   195→                        </TableCell>
+   196→                        <TableCell>
+   197→                          <span className="block max-w-40 truncate">{p.party?.name ?? '—'}</span>
+   198→                          <span className="block text-xs text-muted-foreground">{p.party?.code}</span>
+   199→                        </TableCell>
+   200→                        <TableCell className="text-right font-semibold tabular-nums">
+   201→                          <Money value={p.amount} plain />
+   202→                        </TableCell>
+   203→                        <TableCell className="hidden text-xs md:table-cell">
+   204→                          {p.mode ?? '—'}
+   205→                          {p.refNo ? <span className="block text-muted-foreground">{p.refNo}</span> : null}
+   206→                        </TableCell>
+   207→                        <TableCell className="hidden text-right text-xs tabular-nums text-muted-foreground md:table-cell">
+   208→                          {alloc > 0 ? money(alloc) : '—'}
+   209→                          {p.allocations && p.allocations.length > 0 ? (
+   210→                            <span className="block text-[10px]">{p.allocations.length} inv.</span>
+   211→                          ) : null}
+   212→                        </TableCell>
+   213→                        <TableCell>
+   214→                          <StatusBadge status={p.status} />
+   215→                        </TableCell>
+   216→                        <TableCell>
+   217→                          {p.status === 'POSTED' ? (
+   218→                            <AlertDialog>
+   219→                              <AlertDialogTrigger asChild>
+   220→                                <Button
+   221→                                  variant="ghost"
+   222→                                  size="icon"
+   223→                                  className="size-11 text-muted-foreground hover:text-destructive md:size-9"
+   224→                                  aria-label={`Cancel ${p.paymentNo}`}
+   225→                                >
+   226→                                  <XCircle className="size-4" aria-hidden />
+   227→                                </Button>
+   228→                              </AlertDialogTrigger>
+   229→                              <AlertDialogContent>
+   230→                                <AlertDialogHeader>
+   231→                                  <AlertDialogTitle>Cancel {p.paymentNo}?</AlertDialogTitle>
+   232→                                  <AlertDialogDescription>
+   233→                                    Allocations are reversed and invoice paid amounts rolled back. GL reversal
+   234→                                    entries keep the ledgers append-only.
+   235→                                  </AlertDialogDescription>
+   236→                                </AlertDialogHeader>
+   237→                                <AlertDialogFooter>
+   238→                                  <AlertDialogCancel className="h-11">Keep payment</AlertDialogCancel>
+   239→                                  <AlertDialogAction onClick={() => cancelPayment(p)} className="h-11">
+   240→                                    Cancel payment
+   241→                                  </AlertDialogAction>
+   242→                                </AlertDialogFooter>
+   243→                              </AlertDialogContent>
+   244→                            </AlertDialog>
+   245→                          ) : null}
+   246→                        </TableCell>
+   247→                      </TableRow>
+   248→                    )
+   249→                  })}
+   250→                </TableBody>
+   251→              </Table>
+   252→            </div>
+   253→          )}
+   254→        </CardContent>
+   255→      </Card>
+   256→
+   257→      <NewPaymentDialog
+   258→        open={open}
+   259→        onOpenChange={(o) => {
+   260→          setManualOpen(o)
+   261→          if (!o) onPresetConsumed()
+   262→        }}
+   263→        onCreated={() => {
+   264→          list.reload()
+   265→          onPresetConsumed()
+   266→        }}
+   267→        preset={preset}
+   268→      />
+   269→    </div>
+   270→  )
+   271→}
+   272→
+   273→// ---------- new payment dialog ----------
+   274→
+   275→function NewPaymentDialog({
+   276→  open,
+   277→  onOpenChange,
+   278→  onCreated,
+   279→  preset,
+   280→}: {
+   281→  open: boolean
+   282→  onOpenChange: (o: boolean) => void
+   283→  onCreated: () => void
+   284→  preset?: PaymentPreset | null
+   285→}) {
+   286→  const { parties } = useMasters()
+   287→  const [type, setType] = useState<'RECEIPT' | 'PAYMENT'>('RECEIPT')
+   288→  const [partyId, setPartyId] = useState('')
+   289→  const [date, setDate] = useState(todayISO())
+   290→  const [amount, setAmount] = useState('')
+   291→  const [mode, setMode] = useState('BANK')
+   292→  const [refNo, setRefNo] = useState('')
+   293→  const [notes, setNotes] = useState('')
+   294→  const [allocs, setAllocs] = useState<Record<string, string>>({})
+   295→  const [saving, setSaving] = useState(false)
+   296→
+   297→  const eligible = parties.filter((p) =>
+   298→    p.active && partyTypes(p).includes(type === 'RECEIPT' ? 'CUSTOMER' : 'SUPPLIER')
+   299→  )
+   300→
+   301→  const invPath = partyId
+   302→    ? type === 'RECEIPT'
+   303→      ? `/api/sales-invoices?partyId=${partyId}&status=POSTED`
+   304→      : `/api/purchase-invoices?partyId=${partyId}&status=POSTED`
+   305→    : null
+   306→  const invoices = useApi<AnyInvoice[]>(invPath)
+   307→
+   308→  const openInvoices = useMemo(
+   309→    () => (invoices.data ?? []).filter((i) => i.grandTotal - i.paidAmount > 0.004),
+   310→    [invoices.data]
+   311→  )
+   312→
+   313→  const amountN = num(amount)
+   314→  const allocated = openInvoices.reduce((s, inv) => s + num(allocs[inv.invoiceNo] ?? ''), 0)
+   315→  const over = allocated > amountN + 0.004
+   316→  const perInvoiceOver = openInvoices.some((inv) => {
+   317→    const a = num(allocs[inv.invoiceNo] ?? '')
+   318→    return a > inv.grandTotal - inv.paidAmount + 0.004
+   319→  })
+   320→
+   321→  const onTypeChange = (t: 'RECEIPT' | 'PAYMENT') => {
+   322→    setType(t)
+   323→    setPartyId('')
+   324→    setAllocs({})
+   325→  }
+   326→
+   327→  // Preset from an invoice's "Receive/Make Payment" button: party + type +
+   328→  // amount + allocation pre-ticked for that invoice.
+   329→  useEffect(() => {
+   330→    if (!open || !preset) return
+   331→    if (preset.paymentType) {
+   332→      setType(preset.paymentType)
+   333→    }
+   334→    if (preset.partyId) {
+   335→      setPartyId(preset.partyId)
+   336→    }
+   337→    if (preset.amount !== undefined) {
+   338→      setAmount(String(preset.amount))
+   339→    }
+   340→    if (preset.allocations?.length) {
+   341→      const a: Record<string, string> = {}
+   342→      for (const alloc of preset.allocations) a[alloc.invoiceNo] = String(alloc.amount)
+   343→      setAllocs(a)
+   344→    }
+   345→  }, [open, preset])
+   346→
+   347→  const submit = async () => {
+   348→    if (!partyId) {
+   349→      toast.error('Select a party')
+   350→      return
+   351→    }
+   352→    if (amountN <= 0) {
+   353→      toast.error('Amount must be greater than zero')
+   354→      return
+   355→    }
+   356→    if (over || perInvoiceOver) {
+   357→      toast.error('Fix allocations first — total cannot exceed the payment amount, single lines cannot exceed outstanding')
+   358→      return
+   359→    }
+   360→    setSaving(true)
+   361→    try {
+   362→      const res = await apiPost<Payment>('/api/payments', {
+   363→        type,
+   364→        partyId,
+   365→        date,
+   366→        amount: amountN,
+   367→        mode,
+   368→        refNo: refNo.trim() || undefined,
+   369→        notes: notes.trim() || undefined,
+   370→        allocations: openInvoices
+   371→          .filter((inv) => num(allocs[inv.invoiceNo] ?? '') > 0)
+   372→          .map((inv) => ({
+   373→            invoiceType: type === 'RECEIPT' ? 'SALES' : 'PURCHASE',
+   374→            invoiceNo: inv.invoiceNo,
+   375→            amount: num(allocs[inv.invoiceNo]),
+   376→          })),
+   377→      })
+   378→      toast.success(`${res.paymentNo} posted`, {
+   379→        description: `${type === 'RECEIPT' ? 'Receipt' : 'Payment'} of ₹ ${money(res.amount)} — GL double-entry committed.`,
+   380→      })
+   381→      onCreated()
+   382→      onOpenChange(false)
+   383→      setPartyId('')
+   384→      setAmount('')
+   385→      setRefNo('')
+   386→      setNotes('')
+   387→      setAllocs({})
+   388→    } catch (e) {
+   389→      toastError(e)
+   390→    } finally {
+   391→      setSaving(false)
+   392→    }
+   393→  }
+   394→
+   395→  return (
+   396→    <Dialog open={open} onOpenChange={onOpenChange}>
+   397→      <DialogContent className="flex max-h-[92dvh] flex-col overflow-hidden sm:max-w-2xl">
+   398→        <DialogHeader>
+   399→          <DialogTitle>New Payment</DialogTitle>
+   400→          <DialogDescription>
+   401→            Receipts (money in from customers) or payments (money out to suppliers), optionally allocated against
+   402→            open invoices.
+   403→          </DialogDescription>
+   404→        </DialogHeader>
+   405→
+   406→        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto erp-scroll-y pr-1">
+   407→          <div className="grid grid-cols-2 gap-2" role="group" aria-label="Payment type">
+   408→            <Button
+   409→              type="button"
+   410→              variant={type === 'RECEIPT' ? 'default' : 'outline'}
+   411→              onClick={() => onTypeChange('RECEIPT')}
+   412→              className="h-11 gap-2"
+   413→            >
+   414→              <ArrowDownCircle className="size-4" aria-hidden /> RECEIPT
+   415→            </Button>
+   416→            <Button
+   417→              type="button"
+   418→              variant={type === 'PAYMENT' ? 'default' : 'outline'}
+   419→              onClick={() => onTypeChange('PAYMENT')}
+   420→              className="h-11 gap-2"
+   421→            >
+   422→              <ArrowUpCircle className="size-4" aria-hidden /> PAYMENT
+   423→            </Button>
+   424→          </div>
+   425→
+   426→          <div className="grid gap-4 sm:grid-cols-2">
+   427→            <div className="space-y-1.5">
+   428→              <Label>{type === 'RECEIPT' ? 'Customer' : 'Supplier'}</Label>
+   429→              <Select value={partyId} onValueChange={(v) => { setPartyId(v); setAllocs({}) }}>
+   430→                <SelectTrigger className="h-11 w-full">
+   431→                  <SelectValue placeholder="Select party…" />
+   432→                </SelectTrigger>
+   433→                <SelectContent>
+   434→                  {eligible.map((p) => (
+   435→                    <SelectItem key={p.id} value={p.id}>
+   436→                      {p.code} — {p.name}
+   437→                    </SelectItem>
+   438→                  ))}
+   439→                </SelectContent>
+   440→              </Select>
+   441→            </div>
+   442→            <div className="space-y-1.5">
+   443→              <Label htmlFor="pay-date">Date</Label>
+   444→              <Input id="pay-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-11" />
+   445→            </div>
+   446→            <div className="space-y-1.5">
+   447→              <Label htmlFor="pay-amount">Amount ₹</Label>
+   448→              <Input
+   449→                id="pay-amount"
+   450→                type="number"
+   451→                min="0"
+   452→                step="any"
+   453→                value={amount}
+   454→                onChange={(e) => setAmount(e.target.value)}
+   455→                placeholder="0"
+   456→                className="h-11 text-right tabular-nums"
+   457→              />
+   458→            </div>
+   459→            <div className="space-y-1.5">
+   460→              <Label>Mode</Label>
+   461→              <Select value={mode} onValueChange={setMode}>
+   462→                <SelectTrigger className="h-11 w-full">
+   463→                  <SelectValue />
+   464→                </SelectTrigger>
+   465→                <SelectContent>
+   466→                  {PAYMENT_MODES.map((m) => (
+   467→                    <SelectItem key={m} value={m}>
+   468→                      {m}
+   469→                    </SelectItem>
+   470→                  ))}
+   471→                </SelectContent>
+   472→              </Select>
+   473→            </div>
+   474→            <div className="space-y-1.5">
+   475→              <Label htmlFor="pay-ref">Reference No</Label>
+   476→              <Input id="pay-ref" value={refNo} onChange={(e) => setRefNo(e.target.value)} placeholder="Cheque / UTR — optional" className="h-11" />
+   477→            </div>
+   478→            <div className="space-y-1.5">
+   479→              <Label htmlFor="pay-notes">Notes</Label>
+   480→              <Input id="pay-notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional" className="h-11" />
+   481→            </div>
+   482→          </div>
+   483→
+   484→          {partyId ? (
+   485→            <div className="space-y-2 rounded-md border p-3">
+   486→              <div className="flex items-center justify-between">
+   487→                <p className="text-sm font-medium">Allocate against open invoices</p>
+   488→                <p className={`text-xs tabular-nums ${over ? 'font-semibold text-destructive' : 'text-muted-foreground'}`}>
+   489→                  Allocated ₹ {money(allocated)} / ₹ {money(amountN)}
+   490→                </p>
+   491→              </div>
+   492→              {invoices.loading ? (
+   493→                <p className="text-xs text-muted-foreground">Loading open invoices…</p>
+   494→              ) : openInvoices.length === 0 ? (
+   495→                <p className="text-xs text-muted-foreground">No open invoices for this party.</p>
+   496→              ) : (
+   497→                <div className="max-h-56 overflow-y-auto erp-scroll-y">
+   498→                  <Table>
+   499→                    <TableHeader>
+   500→                      <TableRow>
+   501→                        <TableHead>Invoice</TableHead>
+   502→                        <TableHead className="hidden sm:table-cell">Date</TableHead>
+   503→                        <TableHead className="text-right">Outstanding</TableHead>
+   504→                        <TableHead className="w-32 text-right">Allocate ₹</TableHead>
+   505→                      </TableRow>
+   506→                    </TableHeader>
+   507→                    <TableBody>
+   508→                      {openInvoices.map((inv) => {
+   509→                        const outstanding = inv.grandTotal - inv.paidAmount
+   510→                        const a = num(allocs[inv.invoiceNo] ?? '')
+   511→                        const bad = a > outstanding + 0.004
+   512→                        return (
+   513→                          <TableRow key={inv.id}>
+   514→                            <TableCell className="font-medium tabular-nums">{inv.invoiceNo}</TableCell>
+   515→                            <TableCell className="hidden whitespace-nowrap text-xs sm:table-cell">{dateStr(inv.date)}</TableCell>
+   516→                            <TableCell className="text-right tabular-nums">
+   517→                              <Money value={outstanding} plain />
+   518→                            </TableCell>
+   519→                            <TableCell>
+   520→                              <Input
+   521→                                type="number"
+   522→                                min="0"
+   523→                                max={outstanding}
+   524→                                step="any"
+   525→                                value={allocs[inv.invoiceNo] ?? ''}
+   526→                                onChange={(e) => setAllocs((s) => ({ ...s, [inv.invoiceNo]: e.target.value }))}
+   527→                                placeholder="0"
+   528→                                className={`h-11 text-right tabular-nums ${bad ? 'border-destructive focus-visible:ring-destructive' : ''}`}
+   529→                                aria-label={`Allocate to ${inv.invoiceNo}`}
+   530→                              />
+   531→                            </TableCell>
+   532→                          </TableRow>
+   533→                        )
+   534→                      })}
+   535→                    </TableBody>
+   536→                  </Table>
+   537→                </div>
+   538→              )}
+   539→              {(over || perInvoiceOver) ? (
+   540→                <p className="text-xs font-medium text-destructive">
+   541→                  Σ allocations cannot exceed the payment amount, and each line cannot exceed its outstanding.
+   542→                </p>
+   543→              ) : null}
+   544→            </div>
+   545→          ) : (
+   546→            <p className="text-xs text-muted-foreground">Select a party to see open invoices for allocation.</p>
+   547→          )}
+   548→        </div>
+   549→
+   550→        <DialogFooter className="gap-2 border-t pt-3">
+   551→          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving} className="h-11">
+   552→            Cancel
+   553→          </Button>
+   554→          <Button onClick={submit} disabled={saving || over || perInvoiceOver} className="h-11 gap-2">
+   555→            {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+   556→            {saving ? 'Posting…' : 'Post Payment'}
+   557→          </Button>
+   558→        </DialogFooter>
+   559→      </DialogContent>
+   560→    </Dialog>
+   561→  )
+   562→}
+   563→
+   564→// ---------- party ledger ----------
+   565→
+   566→function PartyLedgerTab({ presetPartyId }: { presetPartyId?: string }) {
+   567→  const { parties } = useMasters()
+   568→  const [partyId, setPartyId] = useState(presetPartyId ?? '')
+   569→  const ledger = useApi<PartyLedger | null>(partyId ? `/api/reports?type=party-ledger&partyId=${partyId}` : null)
+   570→
+   571→  const sorted = useMemo(() => [...parties].sort((a, b) => a.name.localeCompare(b.name)), [parties])
+   572→  const party: Party | undefined = parties.find((p) => p.id === partyId)
+   573→  const data = ledger.data
+   574→
+   575→  const totalDr = data ? data.rows.reduce((s, r) => s + r.debit, 0) : 0
+   576→  const totalCr = data ? data.rows.reduce((s, r) => s + r.credit, 0) : 0
+   577→
+   578→  return (
+   579→    <div className="space-y-4">
+   580→      <div className="grid gap-2 sm:max-w-md">
+   581→        <Label>Party</Label>
+   582→        <Select value={partyId} onValueChange={setPartyId}>
+   583→          <SelectTrigger className="h-11 w-full">
+   584→            <SelectValue placeholder="Select party…" />
+   585→          </SelectTrigger>
+   586→          <SelectContent className="max-h-64">
+   587→            {sorted.map((p) => (
+   588→              <SelectItem key={p.id} value={p.id}>
+   589→                {p.code} — {p.name}
+   590→              </SelectItem>
+   591→            ))}
+   592→          </SelectContent>
+   593→        </Select>
+   594→      </div>
+   595→
+   596→      {!partyId ? (
+   597→        <EmptyState title="Pick a party" hint="The ledger shows every voucher with a running balance." icon={BookOpen} />
+   598→      ) : ledger.loading ? (
+   599→        <Card className="p-0"><CardContent className="p-0"><TableSkeleton rows={8} cols={5} /></CardContent></Card>
+   600→      ) : !data ? (
+   601→        <EmptyState title="No ledger data" hint={ledger.error ?? 'Nothing to show.'} icon={BookOpen} />
+   602→      ) : (
+   603→        <>
+   604→          <div className="grid gap-4 sm:grid-cols-4">
+   605→            <Card className="p-4">
+   606→              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Opening</p>
+   607→              <p className="mt-1 text-lg font-semibold tabular-nums">₹ {money(data.openingBal)}</p>
+   608→              <p className="mt-0.5 text-xs text-muted-foreground">+ = receivable, − = payable</p>
+   609→            </Card>
+   610→            <Card className="p-4">
+   611→              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Total Debit</p>
+   612→              <p className="mt-1 text-lg font-semibold tabular-nums">₹ {money(totalDr)}</p>
+   613→            </Card>
+   614→            <Card className="p-4">
+   615→              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Total Credit</p>
+   616→              <p className="mt-1 text-lg font-semibold tabular-nums">₹ {money(totalCr)}</p>
+   617→            </Card>
+   618→            <Card className="p-4">
+   619→              <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Closing</p>
+   620→              <p className={`mt-1 text-lg font-semibold tabular-nums ${data.closing >= 0 ? 'text-primary' : 'text-destructive'}`}>
+   621→                ₹ {money(data.closing)}
+   622→              </p>
+   623→              <p className="mt-0.5 text-xs text-muted-foreground">
+   624→                {data.closing >= 0 ? 'receivable' : 'payable'}
+   625→              </p>
+   626→            </Card>
+   627→          </div>
+   628→
+   629→          <Card className="p-0">
+   630→            <CardContent className="p-0">
+   631→              <div className="max-h-[62dvh] overflow-auto erp-scroll [&_[data-slot=table-container]]:overflow-visible">
+   632→                <Table>
+   633→                  <TableHeader className="sticky top-0 z-10 bg-card">
+   634→                    <TableRow>
+   635→                      <TableHead>Date</TableHead>
+   636→                      <TableHead>Voucher</TableHead>
+   637→                      <TableHead>Account</TableHead>
+   638→                      <TableHead className="text-right">Debit</TableHead>
+   639→                      <TableHead className="text-right">Credit</TableHead>
+   640→                      <TableHead className="text-right">Balance</TableHead>
+   641→                    </TableRow>
+   642→                  </TableHeader>
+   643→                  <TableBody>
+   644→                    <TableRow className="bg-muted/40">
+   645→                      <TableCell colSpan={5} className="text-sm font-medium">
+   646→                        Opening balance
+   647→                      </TableCell>
+   648→                      <TableCell className="text-right font-semibold tabular-nums">₹ {money(data.openingBal)}</TableCell>
+   649→                    </TableRow>
+   650→                    {data.rows.map((r) => (
+   651→                      <TableRow key={r.id}>
+   652→                        <TableCell className="whitespace-nowrap">{dateStr(r.date)}</TableCell>
+   653→                        <TableCell>
+   654→                          <span className="block text-xs font-medium">{r.voucherType}</span>
+   655→                          <span className="block text-xs tabular-nums text-muted-foreground">{r.voucherNo}</span>
+   656→                        </TableCell>
+   657→                        <TableCell className="text-sm">{r.accountName}</TableCell>
+   658→                        <TableCell className="text-right tabular-nums">{r.debit > 0 ? money(r.debit) : ''}</TableCell>
+   659→                        <TableCell className="text-right tabular-nums">{r.credit > 0 ? money(r.credit) : ''}</TableCell>
+   660→                        <TableCell className="text-right font-medium tabular-nums">₹ {money(r.balance)}</TableCell>
+   661→                      </TableRow>
+   662→                    ))}
+   663→                    <TableRow className="bg-muted/40 font-semibold">
+   664→                      <TableCell colSpan={3} className="text-sm">
+   665→                        <span className="inline-flex items-center gap-1.5">
+   666→                          <Scale className="size-3.5" aria-hidden /> Closing
+   667→                        </span>
+   668→                      </TableCell>
+   669→                      <TableCell className="text-right tabular-nums">{money(totalDr)}</TableCell>
+   670→                      <TableCell className="text-right tabular-nums">{money(totalCr)}</TableCell>
+   671→                      <TableCell className="text-right tabular-nums">₹ {money(data.closing)}</TableCell>
+   672→                    </TableRow>
+   673→                  </TableBody>
+   674→                </Table>
+   675→              </div>
+   676→            </CardContent>
+   677→          </Card>
+   678→        </>
+   679→      )}
+   680→    </div>
+   681→  )
+   682→}
+   683→

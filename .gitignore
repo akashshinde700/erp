@@ -52,3 +52,10 @@ prompt
 server.log
 # Skills directory
 /skills/
+# local secrets & runtime key material (per-install, never commit)
+db/*.key
+.env
+.env.local
+.env.*.local
+db/*.db
+db/*.db-*

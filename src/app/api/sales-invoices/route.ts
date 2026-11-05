@@ -2,11 +2,12 @@ import { ok, handleError } from '@/lib/api'
 import { db } from '@/lib/db'
 import { z } from 'zod'
 import { postSalesInvoice } from '@/lib/services'
-import { assertCompanyAccess } from '@/lib/platform'
+import { assertCompanyAccess, assertMutationAccess } from '@/lib/platform'
 import { logAudit } from '@/lib/audit'
 
 export async function GET(req: Request) {
   try {
+    await assertCompanyAccess()
     const sp = new URL(req.url).searchParams
     const where: any = {}
     const partyId = sp.get('partyId')
@@ -35,26 +36,26 @@ export async function GET(req: Request) {
 
 const lineSchema = z.object({
   itemId: z.string().min(1),
-  detail: z.string().optional().nullable(),
-  qty: z.number().positive('Quantity must be > 0'),
-  rate: z.number().min(0),
-  discPct: z.number().min(0).max(100).optional(),
+  detail: z.string().max(240).optional().nullable(),
+  qty: z.number().positive('Quantity must be > 0').finite().max(10_000_000),
+  rate: z.number().min(0).finite().max(100_000_000),
+  discPct: z.number().min(0).max(100).finite().optional(),
 })
 
 const postSchema = z.object({
   partyId: z.string().min(1, 'Party is required'),
   date: z.string().optional(),
-  pos: z.string().length(2).optional(),
-  poNo: z.string().optional().nullable(),
+  pos: z.string().regex(/^\d{2}$/, 'Place of supply must be a 2-digit state code').optional(),
+  poNo: z.string().max(40).optional().nullable(),
   taxInclusive: z.boolean().optional(),
   warehouseId: z.string().optional().nullable(),
-  remarks: z.string().optional().nullable(),
-  lines: z.array(lineSchema).min(1, 'Add at least one line item'),
+  remarks: z.string().max(500).optional().nullable(),
+  lines: z.array(lineSchema).min(1, 'Add at least one line item').max(200, 'Too many line items'),
 })
 
 export async function POST(req: Request) {
   try {
-    await assertCompanyAccess()
+    await assertMutationAccess()
     const body = postSchema.parse(await req.json())
     const res = await postSalesInvoice(body)
     await logAudit('POST', 'SalesInvoice', res.id, `${res.invoiceNo} — ₹${res.grandTotal}`)

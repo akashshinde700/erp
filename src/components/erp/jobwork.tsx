@@ -68,10 +68,10 @@ export function JobworkView() {
       />
       <Tabs defaultValue="inwards">
         <TabsList className="h-11 w-full justify-start overflow-x-auto sm:w-auto">
-          <TabsTrigger value="inwards" className="h-9 gap-1.5">
+          <TabsTrigger value="inwards" className="h-11 gap-1.5 sm:h-9">
             <ClipboardList className="size-4" aria-hidden /> Inwards
           </TabsTrigger>
-          <TabsTrigger value="pending" className="h-9 gap-1.5">
+          <TabsTrigger value="pending" className="h-11 gap-1.5 sm:h-9">
             <Wrench className="size-4" aria-hidden /> Pending
           </TabsTrigger>
         </TabsList>
@@ -139,7 +139,7 @@ function InwardsTab() {
                     <TableHead>Party</TableHead>
                     <TableHead className="text-right">Items</TableHead>
                     <TableHead className="min-w-36">Progress</TableHead>
-                    <TableHead className="text-right">Card Value</TableHead>
+                    <TableHead className="text-right hidden sm:table-cell">Card Value</TableHead>
                     <TableHead>Status</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -163,7 +163,7 @@ function InwardsTab() {
                             </p>
                           </div>
                         </TableCell>
-                        <TableCell className="text-right font-semibold tabular-nums">
+                        <TableCell className="text-right font-semibold tabular-nums hidden sm:table-cell">
                           <Money value={cardValue(iw)} plain />
                         </TableCell>
                         <TableCell>
@@ -311,7 +311,86 @@ function NewInwardDialog({
             </div>
           </div>
 
-          <div className="overflow-x-auto rounded-md border">
+          {/* Mobile (below sm): stacked cards per row — same state wiring as the table. */}
+          <div className="space-y-3 sm:hidden">
+            {rows.map((r) => (
+              <div key={r.key} className="space-y-3 rounded-md border p-3">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <Select value={r.itemId || undefined} onValueChange={(v) => setRow(r.key, { itemId: v })}>
+                      <SelectTrigger className="h-11 w-full" aria-label={`Item for row ${r.key}`}>
+                        <SelectValue placeholder="Pick item…" />
+                      </SelectTrigger>
+                      <SelectContent className="max-h-64">
+                        {items
+                          .filter((i) => i.active)
+                          .map((i) => (
+                            <SelectItem key={i.id} value={i.id}>
+                              {i.code} — {i.name}
+                            </SelectItem>
+                          ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="size-11 shrink-0 text-muted-foreground hover:text-destructive"
+                    onClick={() => setRows((rs) => (rs.length > 1 ? rs.filter((x) => x.key !== r.key) : rs))}
+                    disabled={rows.length === 1}
+                    aria-label={`Remove row ${r.key}`}
+                  >
+                    <Trash2 className="size-4" aria-hidden />
+                  </Button>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="col-span-2 space-y-1">
+                    <Label htmlFor={`inw-mbatch-${r.key}`} className="text-xs text-muted-foreground">Batch No</Label>
+                    <Input
+                      id={`inw-mbatch-${r.key}`}
+                      value={r.batchNo}
+                      onChange={(e) => setRow(r.key, { batchNo: e.target.value })}
+                      placeholder="Optional"
+                      className="h-11"
+                      aria-label="Batch number"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor={`inw-mqty-${r.key}`} className="text-xs text-muted-foreground">Qty (pcs)</Label>
+                    <Input
+                      id={`inw-mqty-${r.key}`}
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      step="any"
+                      value={r.qty}
+                      onChange={(e) => setRow(r.key, { qty: e.target.value })}
+                      placeholder="0"
+                      className="h-11 text-right tabular-nums"
+                      aria-label="Quantity"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor={`inw-mwt-${r.key}`} className="text-xs text-muted-foreground">Weight (kg)</Label>
+                    <Input
+                      id={`inw-mwt-${r.key}`}
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      step="any"
+                      value={r.weight}
+                      onChange={(e) => setRow(r.key, { weight: e.target.value })}
+                      placeholder="0"
+                      className="h-11 text-right tabular-nums"
+                      aria-label="Weight in kg"
+                    />
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+          {/* Desktop (sm+): classic row editor */}
+          <div className="hidden overflow-x-auto rounded-md border sm:block">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -353,6 +432,7 @@ function NewInwardDialog({
                     <TableCell>
                       <Input
                         type="number"
+                        inputMode="decimal"
                         min="0"
                         step="any"
                         value={r.qty}
@@ -365,6 +445,7 @@ function NewInwardDialog({
                     <TableCell>
                       <Input
                         type="number"
+                        inputMode="decimal"
                         min="0"
                         step="any"
                         value={r.weight}
@@ -1044,7 +1125,74 @@ function NewJobCardDialog({
             </div>
           </div>
 
-          <div className="overflow-x-auto rounded-md border">
+          {/* Mobile (below sm): stacked cards per line — same state wiring as the table. */}
+          <div className="space-y-3 sm:hidden">
+            {inward.items.map((it) => {
+              const remQ = Math.max(0, it.qty - it.processedQty)
+              const remW = Math.max(0, it.weight - it.processedWeight)
+              const st = lines[it.id] ?? { included: false, qty: '0', weight: '0' }
+              const disabled = remQ <= 0
+              return (
+                <div key={it.id} className={`space-y-3 rounded-md border p-3 ${disabled ? 'opacity-50' : ''}`}>
+                  <label className="flex cursor-pointer items-start gap-3">
+                    <Checkbox
+                      checked={st.included}
+                      disabled={disabled}
+                      onCheckedChange={(v) => setLine(it.id, { included: v === true })}
+                      aria-label={`Include ${it.item?.name ?? 'item'}`}
+                      className="mt-0.5 size-5"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">{it.item?.name ?? it.itemId}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {it.item?.code}
+                        {it.batchNo ? ` · batch ${it.batchNo}` : ''}
+                      </p>
+                      <p className="text-xs tabular-nums text-muted-foreground">
+                        Remaining: {qtyFmt(remQ)} pcs / {qtyFmt(remW)} kg
+                      </p>
+                    </div>
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <Label htmlFor={`jc-mqty-${it.id}`} className="text-xs text-muted-foreground">Qty</Label>
+                      <Input
+                        id={`jc-mqty-${it.id}`}
+                        type="number"
+                        inputMode="decimal"
+                        min="0"
+                        max={remQ}
+                        step="any"
+                        value={st.qty}
+                        disabled={disabled || !st.included}
+                        onChange={(e) => setLine(it.id, { qty: e.target.value })}
+                        className="h-11 text-right tabular-nums"
+                        aria-label="Quantity to process"
+                      />
+                    </div>
+                    <div className="space-y-1">
+                      <Label htmlFor={`jc-mwt-${it.id}`} className="text-xs text-muted-foreground">Weight (kg)</Label>
+                      <Input
+                        id={`jc-mwt-${it.id}`}
+                        type="number"
+                        inputMode="decimal"
+                        min="0"
+                        max={remW}
+                        step="any"
+                        value={st.weight}
+                        disabled={disabled || !st.included}
+                        onChange={(e) => setLine(it.id, { weight: e.target.value })}
+                        className="h-11 text-right tabular-nums"
+                        aria-label="Weight to process"
+                      />
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+          {/* Desktop (sm+): classic line table */}
+          <div className="hidden overflow-x-auto rounded-md border sm:block">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -1087,6 +1235,7 @@ function NewJobCardDialog({
                       <TableCell>
                         <Input
                           type="number"
+                          inputMode="decimal"
                           min="0"
                           max={remQ}
                           step="any"
@@ -1100,6 +1249,7 @@ function NewJobCardDialog({
                       <TableCell>
                         <Input
                           type="number"
+                          inputMode="decimal"
                           min="0"
                           max={remW}
                           step="any"

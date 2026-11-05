@@ -35,10 +35,10 @@ export function ReportsView() {
       />
       <Tabs defaultValue="gstr1">
         <TabsList className="h-11 w-full justify-start overflow-x-auto sm:w-auto">
-          <TabsTrigger value="gstr1" className="h-9">GSTR-1</TabsTrigger>
-          <TabsTrigger value="trial" className="h-9">Trial Balance</TabsTrigger>
-          <TabsTrigger value="outstanding" className="h-9">Outstanding</TabsTrigger>
-          <TabsTrigger value="pnl" className="h-9">P&amp;L</TabsTrigger>
+          <TabsTrigger value="gstr1" className="h-11 sm:h-9">GSTR-1</TabsTrigger>
+          <TabsTrigger value="trial" className="h-11 sm:h-9">Trial Balance</TabsTrigger>
+          <TabsTrigger value="outstanding" className="h-11 sm:h-9">Outstanding</TabsTrigger>
+          <TabsTrigger value="pnl" className="h-11 sm:h-9">P&amp;L</TabsTrigger>
         </TabsList>
         <TabsContent value="gstr1" className="mt-4">
           <Gstr1Tab />

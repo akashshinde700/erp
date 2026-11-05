@@ -1,35 +1,56 @@
 import { NextRequest, NextResponse } from 'next/server'
 
 /**
- * ForgeERP — API sign-in gate (Next.js 16 proxy).
+ * ForgeERP — API sign-in gate (Next.js proxy, Node.js runtime).
  * Business routes require a VALID org session cookie:
  *  1. Presence — a signed-out browser never touches business data.
- *  2. Signature + expiry — verified here (WebCrypto HMAC, edge-safe) so a
- *     forged or stale cookie is rejected before any route runs.
- * Org membership (operating org) is enforced server-side per route
- * (lib/platform.ts assertCompanyAccess) where the DB is available.
+ *  2. Signature + expiry — verified here (WebCrypto HMAC) so a forged or
+ *     stale cookie is rejected before any route runs.
+ * The signing secret is the SAME one auth.ts uses (src/lib/secrets.ts —
+ * env var or persisted per-install key file), so tokens signed by the server
+ * always verify here and tokens forged with the old public default never do.
+ * Org membership (operating org), user revocation and roles are enforced
+ * server-side per route (lib/platform.ts assertCompanyAccess) where the DB
+ * is available — this gate is the fast first line, not the only one.
  *
  * Public prefixes: auth (login/logout/bootstrap), platform admin
- * (x-platform-key gated separately), seed + company profile (first-boot
- * setup), backup (platform-key gated at the route).
+ * (requirePlatformAdmin gates each route), seed + company profile (first-boot
+ * setup — the routes themselves enforce access once logins exist), backup
+ * (platform-key/session gated at the route).
  */
 
 const PUBLIC_API = ['/api/auth', '/api/platform', '/api/seed', '/api/masters/company', '/api/backup']
 
-// Keep in sync with SESSION_SECRET in src/lib/auth.ts (edge module — no node:crypto import possible).
-const SECRET = process.env.SESSION_SECRET ?? 'forge-dev-session-secret-change-me'
 const SESSION_COOKIE = 'forge_session'
 
 const enc = new TextEncoder()
+let keyMaterial: string | null = null
+let keyMaterialPromise: Promise<string> | null = null
 let keyPromise: Promise<CryptoKey> | null = null
 
-function getKey(): Promise<CryptoKey> {
-  keyPromise ??= crypto.subtle.importKey('raw', enc.encode(SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
-  return keyPromise
+/** Load the shared secret once per proxy instance (env var or persisted key file). */
+async function secret(): Promise<string> {
+  keyMaterial ??= await (keyMaterialPromise ??= (async () => {
+    try {
+      const { sessionSecret } = await import('@/lib/secrets')
+      return sessionSecret()
+    } catch {
+      // If the secrets module cannot load (unexpected), fall back to env-only
+      // so the gate never hard-fails closed on every request.
+      return process.env.SESSION_SECRET ?? 'forge-dev-session-secret-change-me'
+    }
+  })())
+  return keyMaterial
 }
 
 function toBase64url(buf: ArrayBuffer): string {
   return btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+async function getKey(): Promise<CryptoKey> {
+  const material = await secret()
+  keyPromise ??= crypto.subtle.importKey('raw', enc.encode(material), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
+  return keyPromise
 }
 
 async function hmac(data: string): Promise<string> {
@@ -55,6 +76,8 @@ async function tokenValid(token: string | undefined): Promise<boolean> {
     return false
   }
 }
+
+export const runtime = 'nodejs'
 
 export async function proxy(req: NextRequest) {
   const path = req.nextUrl.pathname

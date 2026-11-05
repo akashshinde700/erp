@@ -1,0 +1,377 @@
+// ForgeERP — Manufacturing + Jobwork + GST + Accounting
+// Patterns adopted from reference analysis (see docs/):
+//  - ERPNext: docstatus lifecycle, append-only ledgers + reversal-not-delete, naming series
+//  - Laserp:  transactional posting choke-point, FY numbering, module registry UI
+//  - GST Billing: pure tax engine rules, GSTIN checksum, print compliance
+// SQLite constraints: statuses are String constants, money is Float (r2 discipline).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- System ----------
+
+model Counter {
+  key   String @id // e.g. "INV-2526"
+  value Int    @default(0)
+}
+
+model Company {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  legalName String?
+  gstin     String?
+  stateCode String   @default("27")
+  address   String?
+  city      String?
+  pincode   String?
+  phone     String?
+  email     String?
+  bankName  String?
+  bankAcct  String?
+  bankIfsc  String?
+  upiId     String?
+  createdAt DateTime @default(now())
+}
+
+// ---------- Masters ----------
+
+model Party {
+  id         String   @id @default(cuid())
+  code       String   @unique
+  name       String
+  types      String   @default("CUSTOMER") // CSV: CUSTOMER,SUPPLIER,JOBWORKER
+  gstin      String?
+  stateCode  String   @default("27")
+  address    String?
+  city       String?
+  phone      String?
+  email      String?
+  openingBal Float    @default(0) // + = receivable / - = payable
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  salesInvoices    SalesInvoice[]
+  purchaseInvoices PurchaseInvoice[]
+  jobworkInwards   JobworkInward[]
+  payments         Payment[]
+  processRates     PartyProcessRate[]
+
+  @@index([types])
+}
+
+model Item {
+  id           String   @id @default(cuid())
+  code         String   @unique
+  name         String
+  groupName    String   @default("General")
+  hsn          String?
+  isService    Boolean  @default(false)
+  isStockItem  Boolean  @default(true)
+  uom          String   @default("PCS") // KG | PCS | MTR | LTR | BOX
+  gstRate      Float    @default(18)
+  saleRate     Float    @default(0)
+  costRate     Float    @default(0)
+  reorderLevel Float    @default(0)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  stockRows    StockLedger[]
+  salesLines   SalesInvoiceItem[]
+  purchaseLines PurchaseInvoiceItem[]
+  inwardLines  JobworkInwardItem[]
+}
+
+model Warehouse {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  location  String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  stockRows StockLedger[]
+}
+
+model Process {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  seq       Int      @default(0) // routing order
+  basis     String   @default("WEIGHT") // WEIGHT (per KG) | QTY (per piece)
+  rate      Float    @default(0) // default rate
+  lotCharge Float    @default(0)
+  active    Boolean  @default(true)
+
+  partyRates PartyProcessRate[]
+  cardRows   JobCardProcess[]
+}
+
+model PartyProcessRate {
+  id        String  @id @default(cuid())
+  partyId   String
+  party     Party   @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  processId String
+  process   Process @relation(fields: [processId], references: [id], onDelete: Cascade)
+  rate      Float   @default(0)
+  lotCharge Float   @default(0)
+
+  @@unique([partyId, processId])
+}
+
+// ---------- Ledgers (append-only; cancel writes reversal rows) ----------
+
+model StockLedger {
+  id          String    @id @default(cuid())
+  postingDate DateTime
+  voucherType String // OPENING | PURCHASE | SALES | JOBWORK_IN | ADJUST
+  voucherNo   String
+  itemId      String
+  item        Item      @relation(fields: [itemId], references: [id])
+  warehouseId String
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+  qtyIn       Float     @default(0)
+  qtyOut      Float     @default(0)
+  rate        Float     @default(0)
+  remarks     String?
+  isCancelled Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+
+  @@index([itemId, warehouseId, postingDate])
+  @@index([voucherNo])
+}
+
+model AccountLedger {
+  id          String   @id @default(cuid())
+  date        DateTime
+  account     String // chart code, see src/lib/accounting.ts
+  accountName String
+  partyId     String?
+  debit       Float    @default(0)
+  credit      Float    @default(0)
+  voucherType String // SALES_INVOICE | PURCHASE_INVOICE | PAYMENT | RECEIPT | OPENING
+  voucherNo   String
+  remarks     String?
+  isCancelled Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([account, date])
+  @@index([voucherNo])
+}
+
+// ---------- Sales ----------
+
+model SalesInvoice {
+  id           String   @id @default(cuid())
+  invoiceNo    String   @unique
+  date         DateTime
+  partyId      String
+  party        Party    @relation(fields: [partyId], references: [id])
+  poNo         String?
+  pos          String   @default("27") // place of supply (state code)
+  interState   Boolean  @default(false)
+  taxInclusive Boolean  @default(false)
+  taxable      Float    @default(0)
+  discount     Float    @default(0)
+  cgst         Float    @default(0)
+  sgst         Float    @default(0)
+  igst         Float    @default(0)
+  roundOff     Float    @default(0)
+  grandTotal   Float    @default(0)
+  paidAmount   Float    @default(0)
+  status       String   @default("POSTED") // POSTED | CANCELLED
+  source       String   @default("MANUAL") // MANUAL | JOBWORK
+  remarks      String?
+  createdAt    DateTime @default(now())
+
+  items       SalesInvoiceItem[]
+
+  @@index([partyId])
+  @@index([date])
+}
+
+model SalesInvoiceItem {
+  id      String  @id @default(cuid())
+  invoiceId String
+  invoice SalesInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  itemId  String
+  item    Item    @relation(fields: [itemId], references: [id])
+  detail  String?
+  hsn     String?
+  uom     String
+  qty     Float
+  rate    Float
+  discPct Float   @default(0)
+  discAmt Float   @default(0)
+  taxable Float
+  gstRate Float
+  cgst    Float   @default(0)
+  sgst    Float   @default(0)
+  igst    Float   @default(0)
+  total   Float
+}
+
+// ---------- Purchase ----------
+
+model PurchaseInvoice {
+  id           String   @id @default(cuid())
+  invoiceNo    String   @unique
+  date         DateTime
+  partyId      String
+  party        Party    @relation(fields: [partyId], references: [id])
+  poNo         String?
+  interState   Boolean  @default(false)
+  taxInclusive Boolean  @default(false)
+  taxable      Float    @default(0)
+  discount     Float    @default(0)
+  cgst         Float    @default(0)
+  sgst         Float    @default(0)
+  igst         Float    @default(0)
+  roundOff     Float    @default(0)
+  grandTotal   Float    @default(0)
+  paidAmount   Float    @default(0)
+  status       String   @default("POSTED") // POSTED | CANCELLED
+  remarks      String?
+  createdAt    DateTime @default(now())
+
+  items       PurchaseInvoiceItem[]
+
+  @@index([partyId])
+  @@index([date])
+}
+
+model PurchaseInvoiceItem {
+  id      String  @id @default(cuid())
+  invoiceId String
+  invoice PurchaseInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  itemId  String
+  item    Item    @relation(fields: [itemId], references: [id])
+  detail  String?
+  hsn     String?
+  uom     String
+  qty     Float
+  rate    Float
+  discPct Float   @default(0)
+  discAmt Float   @default(0)
+  taxable Float
+  gstRate Float
+  cgst    Float   @default(0)
+  sgst    Float   @default(0)
+  igst    Float   @default(0)
+  total   Float
+}
+
+// ---------- Jobwork (Inward → Job Card → Certificate → Invoice) ----------
+
+model JobworkInward {
+  id          String   @id @default(cuid())
+  inwardNo    String   @unique
+  date        DateTime
+  partyId     String
+  party       Party    @relation(fields: [partyId], references: [id])
+  challanNo   String?
+  warehouseId String?
+  notes       String?
+  status      String   @default("OPEN") // OPEN | IN_PROGRESS | COMPLETED | INVOICED | CANCELLED
+  createdAt   DateTime @default(now())
+
+  items       JobworkInwardItem[]
+  jobCards    JobCard[]
+  certificates JobworkCertificate[]
+
+  @@index([partyId])
+}
+
+model JobworkInwardItem {
+  id              String  @id @default(cuid())
+  inwardId        String
+  inward          JobworkInward @relation(fields: [inwardId], references: [id], onDelete: Cascade)
+  itemId          String
+  item            Item    @relation(fields: [itemId], references: [id])
+  batchNo         String?
+  qty             Float
+  weight          Float // KG
+  processedQty    Float   @default(0)
+  processedWeight Float   @default(0)
+  remarks         String?
+
+  cardRows JobCardProcess[]
+}
+
+model JobCard {
+  id          String   @id @default(cuid())
+  cardNo      String   @unique
+  inwardId    String
+  inward      JobworkInward @relation(fields: [inwardId], references: [id])
+  date        DateTime
+  status      String   @default("COMPLETED") // COMPLETED | CANCELLED
+  totalAmount Float    @default(0)
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  processes JobCardProcess[]
+}
+
+model JobCardProcess {
+  id            String  @id @default(cuid())
+  jobCardId     String
+  jobCard       JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  processId     String
+  process       Process @relation(fields: [processId], references: [id])
+  inwardItemId  String
+  inwardItem    JobworkInwardItem @relation(fields: [inwardItemId], references: [id])
+  qty           Float
+  weight        Float
+  basis         String // WEIGHT | QTY
+  rate          Float
+  amount        Float
+  lotCharge     Float   @default(0)
+}
+
+model JobworkCertificate {
+  id          String   @id @default(cuid())
+  certNo      String   @unique
+  inwardId    String
+  inward      JobworkInward @relation(fields: [inwardId], references: [id])
+  date        DateTime
+  totalQty    Float    @default(0)
+  totalWeight Float    @default(0)
+  totalAmount Float    @default(0)
+  status      String   @default("ISSUED") // ISSUED | CANCELLED
+  details     String? // process-wise summary (JSON string)
+  createdAt   DateTime @default(now())
+}
+
+// ---------- Payments ----------
+
+model Payment {
+  id         String   @id @default(cuid())
+  paymentNo  String   @unique
+  date       DateTime
+  type       String // RECEIPT | PAYMENT
+  partyId    String
+  party      Party    @relation(fields: [partyId], references: [id])
+  amount     Float
+  mode       String   @default("CASH") // CASH | BANK | UPI | CHEQUE
+  refNo      String?
+  notes      String?
+  status     String   @default("POSTED") // POSTED | CANCELLED
+  createdAt  DateTime @default(now())
+
+  allocations PaymentAllocation[]
+}
+
+model PaymentAllocation {
+  id          String @id @default(cuid())
+  paymentId   String
+  payment     Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  invoiceType String // SALES | PURCHASE
+  invoiceId   String?
+  invoiceNo   String
+  amount      Float
+}

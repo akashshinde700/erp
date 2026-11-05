@@ -58,6 +58,25 @@ model Company {
   maxItems      Int? // per-org overrides; null = plan's limit; 0 = unlimited
   maxWarehouses Int?
   maxParties    Int?
+
+  users OrgUser[]
+}
+
+// ---------- Organization logins (SaaS) ----------
+// One login per org user; the ERP workspace serves the FIRST company
+// (operating org) — see src/lib/platform.ts. Passwords are scrypt-hashed
+// (salt:hash hex), sessions are HMAC-signed httpOnly cookies (src/lib/auth.ts).
+
+model OrgUser {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  name         String
+  role         String    @default("OWNER") // OWNER | ACCOUNTANT | VIEWER
+  companyId    String
+  company      Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  createdAt    DateTime  @default(now())
+  lastLoginAt  DateTime?
 }
 
 // ---------- SaaS plans ----------

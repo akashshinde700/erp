@@ -1,14 +1,17 @@
 import { handleError, ok } from '@/lib/api'
 import { db } from '@/lib/db'
 import { logAudit } from '@/lib/audit'
+import { requirePlatformKey } from '@/lib/platform'
 
 /**
  * GET /api/backup — full JSON snapshot of every table (download).
- * The destructive restore lives at POST /api/backup/restore.
+ * Platform-admin gated (x-platform-key header or ?platformKey= for the
+ * browser download). The destructive restore lives at POST /api/backup/restore.
  */
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
+    requirePlatformKey(req)
     const [
       company,
       plans,

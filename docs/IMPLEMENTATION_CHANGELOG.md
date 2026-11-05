@@ -239,3 +239,41 @@ User directive (master prompt): full PWA/mobile audit → root causes → fixes 
 - PWA: manifest/sw/offline/icons all 200; SW `registered/active/controlled` scope `/`; offline emulation → amber banner shows, page fetches fail honestly (no fake success), offline.html precached (full-outage navigation fallback is code-reviewed + precache-verified; CDP offline emulation does not block the SW's own fetches, so the end-to-end fallback could not be exercised here — flagged honestly).
 - e-Invoice JSON + GST-portal auto-open regression PASS (exact portal URL, retry engaged when first open blocked, preview 200 → download 200, toast confirmed).
 - Desktop regression: all 11 Sales columns, sidebar, charts, no overflow at 1366; `bun run lint` clean; no dev.log errors; no console errors (only pre-existing Radix a11y warnings).
+
+## 16. SaaS organization login/logout + Platform Admin separation (2026-11-07, session 6)
+
+User directive: "main ek saas product bana raha hoon to multiple organization honge to particular organization ke liye login and logout ye option chahiye na aur maine jo screen shot bheje the admin platform ke us tarah ka admin platform chahiye na is organization main kyon platform admin ka diya he" — per-org login/logout, Platform Admin as a separate console (login-screen entry), NOT inside the organization's ERP.
+
+### 16.1 Auth foundation (new)
+- `prisma/schema.prisma` — **OrgUser** model (email unique, scrypt `salt:hash` password, name, role OWNER/ACCOUNTANT/VIEWER, companyId FK cascade, lastLoginAt) + Company.users relation; additive `db push` (existing data untouched).
+- `src/lib/auth.ts` — scrypt hash/verify (timing-safe), HMAC-SHA256 signed session token (`base64url(payload).sig`, 7-day expiry), httpOnly/lax/sameSite cookie helpers, `currentSession()` via `cookies()`.
+- Routes: `POST /api/auth/login` (no account-enumeration: same "Invalid email or password" for unknown email vs wrong password; lastLoginAt + LOGIN audit), `POST /api/auth/logout` (+LOGOUT audit), `GET /api/auth/session` (session info with `operating` flag + access state + plan), `GET /api/auth/status` (companyExists/usersExist/demoHint for the login screen), `POST /api/auth/bootstrap` (first owner login for an existing company — manual-setup path; refuses once any login exists; auto sign-in).
+- `src/proxy.ts` (Next 16 proxy convention — replaces deprecated middleware.ts): API sign-in gate. Public prefixes: /api/auth, /api/platform, /api/seed, /api/masters/company (first-boot), /api/backup. Everything else: 401 without a cookie AND with an invalid/forged/expired token (WebCrypto HMAC verify at the edge, constant-time compare; secret kept in sync with lib/auth).
+- `assertCompanyAccess` (lib/platform.ts) now also enforces, once logins exist: session required (401) + session org must BE the operating org for any business mutation (403 "Your organization has no ERP workspace on this deployment yet").
+- `GET/POST /api/backup` + restore now platform-key gated (`requirePlatformKey`; `?platformKey=` query accepted for the browser download; platformKeyOk extended). BackupCard in the console passes the key.
+
+### 16.2 Login screen + org portal (new components)
+- `login.tsx` — **LoginView**: flat SaaS-style card (brand header, sign-in form, demo-credentials hint chip with Fill button, separate "platform staff → Platform Admin console" dashed entry below a divider). Bootstrap mode ("Create your owner login") when a company exists but no logins do. Also **ManualSetupView** — pre-auth company-basics wizard (name/legal/GSTIN checksum hint/state/city/email → PUT /api/masters/company), replacing the old "full ERP shell with no company" manual path; full profile later in Masters → Company.
+- `portal.tsx` — **OrgPortal** for non-operating org sessions: real org data (GSTIN/email/city/plan/trial-end, status badge, blocked message) + the honest "Where are the books?" note (workspace is attached to the operating org; per-org book-keeping is the multi-tenant roadmap) + Logout. Never shows another org's books.
+- `seed.ts` — demo owner login (owner@shreeforge.example.com / forge123, Anil Deshpande, OWNER) created with the seeded company.
+
+### 16.3 ErpApp rewiring (SaaS boot flow)
+- Boot: company+session probes → skeleton → first-boot (SetupScreen / ManualSetupView) → platformMode console → LoginView → OrgPortal (non-operating session) → ERP shell.
+- ERP header: shield/Platform Admin button REMOVED → **UserMenu** (initials avatar, name/email/role/org, Sign out). Suspended/trial banners informational only ("Open Platform Admin" buttons removed). `platform` removed from ErpView/store/palette (recents filtered to known labels).
+- Platform console: opened ONLY from the login screen; "Back to ERP" → "Back to login" (key gate + console header); footer honesty line updated.
+
+### 16.4 Platform Admin org logins
+- Create-organization dialog gains an "Owner login (optional)" block (owner name / login email / password ≥6) → POST creates the OrgUser; success toast names the login.
+- Org row Contact cell shows the owner login (or "no login"); desktop pill + mobile ⋯ menu get **Set login / Reset login** → PATCH `action:'resetLogin' {email, password}` (creates or resets the org's owner login; email conflicts across orgs 409-guarded).
+
+### 16.5 Verification (executed live, headless Chromium + curl)
+- Existing-data DB → bootstrap owner created via UI → auto sign-in → ERP shell with live KPIs; UserMenu → Sign out → login screen; demo hint + Fill → sign-in again → ERP.
+- Wrong password → inline "Invalid email or password" (login 401 in dev.log). httpOnly cookie confirmed unreadable from JS.
+- Platform console: unlocked with forge-admin → created "Acme Precision Works" (Nashik) with owner priya@acme.example.com → org row shows the login → console Logout → key gate → Back to login.
+- Priya sign-in → **OrgPortal** with real data (email/city/plan/trial 19 Nov 2026/free-trial badge) + honest books note; her session business mutation → 403 "no ERP workspace"; her sign-out works.
+- Operating-org session: business mutation allowed (party created then cleaned up); suspended org → banner shows, mutation 403, reactivated → banner gone.
+- Gate matrix (curl): no cookie 401 · forged cookie 401 · public status/company 200 · platform key good 200 / bad 401.
+- Palette: no Platform Admin entry; no console/page errors; Sales module spot-check (7 posted, Σ ₹3,18,683) intact; footer bottom-edge at 390×844 and natural push at 1366×768; `bun run lint` clean.
+
+### 16.6 Honest scope (unchanged, now visible in UX)
+- The ERP workspace serves the FIRST company; org logins for other orgs land on the real org portal, and their sessions cannot mutate the books. Read-level per-org scoping (companyId on business tables) remains the multi-tenant roadmap item — stated in the portal UI, the platform console footer, and code comments; no fake multi-tenancy is simulated.

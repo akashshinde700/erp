@@ -179,7 +179,7 @@ export function PlatformView({ onExit }: { onExit: () => void }) {
             </CardContent>
           </Card>
           <Button variant="outline" onClick={onExit} className="h-11 w-full gap-2">
-            <ArrowLeft className="size-4" aria-hidden /> Back to ERP
+            <ArrowLeft className="size-4" aria-hidden /> Back to login
           </Button>
         </div>
       </div>
@@ -277,7 +277,7 @@ function Console({ apiKey, onAuthLost, onExit }: { apiKey: string; onAuthLost: (
             {pill('blog', 'Blog', posts?.length)}
             <span className="mx-0.5 hidden h-6 w-px bg-border sm:block" aria-hidden />
             <Button variant="outline" onClick={onExit} className="h-10 gap-2 rounded-full px-4">
-              <ArrowLeft className="size-4" aria-hidden /> Back to ERP
+              <ArrowLeft className="size-4" aria-hidden /> Back to login
             </Button>
             <Button variant="outline" onClick={logout} className="h-10 gap-2 rounded-full px-4 text-destructive hover:text-destructive">
               <LogOut className="size-4" aria-hidden /> Logout
@@ -305,7 +305,7 @@ function Console({ apiKey, onAuthLost, onExit }: { apiKey: string; onAuthLost: (
           <span>
             <span className="font-medium text-foreground">ForgeERP</span> Platform — plans, subscriptions &amp; enforcement
           </span>
-          <span>Single-tenant runtime · the ERP operates the first organization</span>
+          <span>Org logins gate the books · the ERP workspace is the first organization</span>
         </div>
       </footer>
     </div>
@@ -365,11 +365,24 @@ function OrgsTab({
   reload: () => Promise<void>
 }) {
   const [createOpen, setCreateOpen] = useState(false)
-  const [form, setForm] = useState({ name: '', email: '', gstin: '', city: '', planId: 'none', trialDays: '14' })
+  const [form, setForm] = useState({
+    name: '',
+    email: '',
+    gstin: '',
+    city: '',
+    planId: 'none',
+    trialDays: '14',
+    ownerName: '',
+    ownerEmail: '',
+    ownerPassword: '',
+  })
   const [creating, setCreating] = useState(false)
   const [customizing, setCustomizing] = useState<OrgRow | null>(null)
   const [custom, setCustom] = useState({ items: '', warehouses: '', parties: '' })
   const [savingCustom, setSavingCustom] = useState(false)
+  const [resetting, setResetting] = useState<OrgRow | null>(null)
+  const [resetPwd, setResetPwd] = useState('')
+  const [resettingBusy, setResettingBusy] = useState(false)
 
   const create = async () => {
     setCreating(true)
@@ -385,18 +398,50 @@ function OrgsTab({
             email: form.email || undefined,
             planId: form.planId === 'none' ? null : form.planId,
             trialDays: Number(form.trialDays) || 0,
+            ownerName: form.ownerName.trim() || undefined,
+            ownerEmail: form.ownerEmail.trim() || undefined,
+            ownerPassword: form.ownerPassword || undefined,
           }),
         },
         apiKey
       )
-      toast.success(`Organization "${form.name}" created`)
+      toast.success(
+        form.ownerEmail.trim()
+          ? `Organization "${form.name}" created with owner login ${form.ownerEmail.trim()}`
+          : `Organization "${form.name}" created`
+      )
       setCreateOpen(false)
-      setForm({ name: '', email: '', gstin: '', city: '', planId: 'none', trialDays: '14' })
+      setForm({ name: '', email: '', gstin: '', city: '', planId: 'none', trialDays: '14', ownerName: '', ownerEmail: '', ownerPassword: '' })
       void reload()
     } catch (e) {
       toastError(e)
     } finally {
       setCreating(false)
+    }
+  }
+
+  const resetLogin = async () => {
+    if (!resetting) return
+    if (!resetPwd || resetPwd.length < 6) {
+      toast.error('Password must be at least 6 characters')
+      return
+    }
+    setResettingBusy(true)
+    try {
+      const email = resetting.ownerEmail ?? `${slugify(resetting.name).slice(0, 20)}@example.com`
+      await platformApi(
+        `/api/platform/orgs/${resetting.id}`,
+        { method: 'PATCH', body: JSON.stringify({ action: 'resetLogin', email, password: resetPwd }) },
+        apiKey
+      )
+      toast.success(`Login ${email} saved — ${resetting.name} can sign in with the new password`)
+      setResetting(null)
+      setResetPwd('')
+      void reload()
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setResettingBusy(false)
     }
   }
 
@@ -500,6 +545,18 @@ function OrgsTab({
         <Button size="sm" variant="outline" className={pillCls} onClick={() => openCustomize(o)}>
           Customize plan
         </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className={pillCls}
+          title="Set or replace the owner login this organization signs in with"
+          onClick={() => {
+            setResetting(o)
+            setResetPwd('')
+          }}
+        >
+          <KeyRound className="size-3.5" aria-hidden /> {o.ownerEmail ? 'Reset login' : 'Set login'}
+        </Button>
       </>
     )
   }
@@ -575,6 +632,13 @@ function OrgsTab({
                             <span className="sr-only">Copy GSTIN {o.gstin}</span>
                           </button>
                         ) : null}
+                        <span
+                          className={`mt-1 flex items-center gap-1 text-[11px] ${o.ownerEmail ? 'text-muted-foreground' : 'text-muted-foreground/70'}`}
+                          title={o.ownerEmail ? `Owner login for ${o.name}` : 'No owner login yet — set one from Actions'}
+                        >
+                          <KeyRound className="size-3 shrink-0" aria-hidden />
+                          {o.ownerEmail ?? 'no login'}
+                        </span>
                       </TableCell>
                       <TableCell>
                         <Select
@@ -691,6 +755,14 @@ function OrgsTab({
                                 </DropdownMenuItem>
                               )}
                               <DropdownMenuItem onClick={() => openCustomize(o)}>Customize plan limits…</DropdownMenuItem>
+                              <DropdownMenuItem
+                                onClick={() => {
+                                  setResetting(o)
+                                  setResetPwd('')
+                                }}
+                              >
+                                <KeyRound className="size-4" aria-hidden /> {o.ownerEmail ? 'Reset login' : 'Set login'}
+                              </DropdownMenuItem>
                               {o.customized ? (
                                 <DropdownMenuItem
                                   onClick={() => void onAction(o.id, { action: 'resetCustom' }, 'Custom limits removed')}
@@ -734,14 +806,17 @@ function OrgsTab({
         </Card>
       )}
 
-      <BackupCard />
+      <BackupCard apiKey={apiKey} />
 
       {/* Create organization dialog */}
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Create organization</DialogTitle>
-            <DialogDescription>Creates a real Company row with a plan and trial. The ERP keeps operating the first org.</DialogDescription>
+            <DialogDescription>
+              Creates a real Company row with a plan and trial. Add an owner login so that organization can sign in on the
+              login screen — their session lands on the org portal (books stay with the operating org).
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-3">
             <div className="space-y-1.5">
@@ -818,6 +893,46 @@ function OrgsTab({
                 />
               </div>
             </div>
+            <div className="space-y-2 rounded-lg border bg-muted/30 p-3">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
+                <KeyRound className="size-3.5" aria-hidden /> Owner login (optional — enables org sign-in)
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="org-owner-name" className="text-xs">Owner name</Label>
+                <Input
+                  id="org-owner-name"
+                  value={form.ownerName}
+                  onChange={(e) => setForm({ ...form, ownerName: e.target.value })}
+                  className="h-10"
+                  placeholder="e.g. Priya Sharma"
+                />
+              </div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="org-owner-email" className="text-xs">Login email</Label>
+                  <Input
+                    id="org-owner-email"
+                    type="email"
+                    value={form.ownerEmail}
+                    onChange={(e) => setForm({ ...form, ownerEmail: e.target.value })}
+                    className="h-10"
+                    placeholder="priya@acme.example.com"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="org-owner-password" className="text-xs">Password</Label>
+                  <Input
+                    id="org-owner-password"
+                    type="password"
+                    value={form.ownerPassword}
+                    onChange={(e) => setForm({ ...form, ownerPassword: e.target.value })}
+                    className="h-10"
+                    minLength={6}
+                    placeholder="min 6 characters"
+                  />
+                </div>
+              </div>
+            </div>
           </div>
           <DialogFooter className="gap-2">
             <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={creating} className="h-11">
@@ -825,6 +940,47 @@ function OrgsTab({
             </Button>
             <Button onClick={create} disabled={!form.name.trim() || creating} className="h-11 gap-2">
               {creating ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null} Create
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reset / set owner login dialog */}
+      <Dialog open={!!resetting} onOpenChange={(o) => !o && setResetting(null)}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>{resetting?.ownerEmail ? 'Reset owner login' : 'Set owner login'}</DialogTitle>
+            <DialogDescription>
+              {resetting ? (
+                resetting.ownerEmail ? (
+                  <>Sets a new password for <span className="font-mono">{resetting.ownerEmail}</span> — the organization signs in on the login screen with it.</>
+                ) : (
+                  <>Creates an owner login for <span className="font-medium">{resetting.name}</span> (email <span className="font-mono">{slugify(resetting.name).slice(0, 20)}@example.com</span>).</>
+                )
+              ) : null}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="reset-password">New password</Label>
+              <Input
+                id="reset-password"
+                type="password"
+                value={resetPwd}
+                onChange={(e) => setResetPwd(e.target.value)}
+                className="h-11"
+                minLength={6}
+                placeholder="min 6 characters"
+              />
+            </div>
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setResetting(null)} disabled={resettingBusy} className="h-11">
+              Cancel
+            </Button>
+            <Button onClick={() => void resetLogin()} disabled={resetPwd.length < 6 || resettingBusy} className="h-11 gap-2">
+              {resettingBusy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <KeyRound className="size-4" aria-hidden />}
+              {resettingBusy ? 'Saving…' : 'Save login'}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1822,7 +1978,7 @@ function BlogTab({ posts, apiKey, reload }: { posts: BlogPost[]; apiKey: string;
 // Data & backup (kept from the original console — a real, useful tool)
 // ---------------------------------------------------------------------------
 
-function BackupCard() {
+function BackupCard({ apiKey }: { apiKey: string }) {
   const [restoring, setRestoring] = useState(false)
   const [confirmText, setConfirmText] = useState('')
 
@@ -1830,10 +1986,14 @@ function BackupCard() {
     setRestoring(true)
     try {
       const snapshot = JSON.parse(await file.text())
-      const res = await api<{ restored: boolean }>('/api/backup/restore', {
-        method: 'POST',
-        body: JSON.stringify({ confirm: 'RESTORE', snapshot }),
-      })
+      const res = await platformApi<{ restored: boolean }>(
+        '/api/backup/restore',
+        {
+          method: 'POST',
+          body: JSON.stringify({ confirm: 'RESTORE', snapshot }),
+        },
+        apiKey
+      )
       if (res.restored) {
         toast.success('Snapshot restored', { description: 'Reload the page to see the restored data.' })
       }
@@ -1856,7 +2016,11 @@ function BackupCard() {
               transaction.
             </p>
           </div>
-          <Button variant="outline" className="h-10 gap-2 rounded-full" onClick={() => downloadUrl('/api/backup')}>
+          <Button
+            variant="outline"
+            className="h-10 gap-2 rounded-full"
+            onClick={() => downloadUrl(`/api/backup?platformKey=${encodeURIComponent(apiKey)}`)}
+          >
             <DatabaseBackup className="size-4" aria-hidden /> Download backup
           </Button>
         </div>

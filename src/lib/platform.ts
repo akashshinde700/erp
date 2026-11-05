@@ -1,11 +1,12 @@
 /**
  * ForgeERP — SaaS platform control plane (patterns from the erpnashilk audit,
- * re-implemented for our single-tenant runtime).
+ * re-implemented for our single-workspace runtime).
  *
- * The ERP runtime always operates the FIRST company (oldest createdAt);
- * organizations created here are real Company rows the platform can manage
- * (plan, billing, suspension) — full per-request tenant scoping stays a
- * roadmap item, and this module says so honestly in its UI.
+ * The ERP workspace serves the FIRST company (oldest createdAt); organizations
+ * created in Platform Admin are real Company rows the platform manages (plan,
+ * billing, suspension). Org logins (OrgUser) gate who can use the workspace,
+ * and sessions for other orgs are routed to an org portal — full per-request
+ * tenant scoping stays a roadmap item, and the UI says so honestly.
  *
  * Enforcement model (single source of truth):
  *  - isPlatform company  → never blocked.
@@ -17,6 +18,7 @@
 
 import { db } from './db'
 import { BusinessError } from './accounting'
+import { currentSession } from './auth'
 
 export const PLATFORM_KEY = process.env.PLATFORM_ADMIN_KEY ?? 'forge-admin'
 
@@ -71,8 +73,11 @@ export async function assertFeature(feature: PlanFeatureKey): Promise<void> {
 }
 
 export function platformKeyOk(req: Request): boolean {
-  const key = req.headers.get('x-platform-key') ?? ''
-  return key.length > 0 && key === PLATFORM_KEY
+  const header = req.headers.get('x-platform-key') ?? ''
+  if (header.length > 0 && header === PLATFORM_KEY) return true
+  // Query-param form for browser downloads from the console (GET /api/backup).
+  const q = new URL(req.url).searchParams.get('platformKey') ?? ''
+  return q.length > 0 && q === PLATFORM_KEY
 }
 
 export function requirePlatformKey(req: Request): void {
@@ -139,11 +144,21 @@ export function accessState(
   }
 }
 
-/** Guard for every business mutation route. Throws BusinessError(403). */
+/** Guard for every business mutation route. Throws BusinessError(403/401). */
 export async function assertCompanyAccess(): Promise<void> {
   const org = await operatingCompany()
   const st = accessState(org)
   if (st.blocked) throw new BusinessError(st.message, 403)
+  // Sign-in gate: once org logins exist, mutations require a session whose
+  // org IS the operating org (the workspace this deployment serves).
+  const logins = await db.orgUser.count()
+  if (logins > 0) {
+    const session = await currentSession()
+    if (!session) throw new BusinessError('Sign in to your organization first', 401)
+    if (session.cid !== org?.id) {
+      throw new BusinessError('Your organization has no ERP workspace on this deployment yet', 403)
+    }
+  }
 }
 
 /** Effective limits: org override ?? plan ?? 0 (unlimited). */

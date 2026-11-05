@@ -542,6 +542,27 @@ export function useMasters() {
   }
 }
 
+// ---------- org login (SaaS) ----------
+
+/** Session payload returned by /api/auth/{login,session,bootstrap}. */
+export interface SessionInfo {
+  user: { id: string; name: string; email: string; role: string }
+  company: { id: string; name: string; gstin: string | null; city: string | null; email: string | null }
+  operating: boolean
+  operatingOrg: { id: string; name: string } | null
+  plan: string | null
+  access: { state: string; blocked: boolean; message: string }
+  paidUntil: string | null
+  trialEndsAt: string | null
+}
+
+export interface AuthStatus {
+  companyExists: boolean
+  companyName: string | null
+  usersExist: boolean
+  demoHint: boolean
+}
+
 // ---------- tally / platform / audit ----------
 
 export interface TallyVoucherPreview {
@@ -608,6 +629,8 @@ export interface OrgRow {
   email: string | null
   isPlatform: boolean
   operating: boolean
+  ownerEmail: string | null
+  userCount: number
   plan: { id: string; name: string; priceMonthly: number } | null
   customized: boolean
   limits: { items: number; warehouses: number; parties: number }

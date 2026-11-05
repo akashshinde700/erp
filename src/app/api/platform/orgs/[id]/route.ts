@@ -2,6 +2,7 @@ import { handleError, ok, fail } from '@/lib/api'
 import { db } from '@/lib/db'
 import { logAudit } from '@/lib/audit'
 import { requirePlatformKey } from '@/lib/platform'
+import { hashPassword } from '@/lib/auth'
 import { z } from 'zod'
 
 /**
@@ -12,6 +13,7 @@ import { z } from 'zod'
  *   {action:'suspend'} | {action:'activate'}
  *   {action:'customize', maxItems?, maxWarehouses?, maxParties?}  (null = plan default)
  *   {action:'resetCustom'}
+ *   {action:'resetLogin', email, password}              (set/replace the org's owner login)
  */
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -21,13 +23,15 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     if (!org) return fail('Organization not found', 404)
 
     const schema = z.object({
-      action: z.enum(['setPlan', 'markPaid', 'extendTrial', 'suspend', 'activate', 'customize', 'resetCustom']),
+      action: z.enum(['setPlan', 'markPaid', 'extendTrial', 'suspend', 'activate', 'customize', 'resetCustom', 'resetLogin']),
       planId: z.string().optional().nullable(),
       cycle: z.enum(['MONTHLY', 'YEARLY']).optional(),
       days: z.number().int().min(1).max(365).optional(),
       maxItems: z.number().int().min(0).nullable().optional(),
       maxWarehouses: z.number().int().min(0).nullable().optional(),
       maxParties: z.number().int().min(0).nullable().optional(),
+      email: z.string().trim().toLowerCase().email().optional(),
+      password: z.string().min(6, 'Password must be at least 6 characters').max(72).optional(),
     })
     const body = schema.parse(await req.json())
 
@@ -85,6 +89,20 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         await db.company.update({ where: { id }, data: { maxItems: null, maxWarehouses: null, maxParties: null } })
         details = 'custom limits removed (plan defaults apply)'
         break
+      case 'resetLogin': {
+        if (!body.email || !body.password) return fail('resetLogin needs email and password', 400)
+        const taken = await db.orgUser.findUnique({ where: { email: body.email } })
+        if (taken && taken.companyId !== id) return fail('This email belongs to another organization', 409)
+        if (taken) {
+          await db.orgUser.update({ where: { id: taken.id }, data: { passwordHash: hashPassword(body.password) } })
+        } else {
+          await db.orgUser.create({
+            data: { name: org.name, email: body.email, passwordHash: hashPassword(body.password), role: 'OWNER', companyId: id },
+          })
+        }
+        details = `owner login ${body.email} ${taken ? 'password reset' : 'created'}`
+        break
+      }
     }
 
     await logAudit('PLATFORM', 'Company', id, `${org.name}: ${details}`)

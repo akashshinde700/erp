@@ -7,6 +7,7 @@
  */
 
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
+import { toast } from 'sonner'
 import {
   BarChart3,
   Boxes,
@@ -15,6 +16,7 @@ import {
   Factory,
   LayoutDashboard,
   Loader2,
+  LogOut,
   Menu,
   ReceiptText,
   ScrollText,
@@ -23,11 +25,21 @@ import {
   Sparkles,
   Truck,
 } from 'lucide-react'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
-import { apiPost, toastError, useApi, useMounted, type Company } from './api'
+import { api, apiPost, toastError, useApi, useMounted, type Company, type SessionInfo } from './api'
 import { CompanyProvider } from './company'
+import { LoginView, ManualSetupView } from './login'
+import { OrgPortal } from './portal'
 import { useErpUi, type ErpView } from './store'
 import { GOTO_KEYS, isTypingTarget, pushRecent, setCreatePreset } from './nav'
 import { CommandPalette, ShortcutsHelpDialog } from './palette'
@@ -147,6 +159,41 @@ function ViewSkeleton() {
   )
 }
 
+// ---------- org user menu (header) ----------
+
+function UserMenu({ session, onLogout }: { session: SessionInfo; onLogout: () => void }) {
+  const initials = (session.user.name.split(/\s+/).map((w) => w[0]).join('') || 'U').slice(0, 2).toUpperCase()
+  const role = session.user.role === 'OWNER' ? 'Owner' : session.user.role === 'ACCOUNTANT' ? 'Accountant' : session.user.role
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="flex size-10 items-center justify-center rounded-full bg-primary text-xs font-bold uppercase text-primary-foreground transition-opacity hover:opacity-90"
+          aria-label={`Account — ${session.user.name}`}
+          title={session.user.email}
+        >
+          {initials}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-64">
+        <div className="px-3 py-2.5">
+          <p className="truncate text-sm font-semibold">{session.user.name}</p>
+          <p className="truncate text-xs text-muted-foreground">{session.user.email}</p>
+          <div className="mt-1.5 flex items-center gap-1.5">
+            <Badge variant="secondary" className="font-normal">{role}</Badge>
+            <span className="truncate text-xs text-muted-foreground">{session.company.name}</span>
+          </div>
+        </div>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => onLogout()} className="gap-2 text-destructive focus:text-destructive">
+          <LogOut className="size-4" aria-hidden /> Sign out
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
 // ---------- first-boot setup screen ----------
 
 function SetupScreen({ onDone, onManual }: { onDone: () => void; onManual: () => void }) {
@@ -195,13 +242,36 @@ export function ErpApp() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const mounted = useMounted()
 
-  // Subscription state can change inside Platform Admin (suspend/activate/plan)
-  // — refetch the company when leaving that view so the banner reflects it.
-  const prevView = useRef(view)
+  // ---------- organization login (SaaS) ----------
+  // undefined = session probe in flight · null = signed out · info = signed in.
+  // Platform Admin is a SEPARATE console (platformMode) — never inside the ERP.
+  const [session, setSession] = useState<SessionInfo | null | undefined>(undefined)
+  const [platformMode, setPlatformMode] = useState(false)
+
   useEffect(() => {
-    if (prevView.current === 'platform' && view !== 'platform') company.reload()
-    prevView.current = view
-  }, [view, company])
+    let cancelled = false
+    api<SessionInfo | null>('/api/auth/session')
+      .then((s) => {
+        if (!cancelled) setSession(s)
+      })
+      .catch(() => {
+        if (!cancelled) setSession(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const logout = async () => {
+    try {
+      await apiPost('/api/auth/logout', {})
+      toast.success('Signed out')
+    } catch {
+      toast.error('Could not sign out — try again')
+    }
+    setSession(null)
+    setView('dashboard')
+  }
 
   useEffect(() => {
     window.scrollTo({ top: 0 })
@@ -274,7 +344,8 @@ export function ErpApp() {
     pushRecent(view)
   }, [view])
 
-  if (company.loading) {
+  // Boot probe: company fetch + session fetch must both settle before deciding.
+  if (company.loading || session === undefined) {
     return (
       <div className="flex min-h-screen flex-col gap-4 p-6">
         <Skeleton className="h-14 w-full rounded-lg" />
@@ -286,7 +357,19 @@ export function ErpApp() {
     )
   }
 
-  if (company.data === null && !manualSetup) {
+  // First boot, no company yet → demo seed or manual setup wizard.
+  if (company.data === null) {
+    if (manualSetup) {
+      return (
+        <ManualSetupView
+          onDone={() => {
+            setManualSetup(false)
+            company.reload()
+          }}
+          onBack={() => setManualSetup(false)}
+        />
+      )
+    }
     return (
       <SetupScreen
         onDone={() => {
@@ -298,9 +381,9 @@ export function ErpApp() {
     )
   }
 
-  // Platform Admin is a STANDALONE console (own header + pill nav, no ERP
-  // shell) — rendered fullscreen, exactly like a separate admin app.
-  if (view === 'platform') {
+  // Platform Admin — SEPARATE console (own header + pill nav), opened from the
+  // login screen only; never inside an organization's ERP.
+  if (platformMode) {
     return (
       <Suspense
         fallback={
@@ -309,9 +392,20 @@ export function ErpApp() {
           </div>
         }
       >
-        <PlatformView onExit={() => setView('dashboard')} />
+        <PlatformView onExit={() => setPlatformMode(false)} />
       </Suspense>
     )
+  }
+
+  // Not signed in → organization login screen (SaaS entry).
+  if (!session) {
+    return <LoginView onLogin={(s) => setSession(s)} onOpenPlatform={() => setPlatformMode(true)} />
+  }
+
+  // Signed in to an org that is NOT the operating org → honest org portal
+  // (real profile/subscription data, never another org's books).
+  if (!session.operating) {
+    return <OrgPortal session={session} onLogout={() => void logout()} />
   }
 
   const fy = mounted ? fyCode(new Date()) : '····'
@@ -385,13 +479,6 @@ export function ErpApp() {
           >
             <ShieldAlert className="size-4 shrink-0" aria-hidden />
             <span className="font-medium">{company.data.access.message}</span>
-            <button
-              type="button"
-              className="ml-auto underline underline-offset-2"
-              onClick={() => setView('platform')}
-            >
-              Open Platform Admin
-            </button>
           </div>
         ) : company.data?.access?.state === 'TRIAL' ? (
           <div
@@ -402,13 +489,6 @@ export function ErpApp() {
             <span>
               Free trial{company.data.trialEndsAt ? ` until ${dateStr(company.data.trialEndsAt)}` : ''} — pick a plan to keep going.
             </span>
-            <button
-              type="button"
-              className="ml-auto underline underline-offset-2"
-              onClick={() => setView('platform')}
-            >
-              Open Platform Admin
-            </button>
           </div>
         ) : null}
         <header className="sticky top-0 z-40 border-b bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/85">
@@ -447,16 +527,6 @@ export function ErpApp() {
             </button>
 
             <div className="ml-auto flex items-center gap-2">
-              <Button
-                variant="ghost"
-                size="icon"
-                className="size-11"
-                onClick={() => setView('platform')}
-                aria-label="Platform Admin"
-                title="Platform Admin — plans, organizations, inquiries"
-              >
-                <ShieldAlert className="size-5" aria-hidden />
-              </Button>
               <button
                 type="button"
                 onClick={() => setPaletteOpen(true)}
@@ -495,6 +565,7 @@ export function ErpApp() {
               <span className="max-w-28 truncate text-sm font-medium sm:max-w-40 lg:max-w-none">
                 {company.data?.name ?? ''}
               </span>
+              <UserMenu session={session} onLogout={() => void logout()} />
             </div>
           </div>
         </header>

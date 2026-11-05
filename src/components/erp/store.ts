@@ -20,7 +20,6 @@ export type ErpView =
   | 'reports'
   | 'masters'
   | 'tally'
-  | 'platform'
   | 'audit'
   | 'docs'
 

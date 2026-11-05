@@ -20,7 +20,6 @@ import {
   ReceiptText,
   ScrollText,
   Search,
-  ShieldAlert,
   ShoppingCart,
   Truck,
   Wrench,
@@ -53,7 +52,6 @@ const MODULES: { view: ErpView; label: string; icon: typeof LayoutDashboard; key
   { view: 'tally', label: 'Tally Export', icon: Truck, keywords: 'tally xml voucher masters connector bat' },
   { view: 'audit', label: 'Audit Trail', icon: ScrollText, keywords: 'log history changes' },
   { view: 'docs', label: 'Docs', icon: FileText, keywords: 'documentation reference' },
-  { view: 'platform', label: 'Platform Admin', icon: ShieldAlert, keywords: 'saas admin console plans organizations subscriptions billing inquiries blog' },
 ]
 
 const RECENT_LABELS: Record<string, string> = {
@@ -71,7 +69,6 @@ const RECENT_LABELS: Record<string, string> = {
   tally: 'Tally Export',
   audit: 'Audit Trail',
   docs: 'Docs',
-  platform: 'Platform Admin',
 }
 
 export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
@@ -80,7 +77,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const [results, setResults] = useState<SearchResults | null>(null)
   const [searching, setSearching] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
-  const recents = useMemo(() => readRecent(), [open])
+  const recents = useMemo(() => readRecent().filter((v) => RECENT_LABELS[v]), [open])
 
   // Live search (debounced) for queries of 2+ characters
   useEffect(() => {

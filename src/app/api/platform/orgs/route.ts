@@ -2,11 +2,13 @@ import { handleError, ok, fail } from '@/lib/api'
 import { db } from '@/lib/db'
 import { logAudit } from '@/lib/audit'
 import { requirePlatformKey, ensurePlans } from '@/lib/platform'
+import { hashPassword } from '@/lib/auth'
 import { z } from 'zod'
 
 /**
  * GET /api/platform/orgs — every company with plan, limits, usage, access state.
- * POST /api/platform/orgs — create organization (Company row + plan + trial).
+ * POST /api/platform/orgs — create organization (Company row + plan + trial
+ *                           + optional owner login so that org can sign in).
  */
 export async function GET(req: Request) {
   try {
@@ -14,7 +16,7 @@ export async function GET(req: Request) {
     await ensurePlans()
     const orgs = await db.company.findMany({
       orderBy: { createdAt: 'asc' },
-      include: { plan: true },
+      include: { plan: true, users: { orderBy: { createdAt: 'asc' }, select: { id: true, email: true } } },
     })
     const [parties, items, warehouses, salesInvoices] = await Promise.all([
       db.party.count(),
@@ -22,7 +24,7 @@ export async function GET(req: Request) {
       db.warehouse.count(),
       db.salesInvoice.count(),
     ])
-    // Single-tenant runtime: usage is global; attached to the operating (first) org.
+    // Single-workspace runtime: usage is global; attached to the operating (first) org.
     const rows = orgs.map((org, idx) => ({
       id: org.id,
       name: org.name,
@@ -31,6 +33,8 @@ export async function GET(req: Request) {
       email: org.email,
       isPlatform: org.isPlatform,
       operating: idx === 0,
+      ownerEmail: org.users[0]?.email ?? null,
+      userCount: org.users.length,
       plan: org.plan ? { id: org.plan.id, name: org.plan.name, priceMonthly: org.plan.priceMonthly } : null,
       customized: org.maxItems !== null || org.maxWarehouses !== null || org.maxParties !== null,
       limits: {
@@ -62,14 +66,25 @@ const createSchema = z.object({
   planId: z.string().optional().nullable(),
   billingCycle: z.enum(['MONTHLY', 'YEARLY']).default('MONTHLY'),
   trialDays: z.number().int().min(0).max(365).default(14),
+  // Owner login (optional): lets this organization sign in on the login screen.
+  ownerName: z.string().trim().min(2, 'Owner name must be at least 2 characters').max(80).optional().or(z.literal('')),
+  ownerEmail: z.string().trim().toLowerCase().email('Enter a valid owner email').optional().or(z.literal('')),
+  ownerPassword: z.string().min(6, 'Owner password must be at least 6 characters').max(72).optional().or(z.literal('')),
 })
 
 export async function POST(req: Request) {
   try {
     requirePlatformKey(req)
     const body = createSchema.parse(await req.json())
+    if ((body.ownerName || body.ownerEmail || body.ownerPassword) && !(body.ownerName && body.ownerEmail && body.ownerPassword)) {
+      return fail('Owner login needs all three: name, email and password', 400)
+    }
     const exists = await db.company.findFirst({ where: { name: body.name } })
     if (exists) return fail('An organization with this name already exists', 409)
+    if (body.ownerEmail) {
+      const emailTaken = await db.orgUser.findUnique({ where: { email: body.ownerEmail } })
+      if (emailTaken) return fail('A login with this owner email already exists', 409)
+    }
     let plan = null
     if (body.planId) {
       plan = await db.plan.findUnique({ where: { id: body.planId } })
@@ -86,7 +101,23 @@ export async function POST(req: Request) {
         trialEndsAt: body.trialDays > 0 ? new Date(Date.now() + body.trialDays * 86400000) : null,
       },
     })
-    await logAudit('CREATE', 'Company', org.id, `${org.name} created (plan: ${plan?.name ?? 'none'}, trial ${body.trialDays}d)`)
+    if (body.ownerEmail && body.ownerPassword && body.ownerName) {
+      await db.orgUser.create({
+        data: {
+          name: body.ownerName,
+          email: body.ownerEmail,
+          passwordHash: hashPassword(body.ownerPassword),
+          role: 'OWNER',
+          companyId: org.id,
+        },
+      })
+    }
+    await logAudit(
+      'CREATE',
+      'Company',
+      org.id,
+      `${org.name} created (plan: ${plan?.name ?? 'none'}, trial ${body.trialDays}d${body.ownerEmail ? `, owner login ${body.ownerEmail}` : ''})`
+    )
     return ok(org)
   } catch (e) {
     return handleError(e)

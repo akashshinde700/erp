@@ -6,6 +6,7 @@
  */
 import { db } from './db'
 import { makeGstin } from './erp'
+import { hashPassword } from './auth'
 import {
   postOpeningStock,
   postPurchaseInvoice,
@@ -68,6 +69,17 @@ export async function seedDatabase(force = false) {
       bankAcct: '50200034567891',
       bankIfsc: 'HDFC0000123',
       upiId: 'shreeforge@hdfcbank',
+    },
+  })
+
+  // ---------- Demo organization login (owner) ----------
+  await db.orgUser.create({
+    data: {
+      name: 'Anil Deshpande',
+      email: 'owner@shreeforge.example.com',
+      passwordHash: hashPassword('forge123'),
+      role: 'OWNER',
+      companyId: company.id,
     },
   })
 

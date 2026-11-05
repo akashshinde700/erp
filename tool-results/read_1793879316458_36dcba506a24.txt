@@ -1,0 +1,662 @@
+     1→'use client'
+     2→
+     3→import * as React from 'react'
+     4→import { Button } from '@/components/ui/button'
+     5→import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+     6→import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+     7→import { Input } from '@/components/ui/input'
+     8→import { Label } from '@/components/ui/label'
+     9→import { Skeleton } from '@/components/ui/skeleton'
+    10→import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+    11→import { Textarea } from '@/components/ui/textarea'
+    12→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+    13→import { ScrollArea } from '@/components/ui/scroll-area'
+    14→import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
+    15→import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+    16→import { cn } from '@/lib/utils'
+    17→import { printDocument } from '@/lib/html'
+    18→import { fmtDate, fmtMoney, fmtNum, tone } from '@/lib/erp-constants'
+    19→import { Bookmark, BookmarkPlus, ChevronDown, ChevronUp, Download, FileSpreadsheet, Inbox, Search, Printer, Trash2, X } from 'lucide-react'
+    20→import * as XLSX from 'xlsx'
+    21→
+    22→// ---------- Page header ----------
+    23→
+    24→export function PageHeader({ title, description, actions }: { title: string; description?: string; actions?: React.ReactNode }) {
+    25→  return (
+    26→    <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    27→      <div className="min-w-0">
+    28→        <h2 className="text-xl font-semibold tracking-tight text-balance">{title}</h2>
+    29→        {description && <p className="mt-0.5 max-w-2xl text-sm text-muted-foreground">{description}</p>}
+    30→      </div>
+    31→      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+    32→    </div>
+    33→  )
+    34→}
+    35→
+    36→// ---------- Status badge ----------
+    37→
+    38→export function StatusBadge({ status }: { status?: string | null }) {
+    39→  const t = tone(status)
+    40→  // Tone → token classes, in one place, so every status in the product has the same
+    41→  // shape, contrast and dark-mode behaviour.
+    42→  const cls: Record<string, string> = {
+    43→    gray: 'bg-muted text-muted-foreground ring-border',
+    44→    green: 'bg-success-soft text-success ring-success-border',
+    45→    amber: 'bg-warning-soft text-warning ring-warning-border',
+    46→    red: 'bg-danger-soft text-destructive ring-danger-border',
+    47→    blue: 'bg-info-soft text-info ring-info-border',
+    48→    purple: 'bg-info-soft text-info ring-info-border',
+    49→    teal: 'bg-success-soft text-success ring-success-border',
+    50→  }
+    51→  const label = (status || '—').replaceAll('_', ' ')
+    52→  return (
+    53→    <span
+    54→      className={cn(
+    55→        'inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium whitespace-nowrap ring-1 ring-inset',
+    56→        cls[t],
+    57→      )}
+    58→    >
+    59→      {label}
+    60→    </span>
+    61→  )
+    62→}
+    63→
+    64→// ---------- Stat card ----------
+    65→
+    66→export function StatCard({ title, value, sub, icon, toneClass, delta, deltaLabel, hint }: {
+    67→  title: string
+    68→  value: string | number
+    69→  sub?: string
+    70→  icon?: React.ReactNode
+    71→  toneClass?: string
+    72→  /** Signed change, e.g. +12.4 or -3. The sign picks the tone; the caller formats the figure. */
+    73→  delta?: number | null
+    74→  deltaLabel?: string
+    75→  hint?: string
+    76→}) {
+    77→  const up = (delta ?? 0) > 0
+    78→  const flat = !delta
+    79→  return (
+    80→    <Card className="group relative overflow-hidden py-3.5 elev-1 transition-shadow duration-200 hover:elev-2">
+    81→      <span
+    82→        aria-hidden="true"
+    83→        className="pointer-events-none absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-primary/70 via-primary/30 to-transparent opacity-70"
+    84→      />
+    85→      <CardContent className="flex items-start justify-between gap-3 px-4">
+    86→        <div className="min-w-0">
+    87→          <p className="text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground">{title}</p>
+    88→          <p
+    89→            className="mt-1.5 truncate text-2xl font-semibold tracking-tight tabular"
+    90→            title={hint || (typeof value === 'string' ? value : String(value))}
+    91→          >
+    92→            {value}
+    93→          </p>
+    94→          <div className="mt-1 flex items-center gap-1.5">
+    95→            {typeof delta === 'number' && !flat && (
+    96→              <span
+    97→                className={cn(
+    98→                  'inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[11px] font-semibold tabular',
+    99→                  up ? 'bg-success-soft text-success' : 'bg-danger-soft text-destructive',
+   100→                )}
+   101→              >
+   102→                {up ? '▲' : '▼'} {Math.abs(delta).toLocaleString('en-IN')}
+   103→              </span>
+   104→            )}
+   105→            {sub && <p className="truncate text-xs text-muted-foreground">{sub}</p>}
+   106→            {deltaLabel && <p className="sr-only">{deltaLabel}</p>}
+   107→          </div>
+   108→        </div>
+   109→        {icon && (
+   110→          <div
+   111→            className={cn(
+   112→              'shrink-0 rounded-xl p-2 ring-1 ring-inset ring-black/5 transition-transform duration-200 group-hover:scale-105 dark:ring-white/10',
+   113→              toneClass || 'bg-primary/10 text-primary',
+   114→            )}
+   115→            aria-hidden="true"
+   116→          >
+   117→            {icon}
+   118→          </div>
+   119→        )}
+   120→      </CardContent>
+   121→    </Card>
+   122→  )
+   123→}
+   124→
+   125→// ---------- CSV export ----------
+   126→
+   127→function csvEscape(v: string | number): string {
+   128→  const s = String(v ?? '')
+   129→  return /[",\n]/.test(s) ? `"${s.replaceAll('"', '""')}"` : s
+   130→}
+   131→
+   132→export function downloadCsv(filename: string, headers: string[], rows: (string | number)[][]) {
+   133→  const csv = [headers, ...rows].map((r) => r.map(csvEscape).join(',')).join('\n')
+   134→  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8;' })
+   135→  const url = URL.createObjectURL(blob)
+   136→  const a = document.createElement('a')
+   137→  a.href = url
+   138→  a.download = `${filename}-${new Date().toISOString().slice(0, 10)}.csv`
+   139→  a.click()
+   140→  URL.revokeObjectURL(url)
+   141→}
+   142→
+   143→// ---------- XLSX export ----------
+   144→
+   145→/**
+   146→ * Builds a real Excel workbook (one sheet) from a 2-D array — first data row is
+   147→ * the header row. Numbers stay number cells (Excel can sum/filter them) and each
+   148→ * column gets a width derived from its longest content (capped). Browser-only:
+   149→ * XLSX.writeFile triggers the file download.
+   150→ */
+   151→export function downloadXlsx(filename: string, headers: string[], rows: (string | number)[][]) {
+   152→  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
+   153→  ws['!cols'] = headers.map((h, col) => {
+   154→    let max = String(h ?? '').length
+   155→    for (const row of rows) {
+   156→      const len = String(row[col] ?? '').length
+   157→      if (len > max) max = len
+   158→    }
+   159→    return { wch: Math.min(Math.max(max + 2, 10), 45) }
+   160→  })
+   161→  const wb = XLSX.utils.book_new()
+   162→  XLSX.utils.book_append_sheet(wb, ws, 'Data')
+   163→  XLSX.writeFile(wb, `${filename}.xlsx`)
+   164→}
+   165→
+   166→// ---------- Kbd (keyboard key chip) ----------
+   167→
+   168→export function Kbd({ children, className }: { children: React.ReactNode; className?: string }) {
+   169→  return (
+   170→    <kbd
+   171→      className={cn(
+   172→        'inline-flex h-5 min-w-5 items-center justify-center gap-0.5 rounded border bg-muted px-1.5 font-mono text-[10px] font-semibold text-muted-foreground',
+   173→        className,
+   174→      )}
+   175→    >
+   176→      {children}
+   177→    </kbd>
+   178→  )
+   179→}
+   180→
+   181→// ---------- Deep-link row highlight (global search → module table) ----------
+   182→
+   183→/** Escape a string for safe use inside a CSS attribute selector (ids are plain cuids — defensive only). */
+   184→function cssAttrEscape(s: string): string {
+   185→  return typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+   186→    ? CSS.escape(s)
+   187→    : s.replace(/["\\]/g, '\\$&')
+   188→}
+   189→
+   190→/**
+   191→ * Reads the deep-link written by the global search palette (sessionStorage key
+   192→ * 'erp_deep_link': { module, id, ts }) and returns the record id that should be
+   193→ * highlighted in this module's table — or null. The entry is consumed (removed)
+   194→ * on first read and the highlight auto-clears after ~8s, making it a one-shot pulse.
+   195→ * Pass the module's key (e.g. 'items', 'sales-orders'); deep links for other
+   196→ * modules are ignored (and consumed) by the first mounted module that reads them.
+   197→ */
+   198→export function useRowHighlight(moduleKey: string | null | undefined): string | null {
+   199→  const [highlightId, setHighlightId] = React.useState<string | null>(null)
+   200→
+   201→  // Read once per mount. The sessionStorage key is removed on every successful
+   202→  // read, so effect re-runs (moduleKey change without a remount) are no-ops.
+   203→  React.useEffect(() => {
+   204→    try {
+   205→      const raw = sessionStorage.getItem('erp_deep_link')
+   206→      if (!raw) return
+   207→      const d = JSON.parse(raw) as { module?: unknown; id?: unknown; ts?: unknown }
+   208→      sessionStorage.removeItem('erp_deep_link')
+   209→      if (d && d.module === moduleKey && typeof d.id === 'string' && d.id.trim() !== '') {
+   210→        setHighlightId(String(d.id))
+   211→      }
+   212→    } catch {
+   213→      // Malformed / unavailable deep link — best-effort UX nicety, ignore.
+   214→    }
+   215→  }, [moduleKey])
+   216→
+   217→  // Auto-clear the pulse so a stale highlight never sticks around.
+   218→  React.useEffect(() => {
+   219→    if (!highlightId) return
+   220→    const t = setTimeout(() => setHighlightId(null), 8000)
+   221→    return () => clearTimeout(t)
+   222→  }, [highlightId])
+   223→
+   224→  // Same-module deep link while already mounted (no remount happens): the palette
+   225→  // also broadcasts 'erp:deep-link' so we re-highlight live.
+   226→  React.useEffect(() => {
+   227→    const handler = (e: Event) => {
+   228→      try {
+   229→        const d = (e as CustomEvent<{ module?: unknown; id?: unknown }>).detail
+   230→        if (d && d.module === moduleKey && typeof d.id === 'string' && d.id.trim() !== '') {
+   231→          setHighlightId(null) // restart the pulse even for the same row
+   232→          window.setTimeout(() => setHighlightId(String(d.id)), 0)
+   233→        }
+   234→      } catch {
+   235→        // best-effort UX nicety — ignore
+   236→      }
+   237→    }
+   238→    window.addEventListener('erp:deep-link', handler)
+   239→    return () => window.removeEventListener('erp:deep-link', handler)
+   240→  }, [moduleKey])
+   241→
+   242→  return highlightId
+   243→}
+   244→
+   245→// ---------- Saved views (per-module localStorage search presets) ----------
+   246→
+   247→interface SavedView { name: string; q: string; ts: number }
+   248→
+   249→const VIEWS_STORAGE_PREFIX = 'manuflow:views:'
+   250→
+   251→/** Reads + sanitizes the saved-view list for a storage key. Private-mode safe (returns [] on any failure). */
+   252→function loadSavedViews(key: string): SavedView[] {
+   253→  try {
+   254→    const raw = localStorage.getItem(VIEWS_STORAGE_PREFIX + key)
+   255→    if (!raw) return []
+   256→    const parsed: unknown = JSON.parse(raw)
+   257→    if (!Array.isArray(parsed)) return []
+   258→    return parsed
+   259→      .filter((v): v is SavedView =>
+   260→        !!v && typeof v === 'object' &&
+   261→        typeof (v as SavedView).name === 'string' && typeof (v as SavedView).q === 'string')
+   262→      .map((v) => ({ name: v.name, q: v.q, ts: typeof v.ts === 'number' ? v.ts : 0 }))
+   263→  } catch {
+   264→    return []
+   265→  }
+   266→}
+   267→
+   268→/** Writes the saved-view list for a storage key. Private-mode safe (silently no-ops). */
+   269→function persistSavedViews(key: string, views: SavedView[]) {
+   270→  try {
+   271→    localStorage.setItem(VIEWS_STORAGE_PREFIX + key, JSON.stringify(views))
+   272→  } catch {
+   273→    // Storage unavailable (private mode / quota) — views stay in-memory for this session.
+   274→  }
+   275→}
+   276→
+   277→// ---------- Generic data table ----------
+   278→
+   279→export interface Column<T> {
+   280→  key: string
+   281→  header: string
+   282→  render: (row: T) => React.ReactNode
+   283→  className?: string
+   284→  hideOnMobile?: boolean
+   285→  /** Override extractor for the value behind this column — used by DataTable column sorting (`sortable`) and the totals footer (`sum`). Needed for computed columns whose key has no raw row field. */
+   286→  sortValue?: (row: T) => string | number
+   287→  /** Includes this column in the totals footer row: finite numeric values are summed (client mode: all filtered rows; server mode: current page rows). */
+   288→  sum?: boolean
+   289→  /** Footer total format — 'money' renders via fmtMoney, 'num' (default) via fmtNum. */
+   290→  sumFormat?: 'money' | 'num'
+   291→}
+   292→
+   293→/** Raw value behind a column for sorting/summing: the column's sortValue override when set, else the row's own field under the column key. */
+   294→function columnValue<T>(row: T, col: Column<T>): unknown {
+   295→  return col.sortValue ? col.sortValue(row) : (row as Record<string, unknown>)[col.key]
+   296→}
+   297→
+   298→/**
+   299→ * Three-way compare for extracted column values: numbers compare numerically,
+   300→ * strings lexicographically (ISO date strings order correctly), mixed types
+   301→ * fall back to a String() compare. undefined/null never reach this — the sort
+   302→ * comparator pulls empties to the end in both directions (empties-always-last).
+   303→ */
+   304→function compareSortValues(a: unknown, b: unknown): number {
+   305→  if (typeof a === 'number' && typeof b === 'number') return a - b
+   306→  if (typeof a === 'string' && typeof b === 'string') return a.localeCompare(b)
+   307→  const sa = String(a)
+   308→  const sb = String(b)
+   309→  return sa < sb ? -1 : sa > sb ? 1 : 0
+   310→}
+   311→
+   312→/**
+   313→ * Desktop/tablet vs phone, resolved after hydration.
+   314→ *
+   315→ * DataTable renders exactly one tree — never both — so screen readers, DOM queries and text search see a
+   316→ * single copy of every record. The server snapshot says "desktop", which is also the pre-hydration paint:
+   317→ * the table is the default document, and phones swap to record cards the moment React runs.
+   318→ */
+   319→const DESKTOP_QUERY = '(min-width: 768px)'
+   320→function subscribeDesktop(onChange: () => void) {
+   321→  const mql = window.matchMedia(DESKTOP_QUERY)
+   322→  mql.addEventListener('change', onChange)
+   323→  return () => mql.removeEventListener('change', onChange)
+   324→}
+   325→function useIsDesktop(): boolean {
+   326→  return React.useSyncExternalStore(
+   327→    subscribeDesktop,
+   328→    () => window.matchMedia(DESKTOP_QUERY).matches,
+   329→    () => true,
+   330→  )
+   331→}
+   332→
+   333→export function DataTable<T extends { id: string }>({
+   334→  columns, rows, loading, emptyText = 'No records yet', searchPlaceholder, onRowClick, maxHeight = 'auto', pageSize = 12, csvExport, xlsxExport, highlightId, moduleKey, savedViewsKey, serverPagination, sortable, mobileView = 'cards',
+   335→}: {
+   336→  columns: Column<T>[]
+   337→  rows: T[]
+   338→  loading?: boolean
+   339→  emptyText?: string
+   340→  searchPlaceholder?: string
+   341→  onRowClick?: (row: T) => void
+   342→  maxHeight?: string
+   343→  pageSize?: number
+   344→  /** When provided, shows an "Export CSV" button exporting all filtered rows. */
+   345→  csvExport?: { filename: string; headers?: string[]; pick: (row: T) => (string | number)[] }
+   346→  /** When provided, shows an "Excel" button (beside the CSV one) exporting the same filtered rows as a real .xlsx. Headers default to the column labels — identical columns to the CSV. */
+   347→  xlsxExport?: { filename: string; headers?: string[]; pick: (row: T) => (string | number)[] }
+   348→  /** Deep-linked record id (from useRowHighlight) — page-jumps to + scrolls the row into view and highlights it. */
+   349→  highlightId?: string | null
+   350→  /** Opts into the dashboard filter-preset channel: on mount consumes sessionStorage 'erp_filter_preset' ({ module, q, ts }) when its module matches, and live-listens for 'erp:filter-preset' CustomEvents (detail { module, q }). Pass the module's key (e.g. 'items'). No effect when omitted. */
+   351→  moduleKey?: string
+   352→  /** Enables the "Views" saved-search control. Views persist in localStorage under `manuflow:views:<savedViewsKey>` — pass `${companyId}:<moduleKey>` so views are scoped per company + module. No effect when omitted. */
+   353→  savedViewsKey?: string
+   354→  /** Opts the whole table into column sorting: every column with usable values (a sortValue extractor, or at least one row with a non-null raw value under its key) gets a clickable header cycling asc → desc → off. Client mode sorts the full filtered set before pagination (filter → sort → paginate); server mode only reorders the current page slice (the API owns the real order). undefined/null values sort last in both directions. Sort state persists across refetches. No effect when omitted. */
+   355→  sortable?: boolean
+   356→  /**
+   357→   * How a phone (< 768px) shows the records:
+   358→   *  • 'cards' (default) — one card per record: primary identifier, secondary fields as label/value
+   359→   *    pairs, actions in the card header. Every non-`hideOnMobile` column is still shown, so nothing is
+   360→   *    silently dropped; the desktop table is unchanged.
+   361→   *  • 'scroll' — the full table with horizontal scrolling, for wide numeric matrices where the column
+   362→   *    alignment itself carries meaning (a comparison across many periods, for example).
+   363→   */
+   364→  mobileView?: 'cards' | 'scroll'
+   365→  /** Opts into server-side pagination: `rows` must then be exactly the page slice the API returned (already filtered + paginated). The local text filter and internal page state are bypassed — Prev/Next and the "Showing …" footer are driven by `page`/`onPageChange`/`total`, and (with `onSearchChange`) the search text is pushed to the module debounced by 300ms (mount run skipped). Omit for the default fully client-side behavior (zero change). */
+   366→  serverPagination?: {
+   367→    /** 0-based page index, controlled by the module (Prev → onPageChange(page - 1), Next → onPageChange(page + 1)). */
+   368→    page: number
+   369→    /** Rows per server page — the module must fetch exactly this many. */
+   370→    pageSize: number
+   371→    /** Full filtered row count from the server (across all pages). */
+   372→    total: number
+   373→    /** Called when the user pages (Prev/Next) or a highlight page-jump targets another page. */
+   374→    onPageChange: (page: number) => void
+   375→    /** Debounced (300ms) search-text push; the module should store it as its server-side q filter and reset to page 0. */
+   376→    onSearchChange?: (q: string) => void
+   377→  }
+   378→}) {
+   379→  const [q, setQ] = React.useState('')
+   380→  const [appliedView, setAppliedView] = React.useState<string | null>(null)
+   381→  const [page, setPage] = React.useState(0)
+   382→  const wrapperRef = React.useRef<HTMLDivElement | null>(null)
+   383→
+   384→  const filtered = React.useMemo(() => {
+   385→    if (serverPagination) return rows // server mode: the API already filtered + sliced — rows are the page as-is
+   386→    if (!q.trim()) return rows
+   387→    const needle = q.toLowerCase()
+   388→    return rows.filter((r) => JSON.stringify(r).toLowerCase().includes(needle))
+   389→  }, [rows, q, serverPagination])
+   390→
+   391→  React.useEffect(() => setPage(0), [q, rows.length])
+   392→
+   393→  // ---- Column sorting (sortable) ----
+   394→  // Active sort: { key, dir } cycling asc → desc → off per header click; null
+   395→  // = unsorted. Persists across refetches — deliberately no reset on data change.
+   396→  const [sort, setSort] = React.useState<{ key: string; dir: 'asc' | 'desc' } | null>(null)
+   397→
+   398→  // Columns with usable values: a column is sortable when it declares a
+   399→  // sortValue extractor or at least one display row has a non-null raw value
+   400→  // under its key (keeps 'actions'-style render-only columns inert).
+   401→  const sortableKeys = React.useMemo(() => {
+   402→    const set = new Set<string>()
+   403→    if (!sortable) return set
+   404→    for (const c of columns) {
+   405→      if (c.sortValue) { set.add(c.key); continue }
+   406→      for (const row of filtered) {
+   407→        const v = (row as Record<string, unknown>)[c.key]
+   408→        if (v !== undefined && v !== null) { set.add(c.key); break }
+   409→      }
+   410→    }
+   411→    return set
+   412→  }, [sortable, columns, filtered])
+   413→
+   414→  // Display pipeline: filter (above) → sort (here) → paginate (pageRows
+   415→  // below). Sorting is opt-in; without `sortable` (or an active sort) this is
+   416→  // `filtered` verbatim. Server mode sorts nothing — `rows` are the API's page
+   417→  // slice, so header clicks only reorder the current page.
+   418→  const displayRows = React.useMemo(() => {
+   419→    if (serverPagination || !sortable || !sort) return filtered
+   420→    const col = columns.find((c) => c.key === sort.key)
+   421→    if (!col) return filtered
+   422→    const dirMul = sort.dir === 'asc' ? 1 : -1
+   423→    return filtered
+   424→      .map((row, i) => ({ row, i, v: columnValue(row, col) }))
+   425→      .sort((a, b) => {
+   426→        const aEmpty = a.v === undefined || a.v === null
+   427→        const bEmpty = b.v === undefined || b.v === null
+   428→        if (aEmpty !== bEmpty) return aEmpty ? 1 : -1 // empties always last, asc + desc
+   429→        const c = compareSortValues(a.v, b.v)
+   430→        return c !== 0 ? dirMul * c : a.i - b.i // stable ties keep the filtered order
+   431→      })
+   432→      .map((x) => x.row)
+   433→  }, [filtered, columns, sortable, sort, serverPagination])
+   434→
+   435→  // Deep-link: page-jump to + scroll the highlighted row into view. Rows may
+   436→  // arrive async (table can be loading when the highlight first applies), so
+   437→  // attempts are retried across a few ticks; state kept in a ref keyed by the
+   438→  // highlight id makes each jump a strict one-shot that never fights the
+   439→  // user's own paging/filtering afterwards.
+   440→  const jumpStateRef = React.useRef<{ id: string | null; jumped: boolean; scrolled: boolean }>({ id: null, jumped: false, scrolled: false })
+   441→
+   442→  // Latest serverPagination config, readable inside effects below without
+   443→  // re-triggering them on every render (the object is recreated per render).
+   444→  // Synced in a bare effect (runs after every render, before the consumers
+   445→  // declared after it) so effects always read the freshest config.
+   446→  const serverPaginationRef = React.useRef(serverPagination)
+   447→  React.useEffect(() => {
+   448→    serverPaginationRef.current = serverPagination
+   449→  })
+   450→
+   451→  React.useEffect(() => {
+   452→    if (!highlightId) return
+   453→    const st = jumpStateRef.current
+   454→    if (st.id !== highlightId) {
+   455→      st.id = highlightId
+   456→      st.jumped = false
+   457→      st.scrolled = false
+   458→    }
+   459→    const timers: ReturnType<typeof setTimeout>[] = []
+   460→    const attempt = () => {
+   461→      if (!st.jumped) {
+   462→        const idx = displayRows.findIndex((r) => String(r.id) === highlightId)
+   463→        if (idx === -1) return // not in filtered yet (rows still loading) or filtered out by the text filter — do nothing
+   464→        st.jumped = true
+   465→        const sp = serverPaginationRef.current
+   466→        if (sp) sp.onPageChange(Math.floor(idx / sp.pageSize))
+   467→        else setPage(Math.floor(idx / pageSize))
+   468→      }
+   469→      if (!st.scrolled) {
+   470→        const el = wrapperRef.current?.querySelector(`[data-row-id="${cssAttrEscape(highlightId)}"]`)
+   471→        if (el) {
+   472→          el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+   473→          st.scrolled = true
+   474→        }
+   475→      }
+   476→    }
+   477→    for (const delay of [0, 150, 400, 900]) timers.push(setTimeout(attempt, delay))
+   478→    return () => timers.forEach(clearTimeout)
+   479→  }, [highlightId, displayRows, pageSize])
+   480→
+   481→  // ---- Dashboard filter presets (moduleKey) ----
+   482→  // One-shot: read + consume sessionStorage 'erp_filter_preset' ({ module, q, ts })
+   483→  // on mount, exactly like the deep-link pattern above.
+   484→  React.useEffect(() => {
+   485→    if (!moduleKey) return
+   486→    try {
+   487→      const raw = sessionStorage.getItem('erp_filter_preset')
+   488→      if (!raw) return
+   489→      const d = JSON.parse(raw) as { module?: unknown; q?: unknown; ts?: unknown }
+   490→      sessionStorage.removeItem('erp_filter_preset')
+   491→      if (d && d.module === moduleKey && typeof d.q === 'string') setQ(d.q)
+   492→    } catch {
+   493→      // Malformed / unavailable preset — best-effort, ignore.
+   494→    }
+   495→  }, [moduleKey])
+   496→
+   497→  // Same-module live presets while already mounted (no remount happens): the
+   498→  // emitter also broadcasts 'erp:filter-preset' with detail { module, q }.
+   499→  React.useEffect(() => {
+   500→    if (!moduleKey) return
+   501→    const handler = (e: Event) => {
+   502→      try {
+   503→        const d = (e as CustomEvent<{ module?: unknown; q?: unknown }>).detail
+   504→        if (d && d.module === moduleKey && typeof d.q === 'string') {
+   505→          const next = String(d.q)
+   506→          setQ((prev) => (next === prev ? prev : next))
+   507→          setAppliedView(null) // an external preset replaces any applied view
+   508→        }
+   509→      } catch {
+   510→        // best-effort — ignore
+   511→      }
+   512→    }
+   513→    window.addEventListener('erp:filter-preset', handler)
+   514→    return () => window.removeEventListener('erp:filter-preset', handler)
+   515→  }, [moduleKey])
+   516→
+   517→  // ---- Saved views (savedViewsKey) ----
+   518→  const [views, setViews] = React.useState<SavedView[]>([])
+   519→  const [saveDialogOpen, setSaveDialogOpen] = React.useState(false)
+   520→  const [viewName, setViewName] = React.useState('')
+   521→
+   522→  // Load (re-load on key change) from localStorage after mount — hydration safe.
+   523→  React.useEffect(() => {
+   524→    if (!savedViewsKey) return
+   525→    setViews(loadSavedViews(savedViewsKey))
+   526→    setAppliedView(null)
+   527→  }, [savedViewsKey])
+   528→
+   529→  const applyView = (v: SavedView) => {
+   530→    setQ(v.q)
+   531→    setAppliedView(v.name)
+   532→  }
+   533→
+   534→  const deleteView = (name: string) => {
+   535→    if (!savedViewsKey) return
+   536→    const next = views.filter((v) => v.name !== name)
+   537→    setViews(next)
+   538→    persistSavedViews(savedViewsKey, next)
+   539→    setAppliedView((cur) => (cur === name ? null : cur))
+   540→  }
+   541→
+   542→  const saveCurrentView = () => {
+   543→    if (!savedViewsKey) return
+   544→    const name = viewName.trim() || 'All records'
+   545→    const view: SavedView = { name, q, ts: Date.now() }
+   546→    const idx = views.findIndex((v) => v.name === name)
+   547→    const next = idx === -1 ? [...views, view] : views.map((v, i) => (i === idx ? view : v))
+   548→    setViews(next)
+   549→    persistSavedViews(savedViewsKey, next)
+   550→    setAppliedView(name)
+   551→    setSaveDialogOpen(false)
+   552→  }
+   553→
+   554→  // ---- Server-side search (serverPagination.onSearchChange) ----
+   555→  // The search input still owns the local `q` (saved views + presets keep
+   556→  // working visually); when an onSearchChange callback is wired, q is pushed
+   557→  // to the module debounced by 300ms. The very first run after mount is
+   558→  // skipped, and values already sent are suppressed — so programmatic setQ
+   559→  // (views/presets) to the same text never triggers a redundant refetch.
+   560→  const onSearchChangeRef = React.useRef(serverPagination?.onSearchChange)
+   561→  React.useEffect(() => {
+   562→    onSearchChangeRef.current = serverPagination?.onSearchChange
+   563→  })
+   564→  const serverSearchArmedRef = React.useRef(false)
+   565→  const serverSearchLastSentRef = React.useRef<string | null>(null)
+   566→
+   567→  React.useEffect(() => {
+   568→    const cb = onSearchChangeRef.current
+   569→    if (!cb) return
+   570→    if (!serverSearchArmedRef.current) {
+   571→      serverSearchArmedRef.current = true
+   572→      serverSearchLastSentRef.current = q
+   573→      return
+   574→    }
+   575→    if (q === serverSearchLastSentRef.current) return
+   576→    const timer = setTimeout(() => {
+   577→      serverSearchLastSentRef.current = q
+   578→      cb(q)
+   579→    }, 300)
+   580→    return () => clearTimeout(timer) // re-armed per q change; cleared on unmount
+   581→  }, [q])
+   582→
+   583→  const totalPages = serverPagination
+   584→    ? Math.max(1, Math.ceil(serverPagination.total / serverPagination.pageSize))
+   585→    : Math.max(1, Math.ceil(filtered.length / pageSize))
+   586→  const pageRows = serverPagination ? displayRows : displayRows.slice(page * pageSize, page * pageSize + pageSize)
+   587→
+   588→  // Phone cards are cheap individually but a screen can hand us a 200-row page. Render a slice and
+   589→  // let the user ask for more, so a mid-range Android does not build 200 DOM cards at once.
+   590→  const CARD_PAGE = 40
+   591→  const [cardLimit, setCardLimit] = React.useState(CARD_PAGE)
+   592→  React.useEffect(() => { setCardLimit(CARD_PAGE) }, [q, pageRows.length])
+   593→  const cardRows = pageRows.length > cardLimit ? pageRows.slice(0, cardLimit) : pageRows
+   594→  const pagerPage = serverPagination ? serverPagination.page : page
+   595→  const pagerPageSize = serverPagination ? serverPagination.pageSize : pageSize
+   596→  const pagerTotal = serverPagination ? serverPagination.total : filtered.length
+   597→  const gotoPage = (p: number) => {
+   598→    if (serverPagination) serverPagination.onPageChange(p)
+   599→    else setPage(p)
+   600→  }
+   601→
+   602→  // ---- Totals footer (per-column opt-in via Column.sum) ----
+   603→  // Sums all client-side filtered rows (pre-pagination); server mode sums only
+   604→  // the current page rows (the API owns the full set). Rendered only when at
+   605→  // least one column opts in and there is something to sum.
+   606→  const sumRows = serverPagination ? pageRows : displayRows
+   607→  const hasSum = columns.some((c) => c.sum)
+   608→  const totals = React.useMemo(() => {
+   609→    if (!hasSum) return null
+   610→    const map = new Map<string, number | null>()
+   611→    for (const c of columns) {
+   612→      if (!c.sum) continue
+   613→      let total = 0
+   614→      let any = false
+   615→      for (const row of sumRows) {
+   616→        const v = columnValue(row, c)
+   617→        if (typeof v === 'number' && Number.isFinite(v)) { total += v; any = true }
+   618→      }
+   619→      map.set(c.key, any ? total : null) // null → nothing summable, footer renders '—'
+   620→    }
+   621→    return map
+   622→  }, [hasSum, columns, sumRows])
+   623→  const showFooter = hasSum && !loading && sumRows.length > 0
+   624→
+   625→  // ---- Phone presentation (cards) ------------------------------------------------------------
+   626→  const isDesktop = useIsDesktop()
+   627→  const useCards = mobileView === 'cards' && !isDesktop
+   628→
+   629→  /** A column holding only row actions — rendered in the card header instead of as a field. */
+   630→  const isActionColumn = (c: Column<T>) => c.key === 'actions' || c.key === 'action'
+   631→  /**
+   632→   * Table mode: row actions stay on screen. The column is pinned to the right edge while the other columns scroll
+   633→   * under it, and long button rows wrap on narrower screens instead of pushing the column out of view.
+   634→   */
+   635→  const pinnedActions = (c: Column<T>) => isActionColumn(c)
+   636→    && 'md:sticky md:right-0 md:shadow-[-6px_0_6px_-6px_oklch(0_0_0/18%)] min-[1700px]:shadow-none'
+   637→  const pinnedActionCell = (c: Column<T>) => isActionColumn(c)
+   638→    && '[&>div]:w-max [&>div]:max-w-[11.5rem] [&>div]:flex-wrap [&_button]:!px-1.5 xl:[&>div]:max-w-[14rem] min-[1700px]:[&>div]:max-w-none min-[1700px]:[&_button]:!px-2.5'
+   639→  // The pinned cell has to be opaque, so it repeats the background the rest of its row has
+   640→  const pinnedRowBg = 'md:z-[1] md:bg-card md:group-hover/row:bg-[color-mix(in_oklab,var(--primary)_5%,var(--card))]'
+   641→  const cardColumns = columns.filter((c) => !c.hideOnMobile && !isActionColumn(c))
+   642→  const cardActionColumns = columns.filter((c) => !c.hideOnMobile && isActionColumn(c))
+   643→  const cardTitleColumn = cardColumns[0]
+   644→  const cardFieldColumns = cardColumns.slice(1)
+   645→
+   646→  const emptyState = (
+   647→    <div className="flex flex-col items-center gap-2 px-4 py-10 text-center text-muted-foreground">
+   648→      <div className="grid h-11 w-11 place-items-center rounded-full bg-muted">
+   649→        <Inbox className="h-5 w-5" aria-hidden="true" />
+   650→      </div>
+   651→      <p className="text-sm font-medium text-foreground">
+   652→        {q.trim() ? `No matches for “${q.trim()}”` : emptyText}
+   653→      </p>
+   654→      <p className="text-xs">
+   655→        {q.trim() ? 'Try a shorter search, or clear it to see everything.' : 'New records appear here as soon as they are saved.'}
+   656→      </p>
+   657→      {q.trim() && (
+   658→        <Button variant="outline" size="sm" className="mt-1" onClick={() => { setQ(''); setAppliedView(null) }}>
+   659→          Clear search
+   660→        </Button>
+
+[showing lines 1-660 of 1307; use offset=661 with limit to continue reading]

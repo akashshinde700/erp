@@ -37,6 +37,57 @@ model Company {
   bankIfsc  String?
   upiId     String?
   createdAt DateTime @default(now())
+
+  // ---- Tally export settings (blank = engine defaults, see src/lib/tally.ts) ----
+  tallyCompanyName    String? // SVCURRENTCOMPANY; blank = omit (Tally uses open company)
+  tallySalesLedger    String?
+  tallyPurchaseLedger String?
+  tallyCgstLedger     String?
+  tallySgstLedger     String?
+  tallyIgstLedger     String?
+  tallyRoundOffLedger String?
+
+  // ---- SaaS subscription (managed via /api/platform/*; no plan = unlimited) ----
+  isPlatform   Boolean  @default(false) // operator's own company — never blocked
+  planId       String?
+  plan         Plan?    @relation(fields: [planId], references: [id])
+  saasStatus   String   @default("ACTIVE") // ACTIVE | SUSPENDED
+  billingCycle String   @default("MONTHLY") // MONTHLY | YEARLY
+  paidUntil    DateTime?
+  trialEndsAt  DateTime?
+  maxItems      Int? // per-org overrides; null = plan's limit; 0 = unlimited
+  maxWarehouses Int?
+  maxParties    Int?
+}
+
+// ---------- SaaS plans ----------
+
+model Plan {
+  id            String   @id @default(cuid())
+  name          String   @unique
+  priceMonthly  Float    @default(0) // INR; 0 = free
+  priceYearly   Float    @default(0)
+  maxItems      Int      @default(0) // 0 = unlimited
+  maxWarehouses Int      @default(0)
+  maxParties    Int      @default(0)
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  companies Company[]
+}
+
+// ---------- Audit trail (every mutation; see src/lib/audit.ts) ----------
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  action    String // CREATE | UPDATE | DELETE | CANCEL | POST | EXPORT | PLATFORM | BACKUP | SEED
+  entity    String // SalesInvoice | Party | Plan | …
+  entityId  String?
+  details   String? // short human summary
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([entity])
 }
 
 // ---------- Masters ----------
@@ -189,6 +240,10 @@ model SalesInvoice {
   remarks      String?
   createdAt    DateTime @default(now())
 
+  // Tally export stamps (records only — never blocks re-export)
+  tallyExportedAt DateTime?
+  tallySentAt     DateTime?
+
   items       SalesInvoiceItem[]
 
   @@index([partyId])
@@ -238,6 +293,10 @@ model PurchaseInvoice {
   status       String   @default("POSTED") // POSTED | CANCELLED
   remarks      String?
   createdAt    DateTime @default(now())
+
+  // Tally export stamps (records only — never blocks re-export)
+  tallyExportedAt DateTime?
+  tallySentAt     DateTime?
 
   items       PurchaseInvoiceItem[]
 

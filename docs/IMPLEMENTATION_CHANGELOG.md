@@ -44,3 +44,54 @@ User revealed that `akashshinde700/erpnashilk` was made public and provided a li
 3. Logged into demo.mapsofterp.in read-only via browser automation; mapped all 18 modules and key screens (dashboard attention/pending panels, manufacturing job + raw-material grid Q-Avail/Q-WIP, GST=HSN master, hierarchical COA with GRNI clearing account, invoice list with IRN/Email status columns).
 4. Doc updates: REVERSE_ENGINEERING_SUMMARY.md §2 ledger + new §3.4/§3.5; SOURCE_REPOSITORY_COMPARISON.md addendum rows A1–A20 (ADOPT/ADAPT/AVOID verdicts); BUG_AND_SECURITY_REPORT.md erpnashilk findings N1–N5.
 5. Key roadmap inputs captured for future sessions: paisa-exact bill math (A1), bill-level freight/packing charges (A2), cheque lifecycle (A5), advances/credit-apply (A6), dashboard attention panels (A18).
+
+## 10. Feature session (2026-11, same day) — Tally stack + SaaS Platform Admin + Audit + action buttons
+
+User directive: audit erpnashilk's Tally integration (.bat + connector), SaaS platform admin, and remaining UX; implement everything of value. Patterns re-implemented from the Task-1 audit (repo unlicensed — zero code copied).
+
+### 10.1 Schema (`prisma/schema.prisma`, pushed)
+- `Plan` (name/priceMonthly/priceYearly/maxItems/maxWarehouses/maxParties/active) + `Company.planId` relation.
+- Company subscription: `isPlatform`, `saasStatus` (ACTIVE|SUSPENDED), `billingCycle`, `paidUntil`, `trialEndsAt`, limit overrides (`maxItems/maxWarehouses/maxParties`; null = plan default, 0 = unlimited).
+- Company Tally settings: `tallyCompanyName`, `tallySalesLedger/PurchaseLedger/CgstLedger/SgstLedger/IgstLedger/RoundOffLedger`.
+- `SalesInvoice`/`PurchaseInvoice`: `tallyExportedAt` / `tallySentAt` stamps.
+- `AuditLog` (action/entity/entityId/details, indexed on createdAt+entity).
+
+### 10.2 New libraries
+| File | Purpose |
+|---|---|
+| `src/lib/tally.ts` | One voucher model → XML/JSON/CSV. LEDGERENTRIES invoice mode, debits negative, REMOTEID dedupe (`FORGEERP-SINV-<id>`), qty back-solved from billed amount (Tally recomputes RATE×QTY), round-off residual balancing line, ASCII `tallyText()`, service-lines→sales-ledger routing, masters XML (UNIT+LEDGER with PARENT map, Sundry Debtors/Creditors), payment Receipt/Payment vouchers |
+| `src/lib/platform.ts` | `accessState()` single blocking truth (suspended / expired-paid / expired-trial, end-of-day inclusive, free-forever default), `assertCompanyAccess()` guard, `assertLimit()` plan limits, `ensurePlans()` starter plans, platform-key check |
+| `src/lib/audit.ts` | `logAudit()` fire-and-forget |
+
+### 10.3 New API routes (10 files)
+- `POST/GET/DELETE /api/tally/connector` — pairing-code → token (SHA-256, single-use code, 10-min TTL), queue voucher jobs, `?mode=pending` poll, result recording, status; in-memory PoC store on globalThis.
+- `GET /api/tally/voucher` — per-doc XML/JSON/CSV + `?preview=1` warnings envelope; `POST` mark-sent/unmark.
+- `GET /api/tally/masters` — All-Masters XML (parties toggle).
+- `GET /api/tally/bulk` — date-range combined envelope (sales/purchase/payments toggles).
+- `POST /api/platform/auth`; `GET/POST/DELETE /api/platform/plans`(+`[id]` PATCH); `GET/POST /api/platform/orgs`(+`[id]` PATCH actions: setPlan/markPaid/extendTrial/suspend/activate/customize/resetCustom + typed-name DELETE).
+- `GET /api/audit` (filters + entity groups); `GET /api/backup`; `POST /api/backup/restore` (typed RESTORE confirm, single transaction).
+- Company route: subscription block + `access` in GET; Tally fields in PUT.
+
+### 10.4 Guards + audit wired into 23 existing handlers
+`assertCompanyAccess()` on every business mutation (sales/purchase/payments/jobwork chain/opening/seed/masters); `assertLimit('parties'|'items'|'warehouses')` on master creation; `logAudit` after every successful mutation/cancel/export/platform action.
+
+### 10.5 Frontend (3 new modules + upgrades)
+- **Tally Export module** (`tally.tsx`): how-it-works, masters download (parties toggle), bulk range export, connector console (pairing code w/ copy-able CLI commands, 10s status polling, recent imports table), .bat download, ledger-name settings form.
+- **Platform Admin module** (`platform.tsx`): key gate (sessionStorage), KPI stats (orgs/MRR/documents/warehouses), Organizations tab (plan inline-select, state badges, usage vs limits, +1 mo/+1 yr/+7d trial/Suspend/Activate/typed-name delete, create-org dialog), Plans tab (full CRUD), Data & backup card (download snapshot + typed-RESTORE file restore).
+- **Audit Trail module** (`audit.tsx`): entity/action filters, search, newest-first table, CSV export.
+- **Shell**: suspension/expiry/trial banners with "Open Platform Admin" shortcut; company refetch on leaving platform view; sidebar group "Setup & Platform".
+- **Invoice lists**: Actions column (View / Duplicate / Tally dropdown: XML/CSV/Queue-for-connector/Mark-sent), toolbar Refresh + CSV export; **detail view**: Duplicate + Tally dropdown + "In Tally" badge; duplicate prefill dialog.
+- **Dashboard**: 6 quick-action cards.
+- Client helpers: `platformApi` (x-platform-key), `downloadUrl`, `downloadCsv` (BOM).
+
+### 10.6 Static downloads (`public/downloads/tally/`)
+- `Tally-Import.bat` (CRLF): config override, drag-drop or newest `*_tally.xml` in Downloads, curl + PowerShell fallback POST to Tally :9000, CREATED/ALTERED/ERRORS/EXCEPTIONS parsing, LINEERROR cheat-sheet, REMOTEID re-import note.
+- `forge-tally-connector.mjs`: Node 18+ ESM CLI (pair/run/status/forget), token stored 0600 in APPDATA, 15s poll, imports queued XML into Tally, reports result.
+
+### 10.7 Verification (full detail in TESTING_REPORT §6)
+25 API checks + 12 browser E2E flows, all executed live: voucher balance proofs (Dr=Cr on both modes), suspend→403→banner→activate lifecycle, plan-limit 403 at 6/6, connector pair→queue→poll→result lifecycle, backup counts, duplicate prefill, zero console errors, lint clean.
+
+### 10.8 Honest scope notes
+- Connector + .bat untested against real TallyPrime (no Tally in sandbox) — XML follows the audited spec; flagged PoC in UI.
+- Organizations beyond the first are real Company rows but the ERP runtime stays single-tenant (first company) — per-request tenant scoping remains roadmap.
+- Backup restore verified structurally; full round-trip not exercised this session.

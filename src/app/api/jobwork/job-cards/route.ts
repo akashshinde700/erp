@@ -1,6 +1,8 @@
 import { ok, handleError } from '@/lib/api'
 import { z } from 'zod'
 import { postJobCard } from '@/lib/services'
+import { assertCompanyAccess } from '@/lib/platform'
+import { logAudit } from '@/lib/audit'
 
 const postSchema = z.object({
   inwardId: z.string().min(1, 'Inward is required'),
@@ -20,7 +22,10 @@ const postSchema = z.object({
 
 export async function POST(req: Request) {
   try {
-    return ok(await postJobCard(postSchema.parse(await req.json())))
+    await assertCompanyAccess()
+    const res = await postJobCard(postSchema.parse(await req.json()))
+    await logAudit('POST', 'JobCard', res.id, `${res.cardNo} — ₹${res.totalAmount}`)
+    return ok(res)
   } catch (e) {
     return handleError(e)
   }

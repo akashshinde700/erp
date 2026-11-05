@@ -67,6 +67,19 @@ export interface Company {
   bankAcct: string | null
   bankIfsc: string | null
   upiId: string | null
+  tallyCompanyName: string | null
+  tallySalesLedger: string | null
+  tallyPurchaseLedger: string | null
+  tallyCgstLedger: string | null
+  tallySgstLedger: string | null
+  tallyIgstLedger: string | null
+  tallyRoundOffLedger: string | null
+  plan: { id: string; name: string; priceMonthly: number } | null
+  saasStatus: string
+  billingCycle: string
+  paidUntil: string | null
+  trialEndsAt: string | null
+  access?: { state: string; blocked: boolean; message: string }
 }
 
 export interface Party {
@@ -528,7 +541,109 @@ export function useMasters() {
   }
 }
 
+// ---------- tally / platform / audit ----------
+
+export interface TallyVoucherPreview {
+  voucher: {
+    voucherType: string
+    voucherNumber: string
+    remoteId: string
+    date: string
+    party: string
+    entries: { ledger: string; amount: number; isDebit: boolean; isParty: boolean }[]
+    items: { stockItem: string; qty: number; rate: number; amount: number; uom: string }[]
+    totals: { taxable: number; cgst: number; sgst: number; igst: number; roundOff: number; grandTotal: number }
+  }
+  warnings: string[]
+}
+
+export interface TallyConnectorStatus {
+  paired: boolean
+  online: boolean
+  pending: number
+  lastSeenAt: number | null
+  pairedAt: number | null
+  connectorVersion: string | null
+  recent: { docNo: string; ok: boolean; created: number; altered: number; errors: number; errorText: string }[]
+}
+
+export interface Plan {
+  id: string
+  name: string
+  priceMonthly: number
+  priceYearly: number
+  maxItems: number
+  maxWarehouses: number
+  maxParties: number
+  active: boolean
+  _count?: { companies: number }
+}
+
+export interface OrgRow {
+  id: string
+  name: string
+  gstin: string | null
+  city: string | null
+  isPlatform: boolean
+  operating: boolean
+  plan: { id: string; name: string; priceMonthly: number } | null
+  customized: boolean
+  limits: { items: number; warehouses: number; parties: number }
+  usage: { parties: number; items: number; warehouses: number; salesInvoices: number }
+  saasStatus: string
+  billingCycle: string
+  paidUntil: string | null
+  trialEndsAt: string | null
+  createdAt: string
+}
+
+export interface OrgsResponse {
+  orgs: OrgRow[]
+  stats: { total: number; active: number; suspended: number; mrr: number; parties: number; items: number; warehouses: number; salesInvoices: number }
+}
+
+export interface AuditRow {
+  id: string
+  action: string
+  entity: string
+  entityId: string | null
+  details: string | null
+  createdAt: string
+}
+
+// ---------- platform api (key-authenticated) ----------
+
+export async function platformApi<T>(path: string, init?: RequestInit, key?: string): Promise<T> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(init?.headers as Record<string, string> | undefined) }
+  if (key) headers['x-platform-key'] = key
+  return api<T>(path, { ...init, headers })
+}
+
 // ---------- misc helpers ----------
+
+/** Trigger a browser download for a GET endpoint that returns an attachment. */
+export function downloadUrl(path: string): void {
+  const a = document.createElement('a')
+  a.href = path
+  a.rel = 'noopener'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+}
+
+/** Client-side CSV download (BOM + quote escaping). */
+export function downloadCsv(filename: string, rows: (string | number)[][]): void {
+  const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n')
+  const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
 
 /** Parse an input value into a finite number (default 0). */
 export const num = (v: string | number): number => {

@@ -19,6 +19,9 @@ export type ErpView =
   | 'accounting'
   | 'reports'
   | 'masters'
+  | 'tally'
+  | 'platform'
+  | 'audit'
   | 'docs'
 
 export interface ErpUiState {

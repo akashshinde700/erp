@@ -2,6 +2,8 @@ import { ok, fail, handleError } from '@/lib/api'
 import { db } from '@/lib/db'
 import { z } from 'zod'
 import { gstinChecksumValid } from '@/lib/erp'
+import { assertCompanyAccess } from '@/lib/platform'
+import { logAudit } from '@/lib/audit'
 
 const partyUpdateSchema = z.object({
   code: z.string().min(1).max(20).optional(),
@@ -20,6 +22,7 @@ const partyUpdateSchema = z.object({
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
+    await assertCompanyAccess()
     const body = partyUpdateSchema.parse(await req.json())
     if (body.gstin && !gstinChecksumValid(body.gstin)) {
       return fail('Invalid GSTIN — checksum failed')
@@ -28,6 +31,7 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
     if (body.types) data.types = body.types.join(',')
     if (body.gstin !== undefined) data.gstin = body.gstin || null
     const party = await db.party.update({ where: { id }, data })
+    await logAudit('UPDATE', 'Party', id, `${party.code} — ${party.name}`)
     return ok(party)
   } catch (e) {
     return handleError(e)
@@ -38,9 +42,11 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
+    await assertCompanyAccess()
     const url = new URL(req.url)
     const activate = url.searchParams.get('activate') === '1'
     const party = await db.party.update({ where: { id }, data: { active: activate } })
+    await logAudit('UPDATE', 'Party', id, `${party.code} ${activate ? 'reactivated' : 'deactivated'}`)
     return ok(party)
   } catch (e) {
     return handleError(e)

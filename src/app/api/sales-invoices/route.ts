@@ -2,6 +2,8 @@ import { ok, handleError } from '@/lib/api'
 import { db } from '@/lib/db'
 import { z } from 'zod'
 import { postSalesInvoice } from '@/lib/services'
+import { assertCompanyAccess } from '@/lib/platform'
+import { logAudit } from '@/lib/audit'
 
 export async function GET(req: Request) {
   try {
@@ -52,8 +54,11 @@ const postSchema = z.object({
 
 export async function POST(req: Request) {
   try {
+    await assertCompanyAccess()
     const body = postSchema.parse(await req.json())
-    return ok(await postSalesInvoice(body))
+    const res = await postSalesInvoice(body)
+    await logAudit('POST', 'SalesInvoice', res.id, `${res.invoiceNo} — ₹${res.grandTotal}`)
+    return ok(res)
   } catch (e) {
     return handleError(e)
   }

@@ -1,6 +1,8 @@
 import { ok, handleError } from '@/lib/api'
 import { db } from '@/lib/db'
 import { z } from 'zod'
+import { assertCompanyAccess } from '@/lib/platform'
+import { logAudit } from '@/lib/audit'
 
 const whSchema = z.object({
   code: z.string().min(1).max(20).optional(),
@@ -12,10 +14,13 @@ const whSchema = z.object({
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
+    await assertCompanyAccess()
     const body = whSchema.parse(await req.json())
     const data: any = { ...body }
     if (body.location !== undefined) data.location = body.location || null
-    return ok(await db.warehouse.update({ where: { id }, data }))
+    const wh = await db.warehouse.update({ where: { id }, data })
+    await logAudit('UPDATE', 'Warehouse', id, `${wh.code} — ${wh.name}`)
+    return ok(wh)
   } catch (e) {
     return handleError(e)
   }
@@ -24,9 +29,12 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
+    await assertCompanyAccess()
     const url = new URL(req.url)
     const activate = url.searchParams.get('activate') === '1'
-    return ok(await db.warehouse.update({ where: { id }, data: { active: activate } }))
+    const wh = await db.warehouse.update({ where: { id }, data: { active: activate } })
+    await logAudit('UPDATE', 'Warehouse', id, `${wh.code} ${activate ? 'reactivated' : 'deactivated'}`)
+    return ok(wh)
   } catch (e) {
     return handleError(e)
   }

@@ -6,7 +6,7 @@
  * view switch via zustand, sticky footer, first-boot setup screen.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   BarChart3,
   BookOpenText,
@@ -18,8 +18,11 @@ import {
   Loader2,
   Menu,
   ReceiptText,
+  ScrollText,
+  ShieldAlert,
   ShoppingCart,
   Sparkles,
+  Truck,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
@@ -38,6 +41,9 @@ import { JobworkDetailView, JobworkView } from './jobwork'
 import { AccountingView } from './accounting'
 import { ReportsView } from './reports'
 import { MastersView } from './masters'
+import { TallyView } from './tally'
+import { PlatformView } from './platform'
+import { AuditView } from './audit'
 import { DocsView } from './docs'
 
 // ---------- navigation registry ----------
@@ -70,9 +76,12 @@ const NAV_GROUPS: { group: string; entries: NavEntry[] }[] = [
     ],
   },
   {
-    group: 'Setup',
+    group: 'Setup & Platform',
     entries: [
       { view: 'masters', label: 'Masters', icon: Database },
+      { view: 'tally', label: 'Tally Export', icon: Truck },
+      { view: 'audit', label: 'Audit Trail', icon: ScrollText },
+      { view: 'platform', label: 'Platform Admin', icon: ShieldAlert },
       { view: 'docs', label: 'Docs', icon: BookOpenText },
     ],
   },
@@ -163,6 +172,14 @@ export function ErpApp() {
   const [drawerOpen, setDrawerOpen] = useState(false)
   const mounted = useMounted()
 
+  // Subscription state can change inside Platform Admin (suspend/activate/plan)
+  // — refetch the company when leaving that view so the banner reflects it.
+  const prevView = useRef(view)
+  useEffect(() => {
+    if (prevView.current === 'platform' && view !== 'platform') company.reload()
+    prevView.current = view
+  }, [view, company])
+
   useEffect(() => {
     window.scrollTo({ top: 0 })
   }, [view])
@@ -232,6 +249,15 @@ export function ErpApp() {
     case 'masters':
       content = <MastersView />
       break
+    case 'tally':
+      content = <TallyView />
+      break
+    case 'platform':
+      content = <PlatformView />
+      break
+    case 'audit':
+      content = <AuditView />
+      break
     case 'docs':
       content = <DocsView />
       break
@@ -249,6 +275,39 @@ export function ErpApp() {
   return (
     <CompanyProvider company={company.data ?? null}>
       <div className="flex min-h-screen flex-col bg-background">
+        {company.data?.access?.blocked ? (
+          <div
+            role="alert"
+            className="flex items-center gap-2 border-b border-destructive/40 bg-destructive/10 px-4 py-2 text-sm text-destructive"
+          >
+            <ShieldAlert className="size-4 shrink-0" aria-hidden />
+            <span className="font-medium">{company.data.access.message}</span>
+            <button
+              type="button"
+              className="ml-auto underline underline-offset-2"
+              onClick={() => setView('platform')}
+            >
+              Open Platform Admin
+            </button>
+          </div>
+        ) : company.data?.access?.state === 'TRIAL' ? (
+          <div
+            role="status"
+            className="flex flex-wrap items-center gap-2 border-b border-amber-300/60 bg-amber-50 px-4 py-2 text-sm text-amber-700 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-400"
+          >
+            <ShieldAlert className="size-4 shrink-0" aria-hidden />
+            <span>
+              Free trial{company.data.trialEndsAt ? ` until ${new Date(company.data.trialEndsAt).toLocaleDateString()}` : ''} — pick a plan to keep going.
+            </span>
+            <button
+              type="button"
+              className="ml-auto underline underline-offset-2"
+              onClick={() => setView('platform')}
+            >
+              Open Platform Admin
+            </button>
+          </div>
+        ) : null}
         <header className="sticky top-0 z-40 border-b bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/85">
           <div className="flex h-14 items-center gap-3 px-4">
             <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>

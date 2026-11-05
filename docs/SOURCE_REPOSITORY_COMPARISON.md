@@ -76,3 +76,9 @@ erpnashilk was 404 during the original matrix (row set fixed above); it became p
 | A20 | Money as Float with documented-but-unapplied Decimal plan | **F (weakness)** | F (commercial) | **AVOID their fate** — keep our decimal-safe approach; document the drift risk |
 
 **Mapsoft ERP module breadth NOT to chase** (out of scope for target): CRM/Leads/Deals, Project management/Phases/Timesheets, HRMS (Leaves/Attendance), Services (Service Calls), POS, e-Way Bills, TDS, multi-currency, RFQs, Back Orders, Product Requisitions, Store Consumption, 18-module accordion sidebar. These are noted as commercial-UX inspiration only.
+
+---
+
+## Implementation status of addendum rows (2026-11 feature session)
+
+Rows implemented in ForgeERP (see IMPLEMENTATION_CHANGELOG §10): **A14 (Tally voucher/master/bulk export + .bat + connector PoC)**, **A15-adapted (platform admin: plans, subscription control with real 403 enforcement, limits — single-tenant runtime)**, **A18-adapted (suspension/trial banners; dashboard quick actions)**, plus not-in-matrix additions: audit trail, backup/restore, invoice duplicate action buttons, CSV exports. Still open: A1 (paisa-exact largest-remainder bill math), A2 (bill-level charges), A3/A4 (GSTR-1 JSON / e-invoice), A5 (cheque lifecycle), A6 (advances/credit-apply), A9 (QC-gated GRN), A11 (costRate), A12 (batch/serial), A19 (share links).

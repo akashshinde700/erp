@@ -2,6 +2,8 @@ import { ok, fail, handleError } from '@/lib/api'
 import { db } from '@/lib/db'
 import { z } from 'zod'
 import { gstinChecksumValid } from '@/lib/erp'
+import { assertCompanyAccess, assertLimit } from '@/lib/platform'
+import { logAudit } from '@/lib/audit'
 
 export async function GET(req: Request) {
   try {
@@ -38,6 +40,8 @@ const partySchema = z.object({
 
 export async function POST(req: Request) {
   try {
+    await assertCompanyAccess()
+    await assertLimit('parties')
     const body = partySchema.parse(await req.json())
     if (body.gstin && !gstinChecksumValid(body.gstin)) {
       return fail('Invalid GSTIN — checksum failed (format: 27ABCDE1234F1Z5)')
@@ -45,6 +49,7 @@ export async function POST(req: Request) {
     const party = await db.party.create({
       data: { ...body, types: body.types.join(','), gstin: body.gstin || null },
     })
+    await logAudit('CREATE', 'Party', party.id, `${party.code} — ${party.name}`)
     return ok(party)
   } catch (e) {
     return handleError(e)

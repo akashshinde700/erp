@@ -1,6 +1,8 @@
 import { ok, handleError } from '@/lib/api'
 import { db } from '@/lib/db'
 import { cancelSalesInvoice } from '@/lib/services'
+import { assertCompanyAccess } from '@/lib/platform'
+import { logAudit } from '@/lib/audit'
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -22,7 +24,10 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
-    return ok(await cancelSalesInvoice(id))
+    await assertCompanyAccess()
+    const res = await cancelSalesInvoice(id)
+    await logAudit('CANCEL', 'SalesInvoice', id, `${res.invoiceNo} cancelled (reversal entries)`)
+    return ok(res)
   } catch (e) {
     return handleError(e)
   }

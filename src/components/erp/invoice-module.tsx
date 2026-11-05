@@ -7,13 +7,17 @@
  * GST print layout and cancel (reversal) flow.
  */
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import {
   ArrowLeft,
+  Copy,
+  Eye,
+  FileDown,
   Loader2,
   Plus,
   Printer,
+  RefreshCw,
   Search,
   Trash2,
   XCircle,
@@ -23,6 +27,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -30,7 +35,9 @@ import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import {
   apiDelete,
+  apiGet,
   apiPost,
+  downloadCsv,
   num,
   partyTypes,
   toastError,
@@ -47,6 +54,7 @@ import { EmptyState, Money, SectionHeading, SourceBadge, StatusBadge, TableSkele
 import { useErpUi } from './store'
 import { computeInvoiceTotals, dateStr, INDIAN_STATES, money, stateName } from '@/lib/erp'
 import { InvoicePrint } from './invoice-print'
+import { exportTallyVoucher, markTallySent, queueForConnector } from './tally'
 
 export type InvoiceKind = 'SALES' | 'PURCHASE'
 
@@ -78,6 +86,7 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'POSTED' | 'CANCELLED'>('ALL')
   const [createOpen, setCreateOpen] = useState(false)
+  const [prefill, setPrefill] = useState<AnyInvoice | null>(null)
   const [reloadTick, setReloadTick] = useState(0)
 
   const invoices = useMemo(() => {
@@ -100,6 +109,36 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
     return { count: posted.length, grand, paid, outstanding: grand - paid }
   }, [invoices])
 
+  const duplicate = async (inv: AnyInvoice) => {
+    try {
+      const full = await apiGet<AnyInvoice>(isSales ? `/api/sales-invoices/${inv.id}` : `/api/purchase-invoices/${inv.id}`)
+      setPrefill(full)
+      setCreateOpen(true)
+    } catch (e) {
+      toastError(e)
+    }
+  }
+
+  const exportCsv = () => {
+    const rows: (string | number)[][] = [
+      ['Invoice No', 'Date', 'Party', 'Taxable', 'CGST', 'SGST', 'IGST', 'Grand Total', 'Paid', 'Status', 'Source'],
+      ...invoices.map((i) => [
+        i.invoiceNo,
+        dateStr(i.date),
+        i.party?.name ?? '',
+        i.taxable,
+        i.cgst,
+        i.sgst,
+        i.igst,
+        i.grandTotal,
+        i.paidAmount,
+        i.status,
+        isSales ? (i as SalesInvoice).source : '',
+      ]),
+    ]
+    downloadCsv(`${isSales ? 'sales' : 'purchase'}-invoices-${todayISO()}.csv`, rows)
+  }
+
   return (
     <div className="space-y-4">
       <SectionHeading
@@ -110,10 +149,18 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
             : 'Supplier purchase invoices — input GST, stock inward @ cost, GL in one transaction.'
         }
         actions={
-          <Button onClick={() => setCreateOpen(true)} className="h-11 gap-2">
-            <Plus className="size-4" aria-hidden />
-            New {isSales ? 'Invoice' : 'Purchase'}
-          </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button variant="outline" onClick={() => list.reload()} className="h-11 gap-2">
+              <RefreshCw className="size-4" aria-hidden /> Refresh
+            </Button>
+            <Button variant="outline" onClick={exportCsv} disabled={invoices.length === 0} className="h-11 gap-2">
+              <FileDown className="size-4" aria-hidden /> CSV
+            </Button>
+            <Button onClick={() => { setPrefill(null); setCreateOpen(true) }} className="h-11 gap-2">
+              <Plus className="size-4" aria-hidden />
+              New {isSales ? 'Invoice' : 'Purchase'}
+            </Button>
+          </div>
         }
       />
 
@@ -176,6 +223,7 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
                     <TableHead className="text-right">Balance</TableHead>
                     {isSales ? <TableHead>Source</TableHead> : null}
                     <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -214,6 +262,63 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
                       <TableCell>
                         <StatusBadge status={inv.status} />
                       </TableCell>
+                      <TableCell>
+                        <div
+                          className="flex items-center justify-end gap-0.5"
+                          onClick={(e) => e.stopPropagation()}
+                          onKeyDown={(e) => e.stopPropagation()}
+                        >
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-9 text-muted-foreground hover:text-foreground md:size-8"
+                            onClick={() => setView(isSales ? 'sales-detail' : 'purchase-detail', { id: inv.id })}
+                            aria-label={`View ${inv.invoiceNo}`}
+                            title="View detail"
+                          >
+                            <Eye className="size-4" aria-hidden />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="size-9 text-muted-foreground hover:text-foreground md:size-8"
+                            onClick={() => void duplicate(inv)}
+                            disabled={inv.status === 'CANCELLED'}
+                            aria-label={`Duplicate ${inv.invoiceNo}`}
+                            title="Duplicate as new draft"
+                          >
+                            <Copy className="size-4" aria-hidden />
+                          </Button>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="size-9 text-muted-foreground hover:text-foreground md:size-8"
+                                disabled={inv.status === 'CANCELLED'}
+                                aria-label={`Tally export ${inv.invoiceNo}`}
+                                title="Tally export"
+                              >
+                                <FileDown className="size-4" aria-hidden />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => void exportTallyVoucher(isSales ? 'SALES' : 'PURCHASE', inv.id, 'xml')}>
+                                Tally XML (import file)
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => void exportTallyVoucher(isSales ? 'SALES' : 'PURCHASE', inv.id, 'csv')}>
+                                Tally CSV
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => void queueForConnector(isSales ? 'SALES' : 'PURCHASE', inv.id)}>
+                                Queue for Tally connector
+                              </DropdownMenuItem>
+                              <DropdownMenuItem onClick={() => void markTallySent(isSales ? 'SALES' : 'PURCHASE', inv.id, true)}>
+                                Mark as sent to Tally
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
@@ -226,9 +331,13 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
       <CreateInvoiceDialog
         kind={kind}
         open={createOpen}
+        prefill={prefill}
         onOpenChange={(o) => {
           setCreateOpen(o)
-          if (!o) setReloadTick((t) => t + 1)
+          if (!o) {
+            setPrefill(null)
+            setReloadTick((t) => t + 1)
+          }
         }}
         onCreated={() => {
           list.reload()
@@ -246,11 +355,13 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
 function CreateInvoiceDialog({
   kind,
   open,
+  prefill,
   onOpenChange,
   onCreated,
 }: {
   kind: InvoiceKind
   open: boolean
+  prefill: AnyInvoice | null
   onOpenChange: (o: boolean) => void
   onCreated: () => void
 }) {
@@ -272,6 +383,30 @@ function CreateInvoiceDialog({
   const [warehouseId, setWarehouseId] = useState('')
   const [lines, setLines] = useState<LineDraft[]>([emptyLine()])
   const [saving, setSaving] = useState(false)
+
+  // Duplicate prefill: populate from an existing invoice (new number is assigned server-side).
+  useEffect(() => {
+    if (!open || !prefill) return
+    setPartyId(prefill.partyId)
+    setDate(String(prefill.date).slice(0, 10))
+    setPoNo(prefill.poNo ?? '')
+    setRemarks(prefill.remarks ?? '')
+    setTaxInclusive(prefill.taxInclusive)
+    if (isSales) setPos((prefill as SalesInvoice).pos ?? '')
+    const items = prefill.items ?? []
+    if (items.length > 0) {
+      setLines(
+        items.map((l) => ({
+          key: newKey(),
+          itemId: l.itemId,
+          detail: l.detail ?? '',
+          qty: String(l.qty),
+          rate: String(l.rate),
+          discPct: String(l.discPct ?? ''),
+        }))
+      )
+    }
+  }, [open, prefill, isSales])
 
   const party: Party | undefined = parties.find((p) => p.id === partyId)
   const companyState = company?.stateCode ?? '27'
@@ -374,11 +509,13 @@ function CreateInvoiceDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden sm:max-w-5xl">
         <DialogHeader>
-          <DialogTitle>New {isSales ? 'Sales Invoice' : 'Purchase Invoice'}</DialogTitle>
+          <DialogTitle>{prefill ? `Duplicate ${prefill.invoiceNo} as new ${isSales ? 'invoice' : 'purchase'}` : `New ${isSales ? 'Sales Invoice' : 'Purchase Invoice'}`}</DialogTitle>
           <DialogDescription>
-            {isSales
-              ? 'Totals preview live via the shared GST engine — identical to what the server will post.'
-              : 'Inter-state (IGST) is derived automatically from the supplier state vs company state.'}
+            {prefill
+              ? 'Copied from the original — a fresh gapless number is assigned when you post.'
+              : isSales
+                ? 'Totals preview live via the shared GST engine — identical to what the server will post.'
+                : 'Inter-state (IGST) is derived automatically from the supplier state vs company state.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -673,6 +810,8 @@ export function InvoiceDetail({ kind, id }: { kind: InvoiceKind; id: string }) {
   const inv = useApi<AnyInvoice | null>(isSales ? `/api/sales-invoices/${id}` : `/api/purchase-invoices/${id}`)
   const { items } = useMasters()
   const [cancelling, setCancelling] = useState(false)
+  const [prefill, setPrefill] = useState<AnyInvoice | null>(null)
+  const [dupOpen, setDupOpen] = useState(false)
 
   if (inv.loading) {
     return (
@@ -714,13 +853,46 @@ export function InvoiceDetail({ kind, id }: { kind: InvoiceKind; id: string }) {
             <div className="mt-0.5 flex flex-wrap items-center gap-2">
               <StatusBadge status={invoice.status} />
               {isSales ? <SourceBadge source={(invoice as SalesInvoice).source} /> : null}
+              {(invoice as SalesInvoice).tallySentAt ? (
+                <Badge variant="outline" className="gap-1 border-primary/40 text-primary">
+                  <FileDown className="size-3" aria-hidden /> In Tally
+                </Badge>
+              ) : null}
               <span className="text-xs text-muted-foreground">
                 {invoice.party?.name} · {dateStr(invoice.date)}
               </span>
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" onClick={() => { setPrefill(invoice); setDupOpen(true) }} disabled={cancelled} className="h-11 gap-2">
+            <Copy className="size-4" aria-hidden /> Duplicate
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" disabled={cancelled} className="h-11 gap-2">
+                <FileDown className="size-4" aria-hidden /> Tally
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => void exportTallyVoucher(isSales ? 'SALES' : 'PURCHASE', id, 'xml')}>
+                Tally XML (import file)
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => void exportTallyVoucher(isSales ? 'SALES' : 'PURCHASE', id, 'csv')}>
+                Tally CSV
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => void queueForConnector(isSales ? 'SALES' : 'PURCHASE', id)}>
+                Queue for Tally connector
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() =>
+                  void markTallySent(isSales ? 'SALES' : 'PURCHASE', id, !(invoice as SalesInvoice).tallySentAt).then(() => inv.reload())
+                }
+              >
+                {(invoice as SalesInvoice).tallySentAt ? 'Clear "sent to Tally"' : 'Mark as sent to Tally'}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button variant="outline" onClick={() => window.print()} className="h-11 gap-2">
             <Printer className="size-4" aria-hidden /> Print
           </Button>
@@ -757,6 +929,22 @@ export function InvoiceDetail({ kind, id }: { kind: InvoiceKind; id: string }) {
       ) : null}
 
       <InvoicePrint kind={kind} invoice={invoice} items={items} />
+
+      {/* Duplicate dialog — prefilled from this invoice */}
+      <CreateInvoiceDialog
+        kind={kind}
+        open={dupOpen}
+        prefill={prefill}
+        onOpenChange={(o) => {
+          setDupOpen(o)
+          if (!o) setPrefill(null)
+        }}
+        onCreated={() => {
+          toast.info('Duplicated invoice posted — find it in the list')
+          setView(isSales ? 'sales' : 'purchase')
+        }}
+        key={`dup-${invoice.id}`}
+      />
     </div>
   )
 }

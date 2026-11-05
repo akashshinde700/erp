@@ -1,6 +1,8 @@
 import { ok, handleError } from '@/lib/api'
 import { db } from '@/lib/db'
 import { z } from 'zod'
+import { assertCompanyAccess, assertLimit } from '@/lib/platform'
+import { logAudit } from '@/lib/audit'
 
 export async function GET(req: Request) {
   try {
@@ -32,10 +34,13 @@ const itemSchema = z.object({
 
 export async function POST(req: Request) {
   try {
+    await assertCompanyAccess()
+    await assertLimit('items')
     const body = itemSchema.parse(await req.json())
     const item = await db.item.create({
       data: { ...body, hsn: body.hsn || null, isStockItem: body.isService ? false : body.isStockItem },
     })
+    await logAudit('CREATE', 'Item', item.id, `${item.code} — ${item.name}`)
     return ok(item)
   } catch (e) {
     return handleError(e)

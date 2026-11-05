@@ -54,10 +54,15 @@
 | H5 | Sidebar had fixed `h-[calc(100vh-3.5rem)]` → content row never shrank → footer pushed below viewport on short pages (violated sticky-footer requirement) | agent-browser bounding-box audit | Row gets `min-h-0`; sidebar `h-auto max-h-[calc(100vh-3.5rem)]` — verified `footerBottom == viewportHeight` on short page, natural push on long |
 | H6 | Company route returned an error wrapped in a success envelope (`ok({error},400)`) | self-review | `fail(...)` with proper status |
 | H7 | Dead variable + double-count remnants in dashboard aggregation | self-review | Removed; outstanding derived from live invoices + opening balances |
+| H8 | Tally round-off residual formula ignored inventory-line value → ₹32,520 phantom residual on invoice-mode vouchers | live API balance check (V2) — Dr≠Cr caught it | Residual = grandTotal − (ledger credits + stock value); re-verified BALANCED on both voucher modes |
+| H9 | Service lines (jobwork JW-SERVICE) exported as Tally ALLINVENTORYENTRIES (services are not stock items) | self-review of voucher preview | Services filtered out of inventory lines; value routed to the sales-ledger credit (ledger mode) |
+| H10 | Connector route errors wrapped in success envelope (`ok({error},401)`) — repeat of H6 pattern | self-review | `fail()` with proper status codes |
+| H11 | Company route 500 `Unknown field plan` after schema push | live smoke test | Dev server held a stale in-memory Prisma client — restart protocol documented (schema push ⇒ restart) |
 
 ## C. Security posture of the MVP (honest disclosure)
 
-1. **No authentication / RBAC** — single-user MVP by scope decision (roadmap P1: laserp's scrypt + DB sessions + HMAC cookie pattern). All endpoints are open; do not expose this port publicly.
+1. **No authentication / RBAC** — single-user MVP by scope decision (roadmap P1: laserp's scrypt + DB sessions + HMAC cookie pattern). All endpoints are open except `/api/platform/*`; do not expose this port publicly.
+1b. **Platform admin key** — `/api/platform/*` routes require the `x-platform-key` header to equal `PLATFORM_ADMIN_KEY` (default `forge-admin`, override via env). This is a shared-secret gate for the SaaS console only, NOT user authentication: key travels per-request, held in sessionStorage client-side. Rotating the env var invalidates all sessions. Tally connector endpoints use a hashed single-use pairing code + bearer token (in-memory PoC store).
 2. **Server-side trust boundary:** item GST rates, state codes, rates for job cards, totals, availability, over-processing and allocation ceilings are ALL resolved/validated server-side — client values are advisory only.
 3. **GSTIN checksum** validated at data entry (client hint + server rejection, mod-36).
 4. **Zod validation** on every mutating route; errors mapped to 400 with field paths.

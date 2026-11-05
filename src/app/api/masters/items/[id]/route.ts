@@ -1,6 +1,8 @@
 import { ok, handleError } from '@/lib/api'
 import { db } from '@/lib/db'
 import { z } from 'zod'
+import { assertCompanyAccess } from '@/lib/platform'
+import { logAudit } from '@/lib/audit'
 
 const itemUpdateSchema = z.object({
   code: z.string().min(1).max(30).optional(),
@@ -20,10 +22,12 @@ const itemUpdateSchema = z.object({
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
+    await assertCompanyAccess()
     const body = itemUpdateSchema.parse(await req.json())
     const data: any = { ...body }
     if (body.hsn !== undefined) data.hsn = body.hsn || null
     const item = await db.item.update({ where: { id }, data })
+    await logAudit('UPDATE', 'Item', id, `${item.code} — ${item.name}`)
     return ok(item)
   } catch (e) {
     return handleError(e)
@@ -33,9 +37,12 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
+    await assertCompanyAccess()
     const url = new URL(req.url)
     const activate = url.searchParams.get('activate') === '1'
-    return ok(await db.item.update({ where: { id }, data: { active: activate } }))
+    const item = await db.item.update({ where: { id }, data: { active: activate } })
+    await logAudit('UPDATE', 'Item', id, `${item.code} ${activate ? 'reactivated' : 'deactivated'}`)
+    return ok(item)
   } catch (e) {
     return handleError(e)
   }

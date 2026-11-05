@@ -1,0 +1,763 @@
+     1→'use client'
+     2→
+     3→/**
+     4→ * ForgeERP — shared invoice module (sales & purchase mirrors).
+     5→ * List + filters, create dialog with live GST preview via the shared pure
+     6→ * engine (`computeInvoiceTotals` from `@/lib/erp`), detail view with the
+     7→ * GST print layout and cancel (reversal) flow.
+     8→ */
+     9→
+    10→import { useMemo, useState } from 'react'
+    11→import { toast } from 'sonner'
+    12→import {
+    13→  ArrowLeft,
+    14→  Loader2,
+    15→  Plus,
+    16→  Printer,
+    17→  Search,
+    18→  Trash2,
+    19→  XCircle,
+    20→} from 'lucide-react'
+    21→import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
+    22→import { Badge } from '@/components/ui/badge'
+    23→import { Button } from '@/components/ui/button'
+    24→import { Card, CardContent } from '@/components/ui/card'
+    25→import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+    26→import { Input } from '@/components/ui/input'
+    27→import { Label } from '@/components/ui/label'
+    28→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+    29→import { Switch } from '@/components/ui/switch'
+    30→import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+    31→import {
+    32→  apiDelete,
+    33→  apiPost,
+    34→  num,
+    35→  partyTypes,
+    36→  toastError,
+    37→  todayISO,
+    38→  useApi,
+    39→  useMasters,
+    40→  type Item,
+    41→  type Party,
+    42→  type PurchaseInvoice,
+    43→  type SalesInvoice,
+    44→} from './api'
+    45→import { useCompany } from './company'
+    46→import { EmptyState, Money, SectionHeading, SourceBadge, StatusBadge, TableSkeleton } from './bits'
+    47→import { useErpUi } from './store'
+    48→import { computeInvoiceTotals, dateStr, INDIAN_STATES, money, stateName } from '@/lib/erp'
+    49→import { InvoicePrint } from './invoice-print'
+    50→
+    51→export type InvoiceKind = 'SALES' | 'PURCHASE'
+    52→
+    53→type AnyInvoice = SalesInvoice | PurchaseInvoice
+    54→
+    55→let lineSeq = 0
+    56→const newKey = (): string => `line-${++lineSeq}`
+    57→
+    58→interface LineDraft {
+    59→  key: string
+    60→  itemId: string
+    61→  detail: string
+    62→  qty: string
+    63→  rate: string
+    64→  discPct: string
+    65→}
+    66→
+    67→const emptyLine = (): LineDraft => ({ key: newKey(), itemId: '', detail: '', qty: '', rate: '', discPct: '' })
+    68→
+    69→// ===========================================================================
+    70→// List view
+    71→// ===========================================================================
+    72→
+    73→export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
+    74→  const setView = useErpUi((s) => s.setView)
+    75→  const isSales = kind === 'SALES'
+    76→  const path = isSales ? '/api/sales-invoices' : '/api/purchase-invoices'
+    77→  const list = useApi<AnyInvoice[]>(path)
+    78→  const [search, setSearch] = useState('')
+    79→  const [statusFilter, setStatusFilter] = useState<'ALL' | 'POSTED' | 'CANCELLED'>('ALL')
+    80→  const [createOpen, setCreateOpen] = useState(false)
+    81→  const [reloadTick, setReloadTick] = useState(0)
+    82→
+    83→  const invoices = useMemo(() => {
+    84→    const q = search.trim().toLowerCase()
+    85→    return (list.data ?? []).filter((inv) => {
+    86→      if (statusFilter !== 'ALL' && inv.status !== statusFilter) return false
+    87→      if (!q) return true
+    88→      return (
+    89→        inv.invoiceNo.toLowerCase().includes(q) ||
+    90→        (inv.party?.name ?? '').toLowerCase().includes(q) ||
+    91→        (inv.party?.code ?? '').toLowerCase().includes(q)
+    92→      )
+    93→    })
+    94→  }, [list.data, search, statusFilter])
+    95→
+    96→  const totals = useMemo(() => {
+    97→    const posted = invoices.filter((i) => i.status === 'POSTED')
+    98→    const grand = posted.reduce((s, i) => s + i.grandTotal, 0)
+    99→    const paid = posted.reduce((s, i) => s + i.paidAmount, 0)
+   100→    return { count: posted.length, grand, paid, outstanding: grand - paid }
+   101→  }, [invoices])
+   102→
+   103→  return (
+   104→    <div className="space-y-4">
+   105→      <SectionHeading
+   106→        title={isSales ? 'Sales Invoices' : 'Purchase Invoices'}
+   107→        description={
+   108→          isSales
+   109→            ? 'GST tax invoices — posted atomically with stock ledger and double-entry GL.'
+   110→            : 'Supplier purchase invoices — input GST, stock inward @ cost, GL in one transaction.'
+   111→        }
+   112→        actions={
+   113→          <Button onClick={() => setCreateOpen(true)} className="h-11 gap-2">
+   114→            <Plus className="size-4" aria-hidden />
+   115→            New {isSales ? 'Invoice' : 'Purchase'}
+   116→          </Button>
+   117→        }
+   118→      />
+   119→
+   120→      <div className="flex flex-wrap items-center gap-2">
+   121→        <div className="relative min-w-52 flex-1">
+   122→          <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+   123→          <Input
+   124→            value={search}
+   125→            onChange={(e) => setSearch(e.target.value)}
+   126→            placeholder="Search invoice no / party…"
+   127→            className="h-11 pl-8"
+   128→            aria-label="Search invoices"
+   129→          />
+   130→        </div>
+   131→        <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as typeof statusFilter)}>
+   132→          <SelectTrigger className="h-11 w-36" aria-label="Filter by status">
+   133→            <SelectValue />
+   134→          </SelectTrigger>
+   135→          <SelectContent>
+   136→            <SelectItem value="ALL">All statuses</SelectItem>
+   137→            <SelectItem value="POSTED">Posted</SelectItem>
+   138→            <SelectItem value="CANCELLED">Cancelled</SelectItem>
+   139→          </SelectContent>
+   140→        </Select>
+   141→        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+   142→          <Badge variant="secondary" className="tabular-nums">{totals.count} posted</Badge>
+   143→          <span className="tabular-nums">Σ ₹ {money(totals.grand)}</span>
+   144→          <span className="tabular-nums">outstanding ₹ {money(totals.outstanding)}</span>
+   145→        </div>
+   146→      </div>
+   147→
+   148→      <Card className="p-0">
+   149→        <CardContent className="p-0">
+   150→          {list.loading ? (
+   151→            <TableSkeleton rows={6} cols={7} />
+   152→          ) : invoices.length === 0 ? (
+   153→            <div className="p-6">
+   154→              <EmptyState
+   155→                title="No invoices found"
+   156→                hint={isSales ? 'Post your first sales invoice to see it here.' : 'Record your first purchase invoice.'}
+   157→                action={
+   158→                  <Button variant="outline" onClick={() => setCreateOpen(true)} className="mt-2 h-11 gap-2">
+   159→                    <Plus className="size-4" aria-hidden /> New {isSales ? 'Invoice' : 'Purchase'}
+   160→                  </Button>
+   161→                }
+   162→              />
+   163→            </div>
+   164→          ) : (
+   165→            <div className="max-h-[62vh] overflow-auto erp-scroll">
+   166→              <Table>
+   167→                <TableHeader className="sticky top-0 z-10 bg-card">
+   168→                  <TableRow>
+   169→                    <TableHead>Invoice No</TableHead>
+   170→                    <TableHead>Date</TableHead>
+   171→                    <TableHead>Party</TableHead>
+   172→                    <TableHead className="text-right">Taxable</TableHead>
+   173→                    <TableHead className="text-right">GST</TableHead>
+   174→                    <TableHead className="text-right">Grand Total</TableHead>
+   175→                    <TableHead className="text-right">Paid</TableHead>
+   176→                    <TableHead className="text-right">Balance</TableHead>
+   177→                    {isSales ? <TableHead>Source</TableHead> : null}
+   178→                    <TableHead>Status</TableHead>
+   179→                  </TableRow>
+   180→                </TableHeader>
+   181→                <TableBody>
+   182→                  {invoices.map((inv) => (
+   183→                    <TableRow
+   184→                      key={inv.id}
+   185→                      className="cursor-pointer"
+   186→                      onClick={() => setView(isSales ? 'sales-detail' : 'purchase-detail', { id: inv.id })}
+   187→                    >
+   188→                      <TableCell className="font-medium tabular-nums">{inv.invoiceNo}</TableCell>
+   189→                      <TableCell className="whitespace-nowrap">{dateStr(inv.date)}</TableCell>
+   190→                      <TableCell className="max-w-44 truncate">
+   191→                        <span className="block truncate">{inv.party?.name ?? '—'}</span>
+   192→                        <span className="block text-xs text-muted-foreground">{inv.party?.code}</span>
+   193→                      </TableCell>
+   194→                      <TableCell className="text-right tabular-nums">
+   195→                        <Money value={inv.taxable} plain />
+   196→                      </TableCell>
+   197→                      <TableCell className="text-right tabular-nums">
+   198→                        <Money value={inv.cgst + inv.sgst + inv.igst} plain />
+   199→                      </TableCell>
+   200→                      <TableCell className="text-right font-semibold tabular-nums">
+   201→                        <Money value={inv.grandTotal} plain />
+   202→                      </TableCell>
+   203→                      <TableCell className="text-right tabular-nums">
+   204→                        <Money value={inv.paidAmount} plain />
+   205→                      </TableCell>
+   206→                      <TableCell className="text-right tabular-nums">
+   207→                        <Money value={inv.grandTotal - inv.paidAmount} plain />
+   208→                      </TableCell>
+   209→                      {isSales ? (
+   210→                        <TableCell>
+   211→                          <SourceBadge source={(inv as SalesInvoice).source} />
+   212→                        </TableCell>
+   213→                      ) : null}
+   214→                      <TableCell>
+   215→                        <StatusBadge status={inv.status} />
+   216→                      </TableCell>
+   217→                    </TableRow>
+   218→                  ))}
+   219→                </TableBody>
+   220→              </Table>
+   221→            </div>
+   222→          )}
+   223→        </CardContent>
+   224→      </Card>
+   225→
+   226→      <CreateInvoiceDialog
+   227→        kind={kind}
+   228→        open={createOpen}
+   229→        onOpenChange={(o) => {
+   230→          setCreateOpen(o)
+   231→          if (!o) setReloadTick((t) => t + 1)
+   232→        }}
+   233→        onCreated={() => {
+   234→          list.reload()
+   235→        }}
+   236→        key={`create-${reloadTick}`}
+   237→      />
+   238→    </div>
+   239→  )
+   240→}
+   241→
+   242→// ===========================================================================
+   243→// Create dialog with live GST preview
+   244→// ===========================================================================
+   245→
+   246→function CreateInvoiceDialog({
+   247→  kind,
+   248→  open,
+   249→  onOpenChange,
+   250→  onCreated,
+   251→}: {
+   252→  kind: InvoiceKind
+   253→  open: boolean
+   254→  onOpenChange: (o: boolean) => void
+   255→  onCreated: () => void
+   256→}) {
+   257→  const isSales = kind === 'SALES'
+   258→  const { parties, items, warehouses } = useMasters()
+   259→  const company = useCompany()
+   260→  const itemMap = useMemo(() => new Map<string, Item>(items.map((i) => [i.id, i])), [items])
+   261→
+   262→  const eligibleParties = parties.filter(
+   263→    (p) => p.active && partyTypes(p).includes(isSales ? 'CUSTOMER' : 'SUPPLIER')
+   264→  )
+   265→
+   266→  const [partyId, setPartyId] = useState('')
+   267→  const [date, setDate] = useState(todayISO())
+   268→  const [pos, setPos] = useState('')
+   269→  const [taxInclusive, setTaxInclusive] = useState(false)
+   270→  const [poNo, setPoNo] = useState('')
+   271→  const [remarks, setRemarks] = useState('')
+   272→  const [warehouseId, setWarehouseId] = useState('')
+   273→  const [lines, setLines] = useState<LineDraft[]>([emptyLine()])
+   274→  const [saving, setSaving] = useState(false)
+   275→
+   276→  const party: Party | undefined = parties.find((p) => p.id === partyId)
+   277→  const companyState = company?.stateCode ?? '27'
+   278→
+   279→  const onPartyChange = (id: string) => {
+   280→    setPartyId(id)
+   281→    const p = parties.find((x) => x.id === id)
+   282→    if (isSales && p) setPos(p.stateCode) // PoS defaults to the party's state
+   283→  }
+   284→
+   285→  const interState = isSales
+   286→    ? pos !== '' && pos !== companyState
+   287→    : !!party && party.stateCode !== companyState
+   288→
+   289→  const validLines = lines.filter((l) => l.itemId && num(l.qty) > 0)
+   290→
+   291→  const taxLines = validLines.map((l) => ({
+   292→    qty: num(l.qty),
+   293→    rate: num(l.rate),
+   294→    discPct: num(l.discPct) || 0,
+   295→    gstRate: itemMap.get(l.itemId)?.gstRate ?? 0,
+   296→  }))
+   297→
+   298→  // Live preview — same pure engine as the server (cheap, no memo needed)
+   299→  const totals = computeInvoiceTotals(taxLines, { taxInclusive, interState })
+   300→
+   301→  const setLine = (key: string, patch: Partial<LineDraft>) =>
+   302→    setLines((ls) => ls.map((l) => (l.key === key ? { ...l, ...patch } : l)))
+   303→
+   304→  const onItemPick = (key: string, itemId: string) => {
+   305→    const it = itemMap.get(itemId)
+   306→    setLine(key, {
+   307→      itemId,
+   308→      rate: it ? String(isSales ? it.saleRate : it.costRate) : '',
+   309→    })
+   310→  }
+   311→
+   312→  const linePreview = (l: LineDraft): { taxable: number; total: number } => {
+   313→    if (!l.itemId || num(l.qty) <= 0) return { taxable: 0, total: 0 }
+   314→    const t = computeInvoiceTotals(
+   315→      [{ qty: num(l.qty), rate: num(l.rate), discPct: num(l.discPct) || 0, gstRate: itemMap.get(l.itemId)?.gstRate ?? 0 }],
+   316→      { taxInclusive, interState }
+   317→    )
+   318→    return { taxable: t.lines[0].taxable, total: t.lines[0].total }
+   319→  }
+   320→
+   321→  const submit = async () => {
+   322→    if (!partyId) {
+   323→      toast.error('Select a party first')
+   324→      return
+   325→    }
+   326→    if (validLines.length === 0) {
+   327→      toast.error('Add at least one line item with quantity > 0')
+   328→      return
+   329→    }
+   330→    if (validLines.some((l) => num(l.rate) < 0)) {
+   331→      toast.error('Rate cannot be negative')
+   332→      return
+   333→    }
+   334→    setSaving(true)
+   335→    try {
+   336→      const payload: Record<string, unknown> = {
+   337→        partyId,
+   338→        date,
+   339→        taxInclusive,
+   340→        poNo: poNo.trim() || undefined,
+   341→        remarks: remarks.trim() || undefined,
+   342→        warehouseId: warehouseId || undefined,
+   343→        lines: validLines.map((l) => ({
+   344→          itemId: l.itemId,
+   345→          detail: l.detail.trim() || undefined,
+   346→          qty: num(l.qty),
+   347→          rate: num(l.rate),
+   348→          discPct: num(l.discPct) || undefined,
+   349→        })),
+   350→      }
+   351→      if (isSales) payload.pos = pos || party?.stateCode || companyState
+   352→      const res = await apiPost<AnyInvoice>(isSales ? '/api/sales-invoices' : '/api/purchase-invoices', payload)
+   353→      toast.success(`${res.invoiceNo} posted`, {
+   354→        description: `Grand total ₹ ${money(res.grandTotal)} — stock ledger + GL entries committed atomically.`,
+   355→      })
+   356→      onCreated()
+   357→      onOpenChange(false)
+   358→    } catch (e) {
+   359→      toastError(e)
+   360→    } finally {
+   361→      setSaving(false)
+   362→    }
+   363→  }
+   364→
+   365→  const partyInfo = party ? (
+   366→    <p className="text-xs text-muted-foreground">
+   367→      {party.gstin ? `${party.gstin} · ` : 'Unregistered · '}
+   368→      {stateName(party.stateCode)}
+   369→      {party.stateCode !== companyState ? ' (inter-state)' : ' (intra-state)'}
+   370→    </p>
+   371→  ) : null
+   372→
+   373→  return (
+   374→    <Dialog open={open} onOpenChange={onOpenChange}>
+   375→      <DialogContent className="flex max-h-[92vh] w-full max-w-4xl flex-col overflow-hidden sm:max-w-5xl">
+   376→        <DialogHeader>
+   377→          <DialogTitle>New {isSales ? 'Sales Invoice' : 'Purchase Invoice'}</DialogTitle>
+   378→          <DialogDescription>
+   379→            {isSales
+   380→              ? 'Totals preview live via the shared GST engine — identical to what the server will post.'
+   381→              : 'Inter-state (IGST) is derived automatically from the supplier state vs company state.'}
+   382→          </DialogDescription>
+   383→        </DialogHeader>
+   384→
+   385→        <div className="min-h-0 flex-1 overflow-y-auto erp-scroll-y pr-1">
+   386→          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+   387→            <div className="space-y-1.5">
+   388→              <Label htmlFor="inv-party">{isSales ? 'Customer' : 'Supplier'}</Label>
+   389→              <Select value={partyId} onValueChange={onPartyChange}>
+   390→                <SelectTrigger id="inv-party" className="h-11 w-full">
+   391→                  <SelectValue placeholder="Select party…" />
+   392→                </SelectTrigger>
+   393→                <SelectContent>
+   394→                  {eligibleParties.map((p) => (
+   395→                    <SelectItem key={p.id} value={p.id}>
+   396→                      {p.code} — {p.name}
+   397→                    </SelectItem>
+   398→                  ))}
+   399→                </SelectContent>
+   400→              </Select>
+   401→              {partyInfo}
+   402→            </div>
+   403→            <div className="space-y-1.5">
+   404→              <Label htmlFor="inv-date">Date</Label>
+   405→              <Input id="inv-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} className="h-11" />
+   406→            </div>
+   407→            {isSales ? (
+   408→              <div className="space-y-1.5">
+   409→                <Label htmlFor="inv-pos">Place of Supply</Label>
+   410→                <Select value={pos || undefined} onValueChange={setPos}>
+   411→                  <SelectTrigger id="inv-pos" className="h-11 w-full">
+   412→                    <SelectValue placeholder="Select state…" />
+   413→                  </SelectTrigger>
+   414→                  <SelectContent className="max-h-64">
+   415→                    {INDIAN_STATES.map((s) => (
+   416→                      <SelectItem key={s.code} value={s.code}>
+   417→                        {s.code}-{s.name}
+   418→                      </SelectItem>
+   419→                    ))}
+   420→                  </SelectContent>
+   421→                </Select>
+   422→                <p className="text-xs text-muted-foreground">
+   423→                  {pos ? (interState ? 'Inter-state → IGST' : 'Intra-state → CGST + SGST') : 'Defaults to party state'}
+   424→                </p>
+   425→              </div>
+   426→            ) : (
+   427→              <div className="space-y-1.5">
+   428→                <Label>Tax split</Label>
+   429→                <div className="flex h-11 items-center rounded-md border bg-muted/40 px-3 text-sm text-muted-foreground">
+   430→                  {interState ? 'IGST (inter-state, auto)' : 'CGST + SGST (intra-state, auto)'}
+   431→                </div>
+   432→              </div>
+   433→            )}
+   434→            <div className="space-y-1.5">
+   435→              <Label htmlFor="inv-po">PO / Challan No</Label>
+   436→              <Input id="inv-po" value={poNo} onChange={(e) => setPoNo(e.target.value)} placeholder="Optional" className="h-11" />
+   437→              <div className="flex items-center gap-2 pt-1">
+   438→                <Switch id="inv-taxinc" checked={taxInclusive} onCheckedChange={setTaxInclusive} aria-label="Tax inclusive" />
+   439→                <Label htmlFor="inv-taxinc" className="text-xs font-normal text-muted-foreground">
+   440→                  Rates are tax-inclusive
+   441→                </Label>
+   442→              </div>
+   443→            </div>
+   444→            <div className="space-y-1.5 sm:col-span-2 lg:col-span-4">
+   445→              <Label>Stock From</Label>
+   446→              <Select value={warehouseId || 'DEFAULT'} onValueChange={(v) => setWarehouseId(v === 'DEFAULT' ? '' : v)}>
+   447→                <SelectTrigger className="h-11 w-full sm:max-w-64">
+   448→                  <SelectValue />
+   449→                </SelectTrigger>
+   450→                <SelectContent>
+   451→                  <SelectItem value="DEFAULT">Default warehouse (MAIN)</SelectItem>
+   452→                  {warehouses.map((w) => (
+   453→                    <SelectItem key={w.id} value={w.id}>
+   454→                      {w.code} — {w.name}
+   455→                    </SelectItem>
+   456→                  ))}
+   457→                </SelectContent>
+   458→              </Select>
+   459→              <p className="text-xs text-muted-foreground">
+   460→                Availability is checked per warehouse — finished goods from jobwork sit in the JW store.
+   461→              </p>
+   462→            </div>
+   463→          </div>
+   464→
+   465→          <div className="mt-4 space-y-1.5">
+   466→            <Label>Line Items</Label>
+   467→            <div className="overflow-x-auto rounded-md border">
+   468→              <Table>
+   469→                <TableHeader>
+   470→                  <TableRow>
+   471→                    <TableHead className="min-w-44">Item</TableHead>
+   472→                    <TableHead className="min-w-32">Detail</TableHead>
+   473→                    <TableHead className="w-20 text-right">Qty</TableHead>
+   474→                    <TableHead className="w-24 text-right">Rate ₹</TableHead>
+   475→                    <TableHead className="w-20 text-right">Disc %</TableHead>
+   476→                    <TableHead className="w-24 text-right">Taxable</TableHead>
+   477→                    <TableHead className="w-24 text-right">Total</TableHead>
+   478→                    <TableHead className="w-12" />
+   479→                  </TableRow>
+   480→                </TableHeader>
+   481→                <TableBody>
+   482→                  {lines.map((l) => {
+   483→                    const it = itemMap.get(l.itemId)
+   484→                    const pv = linePreview(l)
+   485→                    return (
+   486→                      <TableRow key={l.key}>
+   487→                        <TableCell>
+   488→                          <Select value={l.itemId || undefined} onValueChange={(v) => onItemPick(l.key, v)}>
+   489→                            <SelectTrigger className="h-11 w-full min-w-40">
+   490→                              <SelectValue placeholder="Pick item…" />
+   491→                            </SelectTrigger>
+   492→                            <SelectContent className="max-h-64">
+   493→                              {items
+   494→                                .filter((i) => i.active)
+   495→                                .map((i) => (
+   496→                                  <SelectItem key={i.id} value={i.id}>
+   497→                                    {i.code} — {i.name}
+   498→                                  </SelectItem>
+   499→                                ))}
+   500→                            </SelectContent>
+   501→                          </Select>
+   502→                          {it ? (
+   503→                            <p className="mt-1 text-[10px] text-muted-foreground">
+   504→                              {it.uom} · {it.hsn ?? 'no HSN'} · GST {it.gstRate}%
+   505→                            </p>
+   506→                          ) : null}
+   507→                        </TableCell>
+   508→                        <TableCell>
+   509→                          <Input
+   510→                            value={l.detail}
+   511→                            onChange={(e) => setLine(l.key, { detail: e.target.value })}
+   512→                            placeholder="Optional"
+   513→                            className="h-11"
+   514→                            aria-label="Line detail"
+   515→                          />
+   516→                        </TableCell>
+   517→                        <TableCell>
+   518→                          <Input
+   519→                            type="number"
+   520→                            min="0"
+   521→                            step="any"
+   522→                            value={l.qty}
+   523→                            onChange={(e) => setLine(l.key, { qty: e.target.value })}
+   524→                            placeholder="0"
+   525→                            className="h-11 text-right tabular-nums"
+   526→                            aria-label="Quantity"
+   527→                          />
+   528→                        </TableCell>
+   529→                        <TableCell>
+   530→                          <Input
+   531→                            type="number"
+   532→                            min="0"
+   533→                            step="any"
+   534→                            value={l.rate}
+   535→                            onChange={(e) => setLine(l.key, { rate: e.target.value })}
+   536→                            placeholder="0"
+   537→                            className="h-11 text-right tabular-nums"
+   538→                            aria-label="Rate"
+   539→                          />
+   540→                        </TableCell>
+   541→                        <TableCell>
+   542→                          <Input
+   543→                            type="number"
+   544→                            min="0"
+   545→                            max="100"
+   546→                            step="any"
+   547→                            value={l.discPct}
+   548→                            onChange={(e) => setLine(l.key, { discPct: e.target.value })}
+   549→                            placeholder="0"
+   550→                            className="h-11 text-right tabular-nums"
+   551→                            aria-label="Discount percent"
+   552→                          />
+   553→                        </TableCell>
+   554→                        <TableCell className="text-right text-xs tabular-nums text-muted-foreground">
+   555→                          {money(pv.taxable)}
+   556→                        </TableCell>
+   557→                        <TableCell className="text-right text-xs font-medium tabular-nums">
+   558→                          {money(pv.total)}
+   559→                        </TableCell>
+   560→                        <TableCell>
+   561→                          <Button
+   562→                            variant="ghost"
+   563→                            size="icon"
+   564→                            className="size-11 text-muted-foreground hover:text-destructive md:size-9"
+   565→                            onClick={() => setLines((ls) => (ls.length > 1 ? ls.filter((x) => x.key !== l.key) : ls))}
+   566→                            disabled={lines.length === 1}
+   567→                            aria-label={`Remove line ${l.key}`}
+   568→                          >
+   569→                            <Trash2 className="size-4" aria-hidden />
+   570→                          </Button>
+   571→                        </TableCell>
+   572→                      </TableRow>
+   573→                    )
+   574→                  })}
+   575→                </TableBody>
+   576→              </Table>
+   577→            </div>
+   578→            <Button
+   579→              variant="outline"
+   580→              onClick={() => setLines((ls) => [...ls, emptyLine()])}
+   581→              className="h-11 gap-2"
+   582→            >
+   583→              <Plus className="size-4" aria-hidden /> Add line
+   584→            </Button>
+   585→          </div>
+   586→
+   587→          <div className="mt-4">
+   588→            <Label htmlFor="inv-remarks">Remarks</Label>
+   589→            <Input
+   590→              id="inv-remarks"
+   591→              value={remarks}
+   592→              onChange={(e) => setRemarks(e.target.value)}
+   593→              placeholder="Optional notes printed on the invoice"
+   594→              className="mt-1.5 h-11"
+   595→            />
+   596→          </div>
+   597→
+   598→          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+   599→            <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+   600→              <p className="font-medium text-foreground">Live GST preview</p>
+   601→              <p className="mt-1">
+   602→                Computed client-side by <span className="font-mono">computeInvoiceTotals</span> — the same pure
+   603→                engine the server uses, so preview ≡ posted totals.
+   604→                {taxInclusive ? ' Tax-inclusive: taxable back-solved from gross.' : ''}
+   605→              </p>
+   606→            </div>
+   607→            <div className="rounded-md border bg-muted/30 p-3">
+   608→              <dl className="space-y-1 text-sm">
+   609→                <div className="flex justify-between">
+   610→                  <dt className="text-muted-foreground">Taxable</dt>
+   611→                  <dd className="tabular-nums">₹ {money(totals.taxable)}</dd>
+   612→                </div>
+   613→                {totals.discount > 0 ? (
+   614→                  <div className="flex justify-between">
+   615→                    <dt className="text-muted-foreground">Discount</dt>
+   616→                    <dd className="tabular-nums">− ₹ {money(totals.discount)}</dd>
+   617→                  </div>
+   618→                ) : null}
+   619→                {interState ? (
+   620→                  <div className="flex justify-between">
+   621→                    <dt className="text-muted-foreground">IGST</dt>
+   622→                    <dd className="tabular-nums">₹ {money(totals.igst)}</dd>
+   623→                  </div>
+   624→                ) : (
+   625→                  <>
+   626→                    <div className="flex justify-between">
+   627→                      <dt className="text-muted-foreground">CGST</dt>
+   628→                      <dd className="tabular-nums">₹ {money(totals.cgst)}</dd>
+   629→                    </div>
+   630→                    <div className="flex justify-between">
+   631→                      <dt className="text-muted-foreground">SGST</dt>
+   632→                      <dd className="tabular-nums">₹ {money(totals.sgst)}</dd>
+   633→                    </div>
+   634→                  </>
+   635→                )}
+   636→                <div className="flex justify-between">
+   637→                  <dt className="text-muted-foreground">Round off</dt>
+   638→                  <dd className="tabular-nums">
+   639→                    {totals.roundOff >= 0 ? '+ ' : '− '}
+   640→                    ₹ {money(Math.abs(totals.roundOff))}
+   641→                  </dd>
+   642→                </div>
+   643→                <div className="flex justify-between border-t pt-1 text-base font-bold">
+   644→                  <dt>Grand Total</dt>
+   645→                  <dd className="tabular-nums">₹ {money(totals.grandTotal)}</dd>
+   646→                </div>
+   647→              </dl>
+   648→            </div>
+   649→          </div>
+   650→        </div>
+   651→
+   652→        <DialogFooter className="gap-2 border-t pt-3">
+   653→          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving} className="h-11">
+   654→            Cancel
+   655→          </Button>
+   656→          <Button onClick={submit} disabled={saving} className="h-11 gap-2">
+   657→            {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+   658→            {saving ? 'Posting…' : `Post ${isSales ? 'Invoice' : 'Purchase'}`}
+   659→          </Button>
+   660→        </DialogFooter>
+   661→      </DialogContent>
+   662→    </Dialog>
+   663→  )
+   664→}
+   665→
+   666→// ===========================================================================
+   667→// Detail view (print + cancel)
+   668→// ===========================================================================
+   669→
+   670→export function InvoiceDetail({ kind, id }: { kind: InvoiceKind; id: string }) {
+   671→  const setView = useErpUi((s) => s.setView)
+   672→  const isSales = kind === 'SALES'
+   673→  const inv = useApi<AnyInvoice | null>(isSales ? `/api/sales-invoices/${id}` : `/api/purchase-invoices/${id}`)
+   674→  const { items } = useMasters()
+   675→  const [cancelling, setCancelling] = useState(false)
+   676→
+   677→  if (inv.loading) {
+   678→    return (
+   679→      <div className="space-y-4">
+   680→        <TableSkeleton rows={8} cols={6} />
+   681→      </div>
+   682→    )
+   683→  }
+   684→  if (inv.error || !inv.data) {
+   685→    return <EmptyState title="Invoice not found" hint={inv.error ?? 'Unknown invoice.'} icon={XCircle} />
+   686→  }
+   687→  const invoice = inv.data
+   688→  const cancelled = invoice.status === 'CANCELLED'
+   689→
+   690→  const cancel = async () => {
+   691→    setCancelling(true)
+   692→    try {
+   693→      await apiDelete(isSales ? `/api/sales-invoices/${id}` : `/api/purchase-invoices/${id}`)
+   694→      toast.success(`${invoice.invoiceNo} cancelled`, {
+   695→        description: 'Stock and GL reversal entries posted — the number stays reserved (gapless audit trail).',
+   696→      })
+   697→      inv.reload()
+   698→    } catch (e) {
+   699→      toastError(e)
+   700→    } finally {
+   701→      setCancelling(false)
+   702→    }
+   703→  }
+   704→
+   705→  return (
+   706→    <div className="space-y-4">
+   707→      <div className="print-hide flex flex-wrap items-center justify-between gap-2">
+   708→        <div className="flex items-center gap-2">
+   709→          <Button variant="ghost" size="icon" className="size-11" onClick={() => setView(isSales ? 'sales' : 'purchase')} aria-label="Back to list">
+   710→            <ArrowLeft className="size-5" aria-hidden />
+   711→          </Button>
+   712→          <div>
+   713→            <h2 className="text-lg font-semibold tabular-nums">{invoice.invoiceNo}</h2>
+   714→            <div className="mt-0.5 flex flex-wrap items-center gap-2">
+   715→              <StatusBadge status={invoice.status} />
+   716→              {isSales ? <SourceBadge source={(invoice as SalesInvoice).source} /> : null}
+   717→              <span className="text-xs text-muted-foreground">
+   718→                {invoice.party?.name} · {dateStr(invoice.date)}
+   719→              </span>
+   720→            </div>
+   721→          </div>
+   722→        </div>
+   723→        <div className="flex items-center gap-2">
+   724→          <Button variant="outline" onClick={() => window.print()} className="h-11 gap-2">
+   725→            <Printer className="size-4" aria-hidden /> Print
+   726→          </Button>
+   727→          <AlertDialog>
+   728→            <AlertDialogTrigger asChild>
+   729→              <Button variant="destructive" disabled={cancelled || cancelling} className="h-11 gap-2">
+   730→                {cancelling ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <XCircle className="size-4" aria-hidden />}
+   731→                Cancel invoice
+   732→              </Button>
+   733→            </AlertDialogTrigger>
+   734→            <AlertDialogContent>
+   735→              <AlertDialogHeader>
+   736→                <AlertDialogTitle>Cancel {invoice.invoiceNo}?</AlertDialogTitle>
+   737→                <AlertDialogDescription>
+   738→                  Cancellation posts reversal entries to the stock ledger and general ledger — the document is
+   739→                  never deleted. Blocked if payments were allocated against this invoice.
+   740→                </AlertDialogDescription>
+   741→              </AlertDialogHeader>
+   742→              <AlertDialogFooter>
+   743→                <AlertDialogCancel className="h-11">Keep invoice</AlertDialogCancel>
+   744→                <AlertDialogAction onClick={cancel} className="h-11" disabled={cancelling}>
+   745→                  {cancelling ? 'Cancelling…' : 'Cancel invoice'}
+   746→                </AlertDialogAction>
+   747→              </AlertDialogFooter>
+   748→            </AlertDialogContent>
+   749→          </AlertDialog>
+   750→        </div>
+   751→      </div>
+   752→
+   753→      {cancelled ? (
+   754→        <div className="print-hide rounded-md border border-destructive/40 bg-destructive/10 px-4 py-2 text-sm text-destructive">
+   755→          This invoice is cancelled — reversal entries have been posted. Shown for audit only.
+   756→        </div>
+   757→      ) : null}
+   758→
+   759→      <InvoicePrint kind={kind} invoice={invoice} items={items} />
+   760→    </div>
+   761→  )
+   762→}
+   763→

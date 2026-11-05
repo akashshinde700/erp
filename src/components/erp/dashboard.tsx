@@ -11,8 +11,11 @@ import {
   Boxes,
   Factory,
   HandCoins,
+  PackageOpen,
+  Plus,
   ReceiptText,
   ShoppingCart,
+  Truck,
   TriangleAlert,
 } from 'lucide-react'
 import {
@@ -55,6 +58,15 @@ export function DashboardView() {
   const { data, loading } = useApi<DashboardData>('/api/dashboard')
   const setView = useErpUi((s) => s.setView)
 
+  const quickActions = [
+    { label: 'New Sales Invoice', icon: ReceiptText, view: 'sales' as const, hint: 'GST tax invoice' },
+    { label: 'New Purchase', icon: ShoppingCart, view: 'purchase' as const, hint: 'Supplier bill' },
+    { label: 'Jobwork Inward', icon: Factory, view: 'jobwork' as const, hint: 'Customer material in' },
+    { label: 'Record Payment', icon: HandCoins, view: 'accounting' as const, hint: 'Receipt / payment' },
+    { label: 'Stock Snapshot', icon: PackageOpen, view: 'inventory' as const, hint: 'Balances & ledger' },
+    { label: 'Tally Export', icon: Truck, view: 'tally' as const, hint: 'Vouchers & masters' },
+  ]
+
   if (loading || !data) {
     return (
       <div className="space-y-6">
@@ -76,6 +88,27 @@ export function DashboardView() {
         title="Dashboard"
         description="Month-to-date performance, outstanding balances, stock health and the live jobwork pipeline."
       />
+
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+        {quickActions.map((qa) => (
+          <button
+            key={qa.label}
+            type="button"
+            onClick={() => setView(qa.view)}
+            className="group flex min-h-11 items-center gap-2 rounded-lg border bg-card px-3 py-2.5 text-left transition-colors hover:border-primary/50 hover:bg-accent"
+            aria-label={qa.label}
+          >
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-accent text-accent-foreground transition-colors group-hover:bg-primary group-hover:text-primary-foreground">
+              <qa.icon className="size-4" aria-hidden />
+            </span>
+            <span className="min-w-0">
+              <span className="block truncate text-xs font-semibold">{qa.label}</span>
+              <span className="block truncate text-[10px] text-muted-foreground">{qa.hint}</span>
+            </span>
+            <Plus className="ml-auto size-3.5 shrink-0 text-muted-foreground/50 transition-colors group-hover:text-primary" aria-hidden />
+          </button>
+        ))}
+      </div>
 
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
         <KpiCard title="Month Sales" value={`₹ ${money(data.monthSales)}`} icon={ReceiptText} hint="Posted sales this month" />

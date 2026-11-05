@@ -2,6 +2,8 @@ import { ok, handleError } from '@/lib/api'
 import { db } from '@/lib/db'
 import { z } from 'zod'
 import { postJobworkInward } from '@/lib/services'
+import { assertCompanyAccess } from '@/lib/platform'
+import { logAudit } from '@/lib/audit'
 
 export async function GET(req: Request) {
   try {
@@ -49,7 +51,10 @@ const postSchema = z.object({
 
 export async function POST(req: Request) {
   try {
-    return ok(await postJobworkInward(postSchema.parse(await req.json())))
+    await assertCompanyAccess()
+    const res = await postJobworkInward(postSchema.parse(await req.json()))
+    await logAudit('POST', 'JobworkInward', res.id, `${res.inwardNo} — ${res.items.length} item(s)`)
+    return ok(res)
   } catch (e) {
     return handleError(e)
   }

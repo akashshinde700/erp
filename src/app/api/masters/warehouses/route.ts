@@ -1,6 +1,8 @@
 import { ok, handleError } from '@/lib/api'
 import { db } from '@/lib/db'
 import { z } from 'zod'
+import { assertCompanyAccess, assertLimit } from '@/lib/platform'
+import { logAudit } from '@/lib/audit'
 
 export async function GET() {
   try {
@@ -18,8 +20,12 @@ const warehouseSchema = z.object({
 
 export async function POST(req: Request) {
   try {
+    await assertCompanyAccess()
+    await assertLimit('warehouses')
     const body = warehouseSchema.parse(await req.json())
-    return ok(await db.warehouse.create({ data: { ...body, location: body.location || null } }))
+    const wh = await db.warehouse.create({ data: { ...body, location: body.location || null } })
+    await logAudit('CREATE', 'Warehouse', wh.id, `${wh.code} — ${wh.name}`)
+    return ok(wh)
   } catch (e) {
     return handleError(e)
   }

@@ -1,6 +1,8 @@
 import { ok, handleError } from '@/lib/api'
 import { db } from '@/lib/db'
 import { z } from 'zod'
+import { assertCompanyAccess } from '@/lib/platform'
+import { logAudit } from '@/lib/audit'
 
 const processSchema = z.object({
   code: z.string().min(1).max(20).optional(),
@@ -15,7 +17,10 @@ const processSchema = z.object({
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
-    return ok(await db.process.update({ where: { id }, data: processSchema.parse(await req.json()) }))
+    await assertCompanyAccess()
+    const proc = await db.process.update({ where: { id }, data: processSchema.parse(await req.json()) })
+    await logAudit('UPDATE', 'Process', id, `${proc.code} — ${proc.name}`)
+    return ok(proc)
   } catch (e) {
     return handleError(e)
   }
@@ -24,9 +29,12 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
+    await assertCompanyAccess()
     const url = new URL(req.url)
     const activate = url.searchParams.get('activate') === '1'
-    return ok(await db.process.update({ where: { id }, data: { active: activate } }))
+    const proc = await db.process.update({ where: { id }, data: { active: activate } })
+    await logAudit('UPDATE', 'Process', id, `${proc.code} ${activate ? 'reactivated' : 'deactivated'}`)
+    return ok(proc)
   } catch (e) {
     return handleError(e)
   }

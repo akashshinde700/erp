@@ -20,6 +20,7 @@ import {
   ReceiptText,
   ScrollText,
   Search,
+  ShieldAlert,
   ShoppingCart,
   Truck,
   Wrench,
@@ -52,6 +53,7 @@ const MODULES: { view: ErpView; label: string; icon: typeof LayoutDashboard; key
   { view: 'tally', label: 'Tally Export', icon: Truck, keywords: 'tally xml voucher masters connector bat' },
   { view: 'audit', label: 'Audit Trail', icon: ScrollText, keywords: 'log history changes' },
   { view: 'docs', label: 'Docs', icon: FileText, keywords: 'documentation reference' },
+  { view: 'platform', label: 'Platform Admin', icon: ShieldAlert, keywords: 'saas admin console plans organizations subscriptions billing inquiries blog' },
 ]
 
 const RECENT_LABELS: Record<string, string> = {

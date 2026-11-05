@@ -1,0 +1,769 @@
+     1→     1→'use client'
+     2→     2→
+     3→     3→/**
+     4→     4→ * ForgeERP — SaaS Platform Admin console (single-page module, key-gated).
+     5→     5→ * Plans CRUD · organizations (plan/billing/suspension — with REAL enforcement)
+     6→     6→ * · usage vs limits · backup & restore.
+     7→     7→ *
+     8→     8→ * Honest scope: the ERP runtime always operates the FIRST organization;
+     9→     9→ * orgs created here are real Company rows the platform manages. Full
+    10→    10→ * per-request tenant scoping is a roadmap item.
+    11→    11→ */
+    12→    12→
+    13→    13→import { useCallback, useEffect, useState } from 'react'
+    14→    14→import { toast } from 'sonner'
+    15→    15→import {
+    16→    16→  Building2,
+    17→    17→  CheckCircle2,
+    18→    18→  DatabaseBackup,
+    19→    19→  IndianRupee,
+    20→    20→  KeyRound,
+    21→    21→  Loader2,
+    22→    22→  MoreVertical,
+    23→    23→  Plus,
+    24→    24→  RefreshCw,
+    25→    25→  Save,
+    26→    26→  ShieldAlert,
+    27→    27→  Trash2,
+    28→    28→} from 'lucide-react'
+    29→    29→import {
+    30→    30→  DropdownMenu,
+    31→    31→  DropdownMenuContent,
+    32→    32→  DropdownMenuItem,
+    33→    33→  DropdownMenuTrigger,
+    34→    34→} from '@/components/ui/dropdown-menu'
+    35→    35→import {
+    36→    36→  AlertDialog,
+    37→    37→  AlertDialogAction,
+    38→    38→  AlertDialogCancel,
+    39→    39→  AlertDialogContent,
+    40→    40→  AlertDialogDescription,
+    41→    41→  AlertDialogFooter,
+    42→    42→  AlertDialogHeader,
+    43→    43→  AlertDialogTitle,
+    44→    44→  AlertDialogTrigger,
+    45→    45→} from '@/components/ui/alert-dialog'
+    46→    46→import { Badge } from '@/components/ui/badge'
+    47→    47→import { Button } from '@/components/ui/button'
+    48→    48→import { Card, CardContent } from '@/components/ui/card'
+    49→    49→import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+    50→    50→import { Input } from '@/components/ui/input'
+    51→    51→import { Label } from '@/components/ui/label'
+    52→    52→import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+    53→    53→import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+    54→    54→import { dateStr, money } from '@/lib/erp'
+    55→    55→import {
+    56→    56→  api,
+    57→    57→  downloadUrl,
+    58→    58→  platformApi,
+    59→    59→  toastError,
+    60→    60→  type OrgsResponse,
+    61→    61→  type Plan,
+    62→    62→} from './api'
+    63→    63→import { EmptyState, KpiCard, SectionHeading, TableSkeleton } from './bits'
+    64→    64→
+    65→    65→const KEY_STORE = 'forge_platform_key'
+    66→    66→
+    67→    67→export function PlatformView() {
+    68→    68→  const [key, setKey] = useState('')
+    69→    69→  const [authed, setAuthed] = useState(false)
+    70→    70→  const [checking, setChecking] = useState(false)
+    71→    71→
+    72→    72→  useEffect(() => {
+    73→    73→    const saved = sessionStorage.getItem(KEY_STORE)
+    74→    74→    if (saved) {
+    75→    75→      setKey(saved)
+    76→    76→      void verify(saved)
+    77→    77→    }
+    78→    78→  }, [])
+    79→    79→
+    80→    80→  const verify = async (k: string) => {
+    81→    81→    setChecking(true)
+    82→    82→    try {
+    83→    83→      await api('/api/platform/auth', { method: 'POST', body: JSON.stringify({ key: k }) })
+    84→    84→      sessionStorage.setItem(KEY_STORE, k)
+    85→    85→      setAuthed(true)
+    86→    86→    } catch (e) {
+    87→    87→      sessionStorage.removeItem(KEY_STORE)
+    88→    88→      toastError(e)
+    89→    89→    } finally {
+    90→    90→      setChecking(false)
+    91→    91→    }
+    92→    92→  }
+    93→    93→
+    94→    94→  if (!authed) {
+    95→    95→    return (
+    96→    96→      <div className="mx-auto max-w-md space-y-4 py-10">
+    97→    97→        <SectionHeading title="Platform Admin" description="SaaS control plane — plans, organizations, subscriptions, backups." />
+    98→    98→        <Card className="p-0">
+    99→    99→          <CardContent className="space-y-4 p-6">
+   100→   100→            <div className="flex size-12 items-center justify-center rounded-xl bg-primary text-primary-foreground">
+   101→   101→              <KeyRound className="size-6" aria-hidden />
+   102→   102→            </div>
+   103→   103→            <div className="space-y-1.5">
+   104→   104→              <Label htmlFor="platform-key">Platform admin key</Label>
+   105→   105→              <Input
+   106→   106→                id="platform-key"
+   107→   107→                type="password"
+   108→   108→                value={key}
+   109→   109→                onChange={(e) => setKey(e.target.value)}
+   110→   110→                onKeyDown={(e) => {
+   111→   111→                  if (e.key === 'Enter' && key) void verify(key)
+   112→   112→                }}
+   113→   113→                placeholder="forge-admin"
+   114→   114→                className="h-11"
+   115→   115→              />
+   116→   116→              <p className="text-xs text-muted-foreground">
+   117→   117→                Default is <span className="font-mono">forge-admin</span> — change it with the <span className="font-mono">PLATFORM_ADMIN_KEY</span> environment variable.
+   118→   118→              </p>
+   119→   119→            </div>
+   120→   120→            <Button onClick={() => void verify(key)} disabled={!key || checking} className="h-11 w-full gap-2">
+   121→   121→              {checking ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <KeyRound className="size-4" aria-hidden />}
+   122→   122→              Unlock console
+   123→   123→            </Button>
+   124→   124→          </CardContent>
+   125→   125→        </Card>
+   126→   126→      </div>
+   127→   127→    )
+   128→   128→  }
+   129→   129→
+   130→   130→  return <Console key={key} apiKey={key} onAuthLost={() => setAuthed(false)} />
+   131→   131→}
+   132→   132→
+   133→   133→// ---------------------------------------------------------------------------
+   134→   134→
+   135→   135→function Console({ apiKey, onAuthLost }: { apiKey: string; onAuthLost: () => void }) {
+   136→   136→  const [tab, setTab] = useState<'orgs' | 'plans'>('orgs')
+   137→   137→  const [data, setData] = useState<OrgsResponse | null>(null)
+   138→   138→  const [plans, setPlans] = useState<Plan[] | null>(null)
+   139→   139→  const [loading, setLoading] = useState(true)
+   140→   140→
+   141→   141→  const reload = useCallback(async () => {
+   142→   142→    setLoading(true)
+   143→   143→    try {
+   144→   144→      const [orgs, pl] = await Promise.all([
+   145→   145→        platformApi<OrgsResponse>('/api/platform/orgs', undefined, apiKey),
+   146→   146→        platformApi<Plan[]>('/api/platform/plans', undefined, apiKey),
+   147→   147→      ])
+   148→   148→      setData(orgs)
+   149→   149→      setPlans(pl)
+   150→   150→    } catch (e) {
+   151→   151→      toastError(e)
+   152→   152→      onAuthLost()
+   153→   153→    } finally {
+   154→   154→      setLoading(false)
+   155→   155→    }
+   156→   156→  }, [apiKey, onAuthLost])
+   157→   157→
+   158→   158→  useEffect(() => {
+   159→   159→    void reload()
+   160→   160→  }, [reload])
+   161→   161→
+   162→   162→  const orgAction = async (id: string, body: Record<string, unknown>, okMsg: string) => {
+   163→   163→    try {
+   164→   164→      await platformApi(`/api/platform/orgs/${id}`, { method: 'PATCH', body: JSON.stringify(body) }, apiKey)
+   165→   165→      toast.success(okMsg)
+   166→   166→      void reload()
+   167→   167→    } catch (e) {
+   168→   168→      toastError(e)
+   169→   169→    }
+   170→   170→  }
+   171→   171→
+   172→   172→  const stats = data?.stats
+   173→   173→
+   174→   174→  return (
+   175→   175→    <div className="space-y-6">
+   176→   176→      <SectionHeading
+   177→   177→        title="Platform Admin"
+   178→   178→        description="Plans, organizations, subscriptions, backups. The ERP operates the first organization; suspension/expiry blocks its business mutations for real."
+   179→   179→        actions={
+   180→   180→          <Button variant="outline" onClick={() => void reload()} className="h-11 gap-2">
+   181→   181→            <RefreshCw className="size-4" aria-hidden /> Refresh
+   182→   182→          </Button>
+   183→   183→        }
+   184→   184→      />
+   185→   185→
+   186→   186→      {loading && !data ? (
+   187→   187→        <TableSkeleton rows={4} cols={4} />
+   188→   188→      ) : stats ? (
+   189→   189→        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+   190→   190→          <KpiCard title="Organizations" value={String(stats.total)} icon={Building2} hint={`${stats.active} active · ${stats.suspended} suspended`} />
+   191→   191→          <KpiCard title="MRR" value={`₹ ${money(stats.mrr)}`} icon={IndianRupee} tone="positive" hint="Active orgs × monthly plan price" />
+   192→   192→          <KpiCard title="Documents" value={String(stats.salesInvoices)} icon={DatabaseBackup} hint={`${stats.parties} parties · ${stats.items} items`} />
+   193→   193→          <KpiCard title="Warehouses" value={String(stats.warehouses)} icon={Building2} hint="Across the operating org" />
+   194→   194→        </div>
+   195→   195→      ) : null}
+   196→   196→
+   197→   197→      <div className="flex flex-wrap gap-2">
+   198→   198→        <Button variant={tab === 'orgs' ? 'default' : 'outline'} onClick={() => setTab('orgs')} className="h-11">
+   199→   199→          Organizations ({data?.orgs.length ?? 0})
+   200→   200→        </Button>
+   201→   201→        <Button variant={tab === 'plans' ? 'default' : 'outline'} onClick={() => setTab('plans')} className="h-11">
+   202→   202→          Plans ({plans?.length ?? 0})
+   203→   203→        </Button>
+   204→   204→      </div>
+   205→   205→
+   206→   206→      {tab === 'orgs' ? <OrgsTable data={data} plans={plans ?? []} apiKey={apiKey} onAction={orgAction} reload={reload} /> : null}
+   207→   207→      {tab === 'plans' ? <PlansTable plans={plans ?? []} apiKey={apiKey} reload={reload} /> : null}
+   208→   208→
+   209→   209→      <BackupCard />
+   210→   210→    </div>
+   211→   211→  )
+   212→   212→}
+   213→   213→
+   214→   214→// ---------------------------------------------------------------------------
+   215→   215→
+   216→   216→function OrgsTable({
+   217→   217→  data,
+   218→   218→  plans,
+   219→   219→  apiKey,
+   220→   220→  onAction,
+   221→   221→  reload,
+   222→   222→}: {
+   223→   223→  data: OrgsResponse | null
+   224→   224→  plans: Plan[]
+   225→   225→  apiKey: string
+   226→   226→  onAction: (id: string, body: Record<string, unknown>, okMsg: string) => Promise<void>
+   227→   227→  reload: () => Promise<void>
+   228→   228→}) {
+   229→   229→  const [createOpen, setCreateOpen] = useState(false)
+   230→   230→  const [name, setName] = useState('')
+   231→   231→  const [gstin, setGstin] = useState('')
+   232→   232→  const [planId, setPlanId] = useState('none')
+   233→   233→  const [trialDays, setTrialDays] = useState('14')
+   234→   234→  const [creating, setCreating] = useState(false)
+   235→   235→
+   236→   236→  const create = async () => {
+   237→   237→    setCreating(true)
+   238→   238→    try {
+   239→   239→      await platformApi(
+   240→   240→        '/api/platform/orgs',
+   241→   241→        {
+   242→   242→          method: 'POST',
+   243→   243→          body: JSON.stringify({
+   244→   244→            name,
+   245→   245→            gstin: gstin || undefined,
+   246→   246→            planId: planId === 'none' ? null : planId,
+   247→   247→            trialDays: Number(trialDays) || 0,
+   248→   248→          }),
+   249→   249→        },
+   250→   250→        apiKey
+   251→   251→      )
+   252→   252→      toast.success(`Organization "${name}" created`)
+   253→   253→      setCreateOpen(false)
+   254→   254→      setName('')
+   255→   255→      setGstin('')
+   256→   256→      void reload()
+   257→   257→    } catch (e) {
+   258→   258→      toastError(e)
+   259→   259→    } finally {
+   260→   260→      setCreating(false)
+   261→   261→    }
+   262→   262→  }
+   263→   263→
+   264→   264→  const del = async (id: string, orgName: string) => {
+   265→   265→    try {
+   266→   266→      await platformApi(`/api/platform/orgs/${id}?confirmName=${encodeURIComponent(orgName)}`, { method: 'DELETE' }, apiKey)
+   267→   267→      toast.success(`${orgName} deleted`)
+   268→   268→      void reload()
+   269→   269→    } catch (e) {
+   270→   270→      toastError(e)
+   271→   271→    }
+   272→   272→  }
+   273→   273→
+   274→   274→  if (!data || data.orgs.length === 0) {
+   275→   275→    return (
+   276→   276→      <Card className="p-0">
+   277→   277→        <CardContent className="p-6">
+   278→   278→          <EmptyState
+   279→   279→            title="No organizations"
+   280→   280→            hint="Create the first organization — it becomes a real Company row you can manage here."
+   281→   281→            action={
+   282→   282→              <Button onClick={() => setCreateOpen(true)} className="mt-2 h-11 gap-2">
+   283→   283→                <Plus className="size-4" aria-hidden /> New organization
+   284→   284→              </Button>
+   285→   285→            }
+   286→   286→          />
+   287→   287→        </CardContent>
+   288→   288→      </Card>
+   289→   289→    )
+   290→   290→  }
+   291→   291→
+   292→   292→  const stateBadge = (o: OrgsResponse['orgs'][number]) => {
+   293→   293→    const now = Date.now()
+   294→   294→    const paidOk = o.paidUntil ? new Date(o.paidUntil).getTime() > now : false
+   295→   295→    const trialOk = o.trialEndsAt ? new Date(o.trialEndsAt).getTime() > now : false
+   296→   296→    if (o.saasStatus === 'SUSPENDED') return <Badge variant="destructive">Suspended</Badge>
+   297→   297→    if (paidOk) return <Badge variant="default">Paid</Badge>
+   298→   298→    if (trialOk) return <Badge variant="outline" className="border-amber-400 text-amber-600 dark:text-amber-400">Trial</Badge>
+   299→   299→    if (o.paidUntil || o.trialEndsAt) return <Badge variant="destructive">Expired</Badge>
+   300→   300→    return <Badge variant="secondary">Free / unlimited</Badge>
+   301→   301→  }
+   302→   302→
+   303→   303→  return (
+   304→   304→    <>
+   305→   305→      <Card className="p-0">
+   306→   306→        <CardContent className="p-0">
+   307→   307→          <div className="flex flex-wrap items-center justify-between gap-2 p-4">
+   308→   308→            <p className="text-sm font-semibold">Organizations</p>
+   309→   309→            <Button size="sm" className="h-10 gap-2" onClick={() => setCreateOpen(true)}>
+   310→   310→              <Plus className="size-4" aria-hidden /> New organization
+   311→   311→            </Button>
+   312→   312→          </div>
+   313→   313→          <div className="max-h-[62dvh] overflow-auto erp-scroll [&_[data-slot=table-container]]:overflow-visible">
+   314→   314→            <Table>
+   315→   315→              <TableHeader className="sticky top-0 z-10 bg-card">
+   316→   316→                <TableRow>
+   317→   317→                  <TableHead>Organization</TableHead>
+   318→   318→                  <TableHead>Plan</TableHead>
+   319→   319→                  <TableHead>Status</TableHead>
+   320→   320→                  <TableHead className="hidden md:table-cell">Usage (operating org)</TableHead>
+   321→   321→                  <TableHead className="hidden md:table-cell">Paid until / Trial until</TableHead>
+   322→   322→                  <TableHead className="text-right">Actions</TableHead>
+   323→   323→                </TableRow>
+   324→   324→              </TableHeader>
+   325→   325→              <TableBody>
+   326→   326→                {data.orgs.map((o) => (
+   327→   327→                  <TableRow key={o.id}>
+   328→   328→                    <TableCell>
+   329→   329→                      <span className="block font-medium">{o.name}</span>
+   330→   330→                      <span className="block text-xs text-muted-foreground">
+   331→   331→                        {o.gstin ?? 'No GSTIN'}
+   332→   332→                        {o.operating ? ' · operating (opens in the ERP)' : ''}
+   333→   333→                      </span>
+   334→   334→                    </TableCell>
+   335→   335→                    <TableCell>
+   336→   336→                      <Select
+   337→   337→                        value={o.plan?.id ?? 'none'}
+   338→   338→                        onValueChange={(v) => void onAction(o.id, { action: 'setPlan', planId: v === 'none' ? null : v }, 'Plan updated')}
+   339→   339→                      >
+   340→   340→                        <SelectTrigger className="h-10 w-40" aria-label={`Plan for ${o.name}`}>
+   341→   341→                          <SelectValue />
+   342→   342→                        </SelectTrigger>
+   343→   343→                        <SelectContent>
+   344→   344→                          <SelectItem value="none">No plan (unlimited)</SelectItem>
+   345→   345→                          {plans.map((p) => (
+   346→   346→                            <SelectItem key={p.id} value={p.id}>
+   347→   347→                              {p.name}
+   348→   348→                            </SelectItem>
+   349→   349→                          ))}
+   350→   350→                        </SelectContent>
+   351→   351→                      </Select>
+   352→   352→                      {o.customized ? <span className="mt-1 block text-[11px] text-muted-foreground">custom limits</span> : null}
+   353→   353→                    </TableCell>
+   354→   354→                    <TableCell>{stateBadge(o)}</TableCell>
+   355→   355→                    <TableCell className="hidden text-xs tabular-nums md:table-cell">
+   356→   356→                      {o.operating ? (
+   357→   357→                        <>
+   358→   358→                          {o.usage.parties}/{o.limits.parties || '∞'} parties · {o.usage.items}/{o.limits.items || '∞'} items ·{' '}
+   359→   359→                          {o.usage.warehouses}/{o.limits.warehouses || '∞'} wh
+   360→   360→                        </>
+   361→   361→                      ) : (
+   362→   362→                        <span className="text-muted-foreground">—</span>
+   363→   363→                      )}
+   364→   364→                    </TableCell>
+   365→   365→                    <TableCell className="hidden text-xs tabular-nums md:table-cell">
+   366→   366→                      {o.paidUntil ? <span>Paid: {dateStr(o.paidUntil)}</span> : null}
+   367→   367→                      {o.trialEndsAt ? (
+   368→   368→                        <span className={o.paidUntil ? ' block' : ''}>Trial: {dateStr(o.trialEndsAt)}</span>
+   369→   369→                      ) : null}
+   370→   370→                      {!o.paidUntil && !o.trialEndsAt ? <span className="text-muted-foreground">No expiry</span> : null}
+   371→   371→                    </TableCell>
+   372→   372→                    <TableCell>
+   373→   373→                      <div className="flex items-center justify-end gap-1.5">
+   374→   374→                        {/* Mobile: billing actions in one overflow menu (40px trigger) */}
+   375→   375→                        <DropdownMenu>
+   376→   376→                          <DropdownMenuTrigger asChild>
+   377→   377→                            <Button
+   378→   378→                              variant="ghost"
+   379→   379→                              size="icon"
+   380→   380→                              className="size-10 md:hidden"
+   381→   381→                              aria-label={`More actions for ${o.name}`}
+   382→   382→                            >
+   383→   383→                              <MoreVertical className="size-4" aria-hidden />
+   384→   384→                            </Button>
+   385→   385→                          </DropdownMenuTrigger>
+   386→   386→                          <DropdownMenuContent align="end">
+   387→   387→                            <DropdownMenuItem onClick={() => void onAction(o.id, { action: 'markPaid', cycle: 'MONTHLY' }, 'Marked paid +1 month')}>
+   388→   388→                              Mark paid +1 month
+   389→   389→                            </DropdownMenuItem>
+   390→   390→                            <DropdownMenuItem onClick={() => void onAction(o.id, { action: 'markPaid', cycle: 'YEARLY' }, 'Marked paid +1 year')}>
+   391→   391→                              Mark paid +1 year
+   392→   392→                            </DropdownMenuItem>
+   393→   393→                            <DropdownMenuItem onClick={() => void onAction(o.id, { action: 'extendTrial', days: 7 }, 'Trial extended +7 days')}>
+   394→   394→                              Extend trial +7 days
+   395→   395→                            </DropdownMenuItem>
+   396→   396→                            {o.saasStatus === 'SUSPENDED' ? (
+   397→   397→                              <DropdownMenuItem onClick={() => void onAction(o.id, { action: 'activate' }, 'Organization activated')}>
+   398→   398→                                <CheckCircle2 className="size-4" aria-hidden /> Activate
+   399→   399→                              </DropdownMenuItem>
+   400→   400→                            ) : (
+   401→   401→                              <DropdownMenuItem onClick={() => void onAction(o.id, { action: 'suspend' }, 'Organization suspended — mutations now blocked')}>
+   402→   402→                                <ShieldAlert className="size-4" aria-hidden /> Suspend
+   403→   403→                              </DropdownMenuItem>
+   404→   404→                            )}
+   405→   405→                          </DropdownMenuContent>
+   406→   406→                        </DropdownMenu>
+   407→   407→                        {/* Desktop: inline quick actions */}
+   408→   408→                        <div className="hidden items-center gap-1.5 md:flex">
+   409→   409→                          <Button size="sm" variant="outline" className="h-8" onClick={() => void onAction(o.id, { action: 'markPaid', cycle: 'MONTHLY' }, 'Marked paid +1 month')}>
+   410→   410→                            +1 mo
+   411→   411→                          </Button>
+   412→   412→                          <Button size="sm" variant="outline" className="h-8" onClick={() => void onAction(o.id, { action: 'markPaid', cycle: 'YEARLY' }, 'Marked paid +1 year')}>
+   413→   413→                            +1 yr
+   414→   414→                          </Button>
+   415→   415→                          <Button size="sm" variant="outline" className="h-8" onClick={() => void onAction(o.id, { action: 'extendTrial', days: 7 }, 'Trial extended +7 days')}>
+   416→   416→                            +7d trial
+   417→   417→                          </Button>
+   418→   418→                          {o.saasStatus === 'SUSPENDED' ? (
+   419→   419→                            <Button size="sm" className="h-8 gap-1" onClick={() => void onAction(o.id, { action: 'activate' }, 'Organization activated')}>
+   420→   420→                              <CheckCircle2 className="size-3.5" aria-hidden /> Activate
+   421→   421→                            </Button>
+   422→   422→                          ) : (
+   423→   423→                            <Button size="sm" variant="destructive" className="h-8 gap-1" onClick={() => void onAction(o.id, { action: 'suspend' }, 'Organization suspended — mutations now blocked')}>
+   424→   424→                              <ShieldAlert className="size-3.5" aria-hidden /> Suspend
+   425→   425→                            </Button>
+   426→   426→                          )}
+   427→   427→                        </div>
+   428→   428→                        {/* Delete stays a guarded 40px button on every size */}
+   429→   429→                        <AlertDialog>
+   430→   430→                          <AlertDialogTrigger asChild>
+   431→   431→                            <Button size="sm" variant="ghost" className="h-10 text-destructive hover:text-destructive md:h-8" aria-label={`Delete ${o.name}`}>
+   432→   432→                              <Trash2 className="size-3.5" aria-hidden />
+   433→   433→                            </Button>
+   434→   434→                          </AlertDialogTrigger>
+   435→   435→                          <AlertDialogContent>
+   436→   436→                            <AlertDialogHeader>
+   437→   437→                              <AlertDialogTitle>Delete {o.name}?</AlertDialogTitle>
+   438→   438→                              <AlertDialogDescription>
+   439→   439→                                {o.operating
+   440→   440→                                  ? 'This is the OPERATING organization — deleting it wipes ALL business data (invoices, ledgers, jobwork, masters). Type the exact name to confirm.'
+   441→   441→                                  : 'Type the exact organization name to confirm.'}
+   442→   442→                              </AlertDialogDescription>
+   443→   443→                            </AlertDialogHeader>
+   444→   444→                            <DeleteConfirm name={o.name} onConfirm={() => void del(o.id, o.name)} />
+   445→   445→                          </AlertDialogContent>
+   446→   446→                        </AlertDialog>
+   447→   447→                      </div>
+   448→   448→                    </TableCell>
+   449→   449→                  </TableRow>
+   450→   450→                ))}
+   451→   451→              </TableBody>
+   452→   452→            </Table>
+   453→   453→          </div>
+   454→   454→        </CardContent>
+   455→   455→      </Card>
+   456→   456→
+   457→   457→      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+   458→   458→        <DialogContent className="sm:max-w-md">
+   459→   459→          <DialogHeader>
+   460→   460→            <DialogTitle>New organization</DialogTitle>
+   461→   461→            <DialogDescription>Creates a real Company row with a plan and trial. The ERP keeps operating the first org.</DialogDescription>
+   462→   462→          </DialogHeader>
+   463→   463→          <div className="space-y-3">
+   464→   464→            <div className="space-y-1.5">
+   465→   465→              <Label htmlFor="org-name">Name</Label>
+   466→   466→              <Input id="org-name" value={name} onChange={(e) => setName(e.target.value)} className="h-11" placeholder="Acme Industries" />
+   467→   467→            </div>
+   468→   468→            <div className="space-y-1.5">
+   469→   469→              <Label htmlFor="org-gstin">GSTIN (optional)</Label>
+   470→   470→              <Input id="org-gstin" value={gstin} onChange={(e) => setGstin(e.target.value.toUpperCase())} className="h-11 font-mono" maxLength={15} placeholder="27ABCDE1234F1Z5" />
+   471→   471→            </div>
+   472→   472→            <div className="grid gap-3 sm:grid-cols-2">
+   473→   473→              <div className="space-y-1.5">
+   474→   474→                <Label>Plan</Label>
+   475→   475→                <Select value={planId} onValueChange={setPlanId}>
+   476→   476→                  <SelectTrigger className="h-11">
+   477→   477→                    <SelectValue />
+   478→   478→                  </SelectTrigger>
+   479→   479→                  <SelectContent>
+   480→   480→                    <SelectItem value="none">No plan (unlimited)</SelectItem>
+   481→   481→                    {plans.map((p) => (
+   482→   482→                      <SelectItem key={p.id} value={p.id}>
+   483→   483→                        {p.name}
+   484→   484→                      </SelectItem>
+   485→   485→                    ))}
+   486→   486→                  </SelectContent>
+   487→   487→                </Select>
+   488→   488→              </div>
+   489→   489→              <div className="space-y-1.5">
+   490→   490→                <Label htmlFor="org-trial">Trial days</Label>
+   491→   491→                <Input id="org-trial" type="number" min={0} max={365} value={trialDays} onChange={(e) => setTrialDays(e.target.value)} className="h-11" />
+   492→   492→              </div>
+   493→   493→            </div>
+   494→   494→          </div>
+   495→   495→          <DialogFooter className="gap-2">
+   496→   496→            <Button variant="outline" onClick={() => setCreateOpen(false)} disabled={creating} className="h-11">
+   497→   497→              Cancel
+   498→   498→            </Button>
+   499→   499→            <Button onClick={create} disabled={!name.trim() || creating} className="h-11 gap-2">
+   500→   500→              {creating ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null} Create
+   501→   501→            </Button>
+   502→   502→          </DialogFooter>
+   503→   503→        </DialogContent>
+   504→   504→      </Dialog>
+   505→   505→    </>
+   506→   506→  )
+   507→   507→}
+   508→   508→
+   509→   509→function DeleteConfirm({ name, onConfirm }: { name: string; onConfirm: () => void }) {
+   510→   510→  const [typed, setTyped] = useState('')
+   511→   511→  return (
+   512→   512→    <div className="space-y-3">
+   513→   513→      <Input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder={`Type "${name}" to confirm`} className="h-11" />
+   514→   514→      <AlertDialogFooter>
+   515→   515→        <AlertDialogCancel>Keep</AlertDialogCancel>
+   516→   516→        <AlertDialogAction
+   517→   517→          disabled={typed !== name}
+   518→   518→          onClick={onConfirm}
+   519→   519→          className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+   520→   520→        >
+   521→   521→          Delete permanently
+   522→   522→        </AlertDialogAction>
+   523→   523→      </AlertDialogFooter>
+   524→   524→    </div>
+   525→   525→  )
+   526→   526→}
+   527→   527→
+   528→   528→// ---------------------------------------------------------------------------
+   529→   529→
+   530→   530→function PlansTable({ plans, apiKey, reload }: { plans: Plan[]; apiKey: string; reload: () => Promise<void> }) {
+   531→   531→  const [open, setOpen] = useState(false)
+   532→   532→  const [editing, setEditing] = useState<Plan | null>(null)
+   533→   533→  const [form, setForm] = useState({ name: '', priceMonthly: '0', priceYearly: '0', maxItems: '0', maxWarehouses: '0', maxParties: '0' })
+   534→   534→  const [saving, setSaving] = useState(false)
+   535→   535→
+   536→   536→  const openNew = () => {
+   537→   537→    setEditing(null)
+   538→   538→    setForm({ name: '', priceMonthly: '0', priceYearly: '0', maxItems: '0', maxWarehouses: '0', maxParties: '0' })
+   539→   539→    setOpen(true)
+   540→   540→  }
+   541→   541→  const openEdit = (p: Plan) => {
+   542→   542→    setEditing(p)
+   543→   543→    setForm({
+   544→   544→      name: p.name,
+   545→   545→      priceMonthly: String(p.priceMonthly),
+   546→   546→      priceYearly: String(p.priceYearly),
+   547→   547→      maxItems: String(p.maxItems),
+   548→   548→      maxWarehouses: String(p.maxWarehouses),
+   549→   549→      maxParties: String(p.maxParties),
+   550→   550→    })
+   551→   551→    setOpen(true)
+   552→   552→  }
+   553→   553→
+   554→   554→  const save = async () => {
+   555→   555→    setSaving(true)
+   556→   556→    try {
+   557→   557→      const body = {
+   558→   558→        name: form.name.trim(),
+   559→   559→        priceMonthly: Number(form.priceMonthly) || 0,
+   560→   560→        priceYearly: Number(form.priceYearly) || 0,
+   561→   561→        maxItems: Math.max(0, Math.trunc(Number(form.maxItems) || 0)),
+   562→   562→        maxWarehouses: Math.max(0, Math.trunc(Number(form.maxWarehouses) || 0)),
+   563→   563→        maxParties: Math.max(0, Math.trunc(Number(form.maxParties) || 0)),
+   564→   564→      }
+   565→   565→      if (editing) await platformApi(`/api/platform/plans/${editing.id}`, { method: 'PATCH', body: JSON.stringify(body) }, apiKey)
+   566→   566→      else await platformApi('/api/platform/plans', { method: 'POST', body: JSON.stringify(body) }, apiKey)
+   567→   567→      toast.success(editing ? 'Plan updated' : 'Plan created')
+   568→   568→      setOpen(false)
+   569→   569→      void reload()
+   570→   570→    } catch (e) {
+   571→   571→      toastError(e)
+   572→   572→    } finally {
+   573→   573→      setSaving(false)
+   574→   574→    }
+   575→   575→  }
+   576→   576→
+   577→   577→  const del = async (p: Plan) => {
+   578→   578→    try {
+   579→   579→      await platformApi(`/api/platform/plans?id=${p.id}`, { method: 'DELETE' }, apiKey)
+   580→   580→      toast.success(`${p.name} deleted`)
+   581→   581→      void reload()
+   582→   582→    } catch (e) {
+   583→   583→      toastError(e)
+   584→   584→    }
+   585→   585→  }
+   586→   586→
+   587→   587→  return (
+   588→   588→    <>
+   589→   589→      <Card className="p-0">
+   590→   590→        <CardContent className="p-0">
+   591→   591→          <div className="flex flex-wrap items-center justify-between gap-2 p-4">
+   592→   592→            <p className="text-sm font-semibold">Plans (0 = unlimited)</p>
+   593→   593→            <Button size="sm" className="h-10 gap-2" onClick={openNew}>
+   594→   594→              <Plus className="size-4" aria-hidden /> New plan
+   595→   595→            </Button>
+   596→   596→          </div>
+   597→   597→          <div className="overflow-auto erp-scroll">
+   598→   598→            <Table>
+   599→   599→              <TableHeader>
+   600→   600→                <TableRow>
+   601→   601→                  <TableHead>Name</TableHead>
+   602→   602→                  <TableHead className="text-right">₹ / month</TableHead>
+   603→   603→                  <TableHead className="text-right">₹ / year</TableHead>
+   604→   604→                  <TableHead className="text-right">Items</TableHead>
+   605→   605→                  <TableHead className="text-right">Warehouses</TableHead>
+   606→   606→                  <TableHead className="text-right">Parties</TableHead>
+   607→   607→                  <TableHead className="text-right">Orgs</TableHead>
+   608→   608→                  <TableHead className="text-right">Actions</TableHead>
+   609→   609→                </TableRow>
+   610→   610→              </TableHeader>
+   611→   611→              <TableBody>
+   612→   612→                {plans.map((p) => (
+   613→   613→                  <TableRow key={p.id}>
+   614→   614→                    <TableCell className="font-medium">{p.name}</TableCell>
+   615→   615→                    <TableCell className="text-right tabular-nums">{money(p.priceMonthly)}</TableCell>
+   616→   616→                    <TableCell className="text-right tabular-nums">{money(p.priceYearly)}</TableCell>
+   617→   617→                    <TableCell className="text-right tabular-nums">{p.maxItems || '∞'}</TableCell>
+   618→   618→                    <TableCell className="text-right tabular-nums">{p.maxWarehouses || '∞'}</TableCell>
+   619→   619→                    <TableCell className="text-right tabular-nums">{p.maxParties || '∞'}</TableCell>
+   620→   620→                    <TableCell className="text-right tabular-nums">{p._count?.companies ?? 0}</TableCell>
+   621→   621→                    <TableCell>
+   622→   622→                      <div className="flex items-center justify-end gap-1.5">
+   623→   623→                        <Button size="sm" variant="outline" className="h-10 md:h-8" onClick={() => openEdit(p)}>
+   624→   624→                          Edit
+   625→   625→                        </Button>
+   626→   626→                        <AlertDialog>
+   627→   627→                          <AlertDialogTrigger asChild>
+   628→   628→                            <Button size="sm" variant="ghost" className="h-10 text-destructive hover:text-destructive md:h-8" disabled={(p._count?.companies ?? 0) > 0}>
+   629→   629→                              <Trash2 className="size-3.5" aria-hidden />
+   630→   630→                            </Button>
+   631→   631→                          </AlertDialogTrigger>
+   632→   632→                          <AlertDialogContent>
+   633→   633→                            <AlertDialogHeader>
+   634→   634→                              <AlertDialogTitle>Delete plan {p.name}?</AlertDialogTitle>
+   635→   635→                              <AlertDialogDescription>Plans in use by organizations cannot be deleted.</AlertDialogDescription>
+   636→   636→                            </AlertDialogHeader>
+   637→   637→                            <AlertDialogFooter>
+   638→   638→                              <AlertDialogCancel>Keep</AlertDialogCancel>
+   639→   639→                              <AlertDialogAction onClick={() => void del(p)} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+   640→   640→                                Delete
+   641→   641→                              </AlertDialogAction>
+   642→   642→                            </AlertDialogFooter>
+   643→   643→                          </AlertDialogContent>
+   644→   644→                        </AlertDialog>
+   645→   645→                      </div>
+   646→   646→                    </TableCell>
+   647→   647→                  </TableRow>
+   648→   648→                ))}
+   649→   649→              </TableBody>
+   650→   650→            </Table>
+   651→   651→          </div>
+   652→   652→        </CardContent>
+   653→   653→      </Card>
+   654→   654→
+   655→   655→      <Dialog open={open} onOpenChange={setOpen}>
+   656→   656→        <DialogContent className="sm:max-w-lg">
+   657→   657→          <DialogHeader>
+   658→   658→            <DialogTitle>{editing ? `Edit plan — ${editing.name}` : 'New plan'}</DialogTitle>
+   659→   659→            <DialogDescription>Limits of 0 mean unlimited. Prices are in ₹ (0 = free).</DialogDescription>
+   660→   660→          </DialogHeader>
+   661→   661→          <div className="grid gap-3 sm:grid-cols-2">
+   662→   662→            <div className="space-y-1.5 sm:col-span-2">
+   663→   663→              <Label htmlFor="plan-name">Name</Label>
+   664→   664→              <Input id="plan-name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="h-11" placeholder="Growth" />
+   665→   665→            </div>
+   666→   666→            <div className="space-y-1.5">
+   667→   667→              <Label htmlFor="plan-m">₹ / month</Label>
+   668→   668→              <Input id="plan-m" type="number" min={0} value={form.priceMonthly} onChange={(e) => setForm({ ...form, priceMonthly: e.target.value })} className="h-11" />
+   669→   669→            </div>
+   670→   670→            <div className="space-y-1.5">
+   671→   671→              <Label htmlFor="plan-y">₹ / year</Label>
+   672→   672→              <Input id="plan-y" type="number" min={0} value={form.priceYearly} onChange={(e) => setForm({ ...form, priceYearly: e.target.value })} className="h-11" />
+   673→   673→            </div>
+   674→   674→            <div className="space-y-1.5">
+   675→   675→              <Label htmlFor="plan-i">Max items</Label>
+   676→   676→              <Input id="plan-i" type="number" min={0} value={form.maxItems} onChange={(e) => setForm({ ...form, maxItems: e.target.value })} className="h-11" />
+   677→   677→            </div>
+   678→   678→            <div className="space-y-1.5">
+   679→   679→              <Label htmlFor="plan-w">Max warehouses</Label>
+   680→   680→              <Input id="plan-w" type="number" min={0} value={form.maxWarehouses} onChange={(e) => setForm({ ...form, maxWarehouses: e.target.value })} className="h-11" />
+   681→   681→            </div>
+   682→   682→            <div className="space-y-1.5 sm:col-span-2">
+   683→   683→              <Label htmlFor="plan-p">Max parties</Label>
+   684→   684→              <Input id="plan-p" type="number" min={0} value={form.maxParties} onChange={(e) => setForm({ ...form, maxParties: e.target.value })} className="h-11" />
+   685→   685→            </div>
+   686→   686→          </div>
+   687→   687→          <DialogFooter className="gap-2">
+   688→   688→            <Button variant="outline" onClick={() => setOpen(false)} disabled={saving} className="h-11">
+   689→   689→              Cancel
+   690→   690→            </Button>
+   691→   691→            <Button onClick={save} disabled={!form.name.trim() || saving} className="h-11 gap-2">
+   692→   692→              {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Save className="size-4" aria-hidden />} Save plan
+   693→   693→            </Button>
+   694→   694→          </DialogFooter>
+   695→   695→        </DialogContent>
+   696→   696→      </Dialog>
+   697→   697→    </>
+   698→   698→  )
+   699→   699→}
+   700→   700→
+   701→   701→// ---------------------------------------------------------------------------
+   702→   702→
+   703→   703→function BackupCard() {
+   704→   704→  const [restoring, setRestoring] = useState(false)
+   705→   705→  const [confirmText, setConfirmText] = useState('')
+   706→   706→
+   707→   707→  const restore = async (file: File) => {
+   708→   708→    setRestoring(true)
+   709→   709→    try {
+   710→   710→      const snapshot = JSON.parse(await file.text())
+   711→   711→      const res = await api<{ restored: boolean }>('/api/backup/restore', {
+   712→   712→        method: 'POST',
+   713→   713→        body: JSON.stringify({ confirm: 'RESTORE', snapshot }),
+   714→   714→      })
+   715→   715→      if (res.restored) {
+   716→   716→        toast.success('Snapshot restored', { description: 'Reload the page to see the restored data.' })
+   717→   717→      }
+   718→   718→    } catch (e) {
+   719→   719→      toastError(e)
+   720→   720→    } finally {
+   721→   721→      setRestoring(false)
+   722→   722→      setConfirmText('')
+   723→   723→    }
+   724→   724→  }
+   725→   725→
+   726→   726→  return (
+   727→   727→    <Card className="p-0">
+   728→   728→      <CardContent className="space-y-3 p-4">
+   729→   729→        <div className="flex flex-wrap items-center justify-between gap-2">
+   730→   730→          <div>
+   731→   731→            <p className="text-sm font-semibold">Data & backup</p>
+   732→   732→            <p className="text-xs text-muted-foreground">
+   733→   733→              Full JSON snapshot of every table. Restore is destructive and transactional — everything is replaced inside one transaction.
+   734→   734→            </p>
+   735→   735→          </div>
+   736→   736→          <Button variant="outline" className="h-10 gap-2" onClick={() => downloadUrl('/api/backup')}>
+   737→   737→            <DatabaseBackup className="size-4" aria-hidden /> Download backup
+   738→   738→          </Button>
+   739→   739→        </div>
+   740→   740→        <div className="flex flex-wrap items-end gap-3 rounded-lg border border-dashed p-3">
+   741→   741→          <div className="min-w-44 flex-1 space-y-1.5">
+   742→   742→            <Label htmlFor="restore-confirm">Restore — type RESTORE to enable</Label>
+   743→   743→            <Input id="restore-confirm" value={confirmText} onChange={(e) => setConfirmText(e.target.value.toUpperCase())} placeholder="RESTORE" className="h-11" />
+   744→   744→          </div>
+   745→   745→          <Label
+   746→   746→            className={`inline-flex h-11 cursor-pointer items-center gap-2 rounded-md border px-4 text-sm font-medium ${
+   747→   747→              confirmText === 'RESTORE' ? 'border-destructive text-destructive hover:bg-destructive/10' : 'pointer-events-none opacity-50'
+   748→   748→            }`}
+   749→   749→          >
+   750→   750→            {restoring ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <DatabaseBackup className="size-4" aria-hidden />}
+   751→   751→            {restoring ? 'Restoring…' : 'Pick snapshot file…'}
+   752→   752→            <input
+   753→   753→              type="file"
+   754→   754→              accept="application/json"
+   755→   755→              className="sr-only"
+   756→   756→              disabled={confirmText !== 'RESTORE' || restoring}
+   757→   757→              onChange={(e) => {
+   758→   758→                const f = e.target.files?.[0]
+   759→   759→                if (f) void restore(f)
+   760→   760→                e.target.value = ''
+   761→   761→              }}
+   762→   762→            />
+   763→   763→          </Label>
+   764→   764→        </div>
+   765→   765→      </CardContent>
+   766→   766→    </Card>
+   767→   767→  )
+   768→   768→}
+   769→   769→

@@ -596,6 +596,7 @@ export interface Plan {
   maxWarehouses: number
   maxParties: number
   active: boolean
+  features: string[]
   _count?: { companies: number }
 }
 
@@ -604,6 +605,7 @@ export interface OrgRow {
   name: string
   gstin: string | null
   city: string | null
+  email: string | null
   isPlatform: boolean
   operating: boolean
   plan: { id: string; name: string; priceMonthly: number } | null
@@ -620,6 +622,58 @@ export interface OrgRow {
 export interface OrgsResponse {
   orgs: OrgRow[]
   stats: { total: number; active: number; suspended: number; mrr: number; parties: number; items: number; warehouses: number; salesInvoices: number }
+}
+
+// ---------- platform inquiries & blog ----------
+
+/** Client-side mirror of PLAN_FEATURES in src/lib/platform.ts (keys must match). */
+export const PLAN_FEATURE_CATALOG = [
+  { key: 'exportData', label: 'Data export' },
+  { key: 'advancedReports', label: 'Advanced reports' },
+] as const
+
+export const INQUIRY_STATUSES = ['new', 'contacted', 'converted', 'closed'] as const
+export type InquiryStatus = (typeof INQUIRY_STATUSES)[number]
+
+export interface InquiryFollowUp {
+  id: string
+  inquiryId: string
+  note: string
+  createdAt: string
+}
+
+export interface InquiryRow {
+  id: string
+  name: string
+  contactName: string | null
+  email: string | null
+  phone: string | null
+  city: string | null
+  message: string | null
+  status: InquiryStatus | string
+  createdAt: string
+  followUps: InquiryFollowUp[]
+}
+
+export interface InquiriesResponse {
+  inquiries: InquiryRow[]
+  newCount: number
+}
+
+export interface BlogPost {
+  id: string
+  title: string
+  slug: string
+  excerpt: string | null
+  body: string | null
+  status: 'draft' | 'published' | string
+  publishedAt: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export interface BlogResponse {
+  posts: BlogPost[]
 }
 
 export interface AuditRow {

@@ -9,7 +9,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import {
   BarChart3,
-  BookOpenText,
   Boxes,
   Calculator,
   Database,
@@ -75,8 +74,6 @@ const NAV_GROUPS: { group: string; entries: NavEntry[] }[] = [
       { view: 'masters', label: 'Masters', icon: Database },
       { view: 'tally', label: 'Tally Export', icon: Truck },
       { view: 'audit', label: 'Audit Trail', icon: ScrollText },
-      { view: 'platform', label: 'Platform Admin', icon: ShieldAlert },
-      { view: 'docs', label: 'Docs', icon: BookOpenText },
     ],
   },
 ]
@@ -301,6 +298,22 @@ export function ErpApp() {
     )
   }
 
+  // Platform Admin is a STANDALONE console (own header + pill nav, no ERP
+  // shell) — rendered fullscreen, exactly like a separate admin app.
+  if (view === 'platform') {
+    return (
+      <Suspense
+        fallback={
+          <div className="flex min-h-dvh items-center justify-center p-6">
+            <Skeleton className="h-96 w-full max-w-6xl rounded-xl" />
+          </div>
+        }
+      >
+        <PlatformView onExit={() => setView('dashboard')} />
+      </Suspense>
+    )
+  }
+
   const fy = mounted ? fyCode(new Date()) : '····'
   const today = mounted ? dateStr(new Date()) : ''
 
@@ -344,9 +357,6 @@ export function ErpApp() {
       break
     case 'tally':
       content = <TallyView />
-      break
-    case 'platform':
-      content = <PlatformView />
       break
     case 'audit':
       content = <AuditView />
@@ -437,6 +447,16 @@ export function ErpApp() {
             </button>
 
             <div className="ml-auto flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="size-11"
+                onClick={() => setView('platform')}
+                aria-label="Platform Admin"
+                title="Platform Admin — plans, organizations, inquiries"
+              >
+                <ShieldAlert className="size-5" aria-hidden />
+              </Button>
               <button
                 type="button"
                 onClick={() => setPaletteOpen(true)}

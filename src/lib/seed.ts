@@ -296,6 +296,52 @@ export async function seedDatabase(force = false) {
     throw new Error(`Seed produced unbalanced GL (Dr ${dr} vs Cr ${cr}) — refusing to ship broken demo data`)
   }
 
+  // ---------- Platform demo data (inquiries + blog, for the Platform Admin console) ----------
+  const inq1 = await db.platformInquiry.create({
+    data: {
+      name: 'Kalyani Castings Pvt. Ltd.',
+      contactName: 'Anitha V',
+      email: 'purchase@kalyanicastings.example.com',
+      phone: '8971233080',
+      city: 'Bengaluru',
+      message: 'Need jobwork billing for heat treatment + galvanizing across 3 plants. ~400 invoices/month.',
+      status: 'new',
+    },
+  })
+  await db.platformInquiry.create({
+    data: {
+      name: 'Shakti Forge & Alloys',
+      contactName: 'R. Deshmukh',
+      email: 'rdeshmukh@shaktiforge.example.com',
+      phone: '9822014567',
+      city: 'Pune',
+      message: 'Evaluating a switch from Tally-only accounting. Wants GST + jobwork certificates.',
+      status: 'contacted',
+    },
+  })
+  await db.platformInquiryFollowUp.create({
+    data: { inquiryId: inq1.id, note: 'Sent the feature tour link — waiting for their CA to review GST reports.' },
+  })
+  await db.platformBlogPost.create({
+    data: {
+      title: 'Introducing ForgeERP 2.0 — jobwork-first manufacturing ERP',
+      slug: 'introducing-forgeerp-2',
+      excerpt: 'Inward → Job Card → Certificate → Invoice, one chain, gapless numbering, GST-safe by construction.',
+      body: 'Full post body…',
+      status: 'published',
+      publishedAt: daysAgo(9),
+    },
+  })
+  await db.platformBlogPost.create({
+    data: {
+      title: 'GST e-Invoice bulk upload, the safe way',
+      slug: 'gst-e-invoice-bulk-upload',
+      excerpt: 'Pre-validate before the portal ever sees your JSON. Draft post for the launch blog.',
+      body: 'Full post body…',
+      status: 'draft',
+    },
+  })
+
   return {
     seeded: true,
     company: company.name,
@@ -303,6 +349,7 @@ export async function seedDatabase(force = false) {
       parties: 7, items: 6, processes: 6, warehouses: 2,
       purchaseInvoices: 2, salesInvoices: 4, payments: 3,
       jobworkInwards: 2, jobCards: 2, certificates: 1,
+      inquiries: 2, blogPosts: 2,
     },
     sample: {
       firstSalesInvoice: inv1.invoiceNo,

@@ -71,9 +71,51 @@ model Plan {
   maxWarehouses Int      @default(0)
   maxParties    Int      @default(0)
   active        Boolean  @default(true)
+  // CSV of enabled feature keys (see PLAN_FEATURES in src/lib/platform.ts)
+  features      String   @default("exportData,advancedReports")
   createdAt     DateTime @default(now())
 
   companies Company[]
+}
+
+// ---------- Platform inquiries (sales leads, managed in Platform Admin) ----------
+
+model PlatformInquiry {
+  id          String   @id @default(cuid())
+  name        String // prospect organization name
+  contactName String?
+  email       String?
+  phone       String?
+  city        String?
+  message     String?
+  status      String   @default("new") // new | contacted | converted | closed
+  createdAt   DateTime @default(now())
+
+  followUps PlatformInquiryFollowUp[]
+
+  @@index([status])
+}
+
+model PlatformInquiryFollowUp {
+  id        String   @id @default(cuid())
+  inquiryId String
+  inquiry   PlatformInquiry @relation(fields: [inquiryId], references: [id], onDelete: Cascade)
+  note      String
+  createdAt DateTime @default(now())
+}
+
+// ---------- Platform blog posts ----------
+
+model PlatformBlogPost {
+  id          String   @id @default(cuid())
+  title       String
+  slug        String   @unique
+  excerpt     String?
+  body        String?
+  status      String   @default("draft") // draft | published
+  publishedAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 // ---------- Audit trail (every mutation; see src/lib/audit.ts) ----------

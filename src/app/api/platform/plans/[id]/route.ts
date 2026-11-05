@@ -1,7 +1,7 @@
 import { handleError, ok } from '@/lib/api'
 import { db } from '@/lib/db'
 import { logAudit } from '@/lib/audit'
-import { requirePlatformKey } from '@/lib/platform'
+import { requirePlatformKey, planOut, PLAN_FEATURE_KEYS } from '@/lib/platform'
 import { z } from 'zod'
 
 /** PATCH /api/platform/plans/[id] — update fields (undefined = unchanged). */
@@ -17,11 +17,15 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       maxWarehouses: z.number().int().min(0).optional(),
       maxParties: z.number().int().min(0).optional(),
       active: z.boolean().optional(),
+      features: z.array(z.enum(PLAN_FEATURE_KEYS)).optional(),
     })
     const body = schema.parse(await req.json())
-    const plan = await db.plan.update({ where: { id }, data: body })
+    const plan = await db.plan.update({
+      where: { id },
+      data: { ...body, ...(body.features ? { features: body.features.join(',') } : {}) },
+    })
     await logAudit('UPDATE', 'Plan', id, `${plan.name} updated`)
-    return ok(plan)
+    return ok(planOut(plan))
   } catch (e) {
     return handleError(e)
   }

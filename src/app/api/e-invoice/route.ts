@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { handleError, ok } from '@/lib/api'
 import { logAudit } from '@/lib/audit'
-import { assertCompanyAccess } from '@/lib/platform'
+import { assertCompanyAccess, assertFeature } from '@/lib/platform'
 import {
   buildEInvoice,
   eInvoiceFileName,
@@ -23,6 +23,7 @@ import {
 export async function GET(req: Request) {
   try {
     await assertCompanyAccess()
+    await assertFeature('exportData')
     const sp = new URL(req.url).searchParams
     const id = sp.get('id') ?? ''
     const from = sp.get('from') ?? ''

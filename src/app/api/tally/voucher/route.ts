@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { handleError, ok } from '@/lib/api'
 import { db } from '@/lib/db'
 import { logAudit } from '@/lib/audit'
+import { assertFeature } from '@/lib/platform'
 import {
   getCompany,
   loadInvoiceVoucher,
@@ -18,6 +19,7 @@ import {
  */
 export async function GET(req: Request) {
   try {
+    await assertFeature('exportData')
     const sp = new URL(req.url).searchParams
     const doc = (sp.get('doc') ?? 'SALES').toUpperCase() as TallyDocKind
     const id = sp.get('id') ?? ''

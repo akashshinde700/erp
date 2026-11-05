@@ -1,10 +1,10 @@
 import { handleError, ok, fail } from '@/lib/api'
 import { db } from '@/lib/db'
 import { logAudit } from '@/lib/audit'
-import { ensurePlans, requirePlatformKey } from '@/lib/platform'
+import { ensurePlans, planOut, requirePlatformKey, PLAN_FEATURE_KEYS } from '@/lib/platform'
 import { z } from 'zod'
 
-/** GET /api/platform/plans — list with org counts. */
+/** GET /api/platform/plans — list with org counts (features as array). */
 export async function GET(req: Request) {
   try {
     requirePlatformKey(req)
@@ -13,7 +13,7 @@ export async function GET(req: Request) {
       orderBy: { priceMonthly: 'asc' },
       include: { _count: { select: { companies: true } } },
     })
-    return ok(plans)
+    return ok(plans.map(planOut))
   } catch (e) {
     return handleError(e)
   }
@@ -27,6 +27,7 @@ const planSchema = z.object({
   maxWarehouses: z.number().int().min(0).default(0),
   maxParties: z.number().int().min(0).default(0),
   active: z.boolean().default(true),
+  features: z.array(z.enum(PLAN_FEATURE_KEYS)).default([...PLAN_FEATURE_KEYS]),
 })
 
 /** POST /api/platform/plans — create. */
@@ -34,9 +35,11 @@ export async function POST(req: Request) {
   try {
     requirePlatformKey(req)
     const body = planSchema.parse(await req.json())
-    const plan = await db.plan.create({ data: body })
-    await logAudit('CREATE', 'Plan', plan.id, `${plan.name} ₹${plan.priceMonthly}/mo`)
-    return ok(plan)
+    const plan = await db.plan.create({
+      data: { ...body, features: body.features.join(',') },
+    })
+    await logAudit('CREATE', 'Plan', plan.id, `${plan.name} ₹${plan.priceMonthly}/mo · features: ${plan.features || 'none'}`)
+    return ok(planOut(plan))
   } catch (e) {
     return handleError(e)
   }

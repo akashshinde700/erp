@@ -22,6 +22,54 @@ export const PLATFORM_KEY = process.env.PLATFORM_ADMIN_KEY ?? 'forge-admin'
 
 export type LimitKind = 'items' | 'warehouses' | 'parties'
 
+/**
+ * Feature keys a plan can toggle — ONLY keys with real enforcement in this
+ * runtime are catalogued (assertFeature gates the routes below). Plans store
+ * the enabled subset as CSV on Plan.features.
+ *
+ *  - exportData       → Tally XML/JSON exports + e-Invoice IRP JSON downloads
+ *  - advancedReports  → /api/reports (GST returns, trial balance, P&L …)
+ */
+export const PLAN_FEATURES = [
+  { key: 'exportData', label: 'Data export', hint: 'Tally XML & e-Invoice JSON' },
+  { key: 'advancedReports', label: 'Advanced reports', hint: 'GST returns, trial balance, P&L' },
+] as const
+
+export type PlanFeatureKey = (typeof PLAN_FEATURES)[number]['key']
+
+/** Zod-usable tuple of every valid feature key. */
+export const PLAN_FEATURE_KEYS = PLAN_FEATURES.map((f) => f.key) as [PlanFeatureKey, ...PlanFeatureKey[]]
+
+/** Plan row → API shape (features CSV → array). */
+export function planOut<T extends { features: string }>(plan: T): Omit<T, 'features'> & { features: string[] } {
+  const { features, ...rest } = plan
+  return { ...rest, features: [...planFeatures(features)] }
+}
+
+/** Parse a Plan.features CSV into a Set (missing/blank → empty). */
+export function planFeatures(featuresCsv: string | null | undefined): Set<string> {
+  return new Set(
+    (featuresCsv ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+  )
+}
+
+/**
+ * Guard for plan-gated features on the OPERATING org. Throws 403 when the
+ * org's plan explicitly lacks the feature. No plan (or platform org) = every
+ * feature included — matches the effectiveLimits model.
+ */
+export async function assertFeature(feature: PlanFeatureKey): Promise<void> {
+  const org = await operatingCompany()
+  if (!org || org.isPlatform || !org.plan) return
+  const enabled = planFeatures(org.plan.features)
+  if (!enabled.has(feature)) {
+    throw new BusinessError(`The ${org.plan.name} plan does not include ${feature}. Enable it in Platform Admin.`, 403)
+  }
+}
+
 export function platformKeyOk(req: Request): boolean {
   const key = req.headers.get('x-platform-key') ?? ''
   return key.length > 0 && key === PLATFORM_KEY

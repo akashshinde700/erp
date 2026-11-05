@@ -44,4 +44,35 @@ Verdict: **ADOPT** (implement in target) · **ADAPT** (simplified/contextualized
 - gst-billing: tax logic duplicated engine↔screens — we have ONE pure engine used by UI and API.
 
 ## Reference technology vs target stack
-Target is fixed: **Next.js 16 + TypeScript + Prisma/SQLite + shadcn/ui** (mission rule: don't change target stack because references differ). ERPNext is Python/Frappe, GST Billing is React/JSON-store — only *ideas* port. Laserp is same-stack but **unlicensed** — patterns only, no code copying.
+Target is fixed: **Next.js 16 + TypeScript + Prisma/SQLite + shadcn/ui** (mission rule: don't change target stack because references differ). ERPNext is Python/Frappe, GST Billing is React/JSON-store — only *ideas* port. Laserp is same-stack but **unlicensed** — patterns only, no code copying. erpnashilk is laserp's production-evolved sibling (same author, same stack, MySQL, 54 models) — **also unlicensed → patterns only, no code copying**. Mapsoft ERP (demo.mapsofterp.in) is a live proprietary commercial product — UX inspiration only.
+
+---
+
+## Addendum (2026-11): erpnashilk + Mapsoft ERP — new comparison rows
+
+erpnashilk was 404 during the original matrix (row set fixed above); it became public afterwards. New findings vs the original matrix (laserp column ≈ erpnashilk baseline since they share the skeleton — only deltas listed):
+
+| # | Feature | erpnashilk (vs laserp baseline) | Mapsoft ERP demo | Verdict for target |
+|---|---|---|---|---|
+| A1 | Paisa-exact bill math (integer paise + largest-remainder discount spread) | **F** (`computeBillTotals`, erp-helpers.ts:414) | F (commercial) | **ADOPT** — upgrades our r2-only `erp.ts` line math; kills 1-paisa GSTR-1 drift |
+| A2 | Bill-level charges: freight/packing as taxable lines + round-off | **F** | P | **ADOPT** — common Indian invoice requirement |
+| A3 | GSTR-1 JSON in GSTN offline-tool format (b2b/b2cl/b2cs/cdnr/hsn) | **F** | P (GST=HSN master + e-Invoicing menu) | **ADAPT** — roadmap P2 (we already have summary buckets) |
+| A4 | e-Invoice IRP bulk-upload JSON v1.1 + pre-validation | **F** (`einvoice.ts`) | F (IRN Status column per invoice) | **ADAPT** — roadmap P3 |
+| A5 | Cheque lifecycle (pending→deposited→cleared/bounced) + clearing-date accounting | **F** | F (Vouchers) | **ADOPT** — fits our Payments module |
+| A6 | Customer advances + return credits applied to invoices (row-locked, no money moves) | **F** (`credit-apply.ts`) | F | **ADOPT** — roadmap P2 |
+| A7 | Negative-cash refusal + duplicate-payment detection | **F** (409 + admin override) | N/V | **ADOPT** |
+| A8 | Idempotency-Key table on money endpoints | **F** | X | **ADAPT** — strong pattern; our scale may not need it yet |
+| A9 | QC-gated GRN (only accepted qty stocks; append-only corrections) | **F** | P | **ADAPT** — roadmap P3 |
+| A10 | BOM backflush on production posting | **F** | F (Raw-material grid) | **ADAPT** — internal-production pattern; our Jobwork chain instead consumes materials via job cards |
+| A11 | Cost rate captured on outward stock moves (sales-return costing) | **F** (`costRate` on StockLedger) | F | **ADOPT** — when we add sales returns |
+| A12 | Batch FEFO + serial/IMEI registry | **F** | P | **ADAPT** — roadmap P3 |
+| A13 | Vyapar backup import (.vyb/.vyp with hand-written SQLite reader) | **F** | N | **AVOID (now)** — nice migration story, not our scope |
+| A14 | Tally voucher/master export + read-only connector PoC | **F** | N | **AVOID (now)** — roadmap P4 |
+| A15 | Multi-tenant SaaS (plans, limits, suspend, tenant backup/restore) | **F** | F | **AVOID** — single-company target (mission rule) |
+| A16 | Double-entry GL | **N — still document-derived** | **F** (Chart of Accounts, GRNI clearing acct) | **ADOPT (already ours)** — our differentiator vs both repos; Mapsoft's GRNI clearing pattern noted for P2 accrual |
+| A17 | Jobwork (outsource) chain Inward→JobCard→Certificate→Invoice | **N — internal production only** | **N — Manufacturing Batches + Material Requests only** | **BUILD (already ours)** — user-unique requirement; now confirmed absent from ALL 4 repos + both demos |
+| A18 | Dashboard "Attention Required / Pending Actions" panels | P (KPI cards + low-stock) | **F** (overdue bills/invoices, approval queues) | **ADOPT** — high-value low-effort dashboard upgrade |
+| A19 | Public invoice share link (token, QR, no login) | **F** | P (Email status) | **ADAPT** — roadmap P3 |
+| A20 | Money as Float with documented-but-unapplied Decimal plan | **F (weakness)** | F (commercial) | **AVOID their fate** — keep our decimal-safe approach; document the drift risk |
+
+**Mapsoft ERP module breadth NOT to chase** (out of scope for target): CRM/Leads/Deals, Project management/Phases/Timesheets, HRMS (Leaves/Attendance), Services (Service Calls), POS, e-Way Bills, TDS, multi-currency, RFQs, Back Orders, Product Requisitions, Store Consumption, 18-module accordion sidebar. These are noted as commercial-UX inspiration only.

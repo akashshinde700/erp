@@ -1,0 +1,1287 @@
+     1→// ============================================================
+     2→// ManuFlow ERP — Multi-tenant Manufacturing SaaS ERP
+     3→// MySQL / Prisma schema (String-based status constants)
+     4→// ============================================================
+     5→
+     6→generator client {
+     7→  provider = "prisma-client-js"
+     8→}
+     9→
+    10→datasource db {
+    11→  provider = "mysql"
+    12→  url      = env("DATABASE_URL")
+    13→}
+    14→
+    15→// ---------------- Tenant / Org ----------------
+    16→
+    17→model Company {
+    18→  id           String   @id @default(cuid())
+    19→  name         String
+    20→  gstin        String?
+    21→  pan          String?
+    22→  addressLine  String? @db.Text
+    23→  city         String?
+    24→  state        String?
+    25→  stateCode    String? // GST state code e.g. "27" MH, "24" GJ
+    26→  phone        String?
+    27→  email        String?
+    28→  logoText     String?
+    29→  bankAccountName   String? // bank details for invoice print
+    30→  bankAccountNumber String?
+    31→  bankIfsc          String?
+    32→  bankUpiId         String?
+    33→  bankName          String?
+    34→  bankBranch        String?
+    35→  pincode           String?
+    36→  invoiceTerms      String?  @db.Text // printed on tax invoices
+    37→  quotationTerms    String?  @db.Text // default terms on new quotations
+    38→  logoImage         String?  @db.MediumText // data: URL (PNG/JPG), printed on documents
+    39→  signatureImage    String?  @db.MediumText // data: URL, "Authorised signatory" on invoices
+    40→  roundOffTotals    Boolean  @default(true)  // round invoice / bill totals to the rupee
+    41→  docPrefixes       String?  @db.Text        // JSON { INV: "SI", PINV: "PB", ... } overrides of default prefixes
+    42→  // ---- Tally export: names must match the Tally company exactly (Tally never creates masters) ----
+    43→  tallyCompanyName     String? // SVCURRENTCOMPANY sent in the import envelope
+    44→  tallySalesLedger     String?
+    45→  tallyCgstLedger      String?
+    46→  tallySgstLedger      String?
+    47→  tallyIgstLedger      String?
+    48→  tallyFreightLedger   String?
+    49→  tallyRoundOffLedger  String?
+    50→  lockEnabled       Boolean  @default(false) // PIN needed to edit / cancel / delete saved documents
+    51→  lockPinHash       String?
+    52→  // Go-live (cutover) date: the first day the books are kept in ManuFlow. Imported opening figures are
+    53→  // dated just before it (src/lib/go-live.ts). Locked once opening stock has been imported against it.
+    54→  goLiveDate        DateTime?
+    55→
+    56→  // ---- Subscription (managed from /platform-admin) ----
+    57→  isPlatform    Boolean   @default(false) // the platform operator's own company (not a customer org)
+    58→  slug          String?   @unique
+    59→  planId        String?
+    60→  status        String    @default("ACTIVE") // ACTIVE|SUSPENDED
+    61→  billingCycle  String    @default("MONTHLY") // MONTHLY|YEARLY
+    62→  paidUntil     DateTime?
+    63→  trialEndsAt   DateTime?
+    64→  // Per-org limit overrides ("Customize plan"); null = use the plan's limit
+    65→  maxUsers      Int?
+    66→  maxWarehouses Int?
+    67→  maxItems      Int?
+    68→
+    69→  createdAt    DateTime @default(now())
+    70→  updatedAt    DateTime @updatedAt
+    71→
+    72→  plan         Plan?    @relation(fields: [planId], references: [id])
+    73→  items        Item[]
+    74→  customers    Customer[]
+    75→  suppliers    Supplier[]
+    76→  warehouses   Warehouse[]
+    77→  machines     Machine[]
+    78→  users        User[]
+    79→  plants       Plant[]
+    80→}
+    81→
+    82→// Subscription plan offered to customer organizations. Limits: 0 = unlimited.
+    83→model Plan {
+    84→  id            String   @id @default(cuid())
+    85→  name          String   @unique
+    86→  priceMonthly  Float    @default(0)
+    87→  priceYearly   Float    @default(0)
+    88→  maxUsers      Int      @default(0)
+    89→  maxWarehouses Int      @default(0)
+    90→  maxItems      Int      @default(0)
+    91→  active        Boolean  @default(true)
+    92→  createdAt     DateTime @default(now())
+    93→  updatedAt     DateTime @updatedAt
+    94→
+    95→  companies     Company[]
+    96→}
+    97→
+    98→model Plant {
+    99→  id        String   @id @default(cuid())
+   100→  companyId String
+   101→  code      String
+   102→  name      String
+   103→  address   String? @db.Text
+   104→  city      String?
+   105→  createdAt DateTime @default(now())
+   106→
+   107→  company   Company  @relation(fields: [companyId], references: [id])
+   108→}
+   109→
+   110→model User {
+   111→  id        String   @id @default(cuid())
+   112→  companyId String
+   113→  name      String
+   114→  email     String
+   115→  phone     String?
+   116→  role      String   @default("VIEWER") // SUPER_ADMIN|TENANT_ADMIN|MANAGEMENT|PLANT_MANAGER|PRODUCTION_MANAGER|PRODUCTION_SUPERVISOR|OPERATOR|PURCHASE_MANAGER|PURCHASE_EXECUTIVE|SALES_MANAGER|SALES_EXECUTIVE|STORE_MANAGER|STORE_OPERATOR|QUALITY_MANAGER|QC_INSPECTOR|ACCOUNTS_MANAGER|ACCOUNTANT|MAINTENANCE_MANAGER|DISPATCH_MANAGER|VIEWER
+   117→  passwordHash String? // scrypt "salt:hash" — null falls back to demo password 'demo1234' at login
+   118→  active    Boolean  @default(true)
+   119→  createdAt DateTime @default(now())
+   120→  updatedAt DateTime @updatedAt
+   121→
+   122→  company   Company  @relation(fields: [companyId], references: [id])
+   123→
+   124→  @@unique([companyId, email])
+   125→}
+   126→
+   127→// ---------------- Masters ----------------
+   128→
+   129→model Item {
+   130→  id            String   @id @default(cuid())
+   131→  companyId     String
+   132→  code          String
+   133→  name          String
+   134→  type          String   @default("RAW") // RAW|SEMI|FINISHED|CONSUMABLE|SERVICE
+   135→  category      String?
+   136→  uom           String   @default("NOS")
+   137→  hsn           String?
+   138→  gstRate       Float    @default(18)
+   139→  batchTracked  Boolean  @default(false)
+   140→  reorderLevel  Float    @default(0)
+   141→  minStock      Float    @default(0)
+   142→  maxStock      Float?
+   143→  purchasePrice Float    @default(0)
+   144→  sellingPrice  Float    @default(0)
+   145→  standardCost  Float    @default(0)
+   146→  description   String? @db.Text
+   147→  status        String   @default("ACTIVE") // ACTIVE|INACTIVE
+   148→  brand         String?
+   149→  partNo        String?  // manufacturer / drawing part number
+   150→  barcode       String?
+   151→  leadTimeDays  Int?     // purchase lead time, used for planning
+   152→  altUom        String?  // secondary unit, e.g. BOX
+   153→  altFactor     Float?   // 1 altUom = altFactor base units (1 BOX = 24 PCS)
+   154→  mrp           Float?
+   155→  priceIncludesTax Boolean @default(false) // selling price entered incl. GST
+   156→  rack          String?  // storage location / rack
+   157→  cessRate      Float    @default(0)
+   158→  trackSerial   Boolean  @default(false) // serial / IMEI per unit
+   159→  variantOf     String?  // parent item id for size/colour variants
+   160→  variantAttrs  String?  @db.Text // JSON { size: "M", color: "Red" }
+   161→  createdAt     DateTime @default(now())
+   162→  updatedAt     DateTime @updatedAt
+   163→
+   164→  company       Company  @relation(fields: [companyId], references: [id])
+   165→  balances      StockBalance[]
+   166→  ledger        StockLedger[]
+   167→
+   168→  @@unique([companyId, code])
+   169→  @@index([companyId, type])
+   170→}
+   171→
+   172→model Customer {
+   173→  id               String   @id @default(cuid())
+   174→  companyId        String
+   175→  code             String
+   176→  name             String
+   177→  gstin            String?
+   178→  tallyLedgerName  String? // ledger name in Tally, when it differs from the customer name
+   179→  contactPerson    String?
+   180→  phone            String?
+   181→  email            String?
+   182→  addressLine      String? @db.Text
+   183→  city             String?
+   184→  state            String?
+   185→  stateCode        String? // for IGST/CGST-SGST decision
+   186→  paymentTermsDays Int      @default(30)
+   187→  creditLimit      Float    @default(0)
+   188→  status           String   @default("ACTIVE")
+   189→  // ---- Party profile (shared shape with Customer/Supplier) ----
+   190→  nickName         String?
+   191→  altPhone         String?
+   192→  pan              String?
+   193→  addressLine2     String? @db.Text
+   194→  pincode          String?
+   195→  country          String   @default("India")
+   196→  bankIfsc         String?
+   197→  bankName         String?
+   198→  bankAccountNo    String?
+   199→  bankBranch       String?
+   200→  openingBalance   Float    @default(0) // carried forward: customer = they owe us, supplier = we owe them
+   201→  notes            String?  @db.Text
+   202→  // "Both" party: the linked Supplier record for the same business (profile fields kept in sync)
+   203→  supplierId       String?  @unique
+   204→  gstType          String   @default("UNREGISTERED") // REGULAR|COMPOSITION|UNREGISTERED|CONSUMER|OVERSEAS|SEZ
+   205→  shippingAddress  String?  @db.Text
+   206→  createdAt        DateTime @default(now())
+   207→  updatedAt        DateTime @updatedAt
+   208→
+   209→  company          Company  @relation(fields: [companyId], references: [id])
+   210→  supplier         Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+   211→  salesOrders      SalesOrder[]
+   212→  salesInvoices    SalesInvoice[]
+   213→  quotations       Quotation[]
+   214→
+   215→  @@unique([companyId, code])
+   216→}
+   217→
+   218→model Supplier {
+   219→  id               String   @id @default(cuid())
+   220→  companyId        String
+   221→  code             String
+   222→  name             String
+   223→  gstin            String?
+   224→  tallyLedgerName  String? // ledger name in Tally, when it differs from the customer name
+   225→  contactPerson    String?
+   226→  phone            String?
+   227→  email            String?
+   228→  addressLine      String? @db.Text
+   229→  city             String?
+   230→  state            String?
+   231→  stateCode        String?
+   232→  paymentTermsDays Int      @default(30)
+   233→  creditLimit      Float    @default(0)
+   234→  status           String   @default("ACTIVE")
+   235→  // ---- Party profile (shared shape with Customer/Supplier) ----
+   236→  nickName         String?
+   237→  altPhone         String?
+   238→  pan              String?
+   239→  addressLine2     String? @db.Text
+   240→  pincode          String?
+   241→  country          String   @default("India")
+   242→  bankIfsc         String?
+   243→  bankName         String?
+   244→  bankAccountNo    String?
+   245→  bankBranch       String?
+   246→  openingBalance   Float    @default(0) // carried forward: customer = they owe us, supplier = we owe them
+   247→  notes            String?  @db.Text
+   248→  gstType          String   @default("UNREGISTERED") // REGULAR|COMPOSITION|UNREGISTERED|CONSUMER|OVERSEAS|SEZ
+   249→  shippingAddress  String?  @db.Text
+   250→  createdAt        DateTime @default(now())
+   251→  updatedAt        DateTime @updatedAt
+   252→
+   253→  company          Company  @relation(fields: [companyId], references: [id])
+   254→  customer         Customer?
+   255→  purchaseOrders   PurchaseOrder[]
+   256→  purchaseInvoices PurchaseInvoice[]
+   257→
+   258→  @@unique([companyId, code])
+   259→}
+   260→
+   261→model Warehouse {
+   262→  id        String   @id @default(cuid())
+   263→  companyId String
+   264→  code      String
+   265→  name      String
+   266→  type      String   @default("GENERAL") // RM|FG|GENERAL|SCRAP
+   267→  location  String?
+   268→  address   String? @db.Text
+   269→  inCharge  String?
+   270→  createdAt DateTime @default(now())
+   271→
+   272→  company   Company  @relation(fields: [companyId], references: [id])
+   273→
+   274→  @@unique([companyId, code])
+   275→}
+   276→
+   277→model Machine {
+   278→  id             String   @id @default(cuid())
+   279→  companyId      String
+   280→  code           String
+   281→  name           String
+   282→  workCenter     String?
+   283→  capacityPerDay Float    @default(0)
+   284→  status         String   @default("RUNNING") // RUNNING|IDLE|MAINTENANCE|BREAKDOWN
+   285→  hourlyRate     Float    @default(0)
+   286→  notes          String? @db.Text
+   287→  make            String?
+   288→  model           String?
+   289→  serialNo        String?
+   290→  purchaseDate    DateTime?
+   291→  lastServiceDate DateTime?
+   292→  nextServiceDate DateTime?
+   293→  serviceIntervalDays Int?
+   294→  createdAt      DateTime @default(now())
+   295→  updatedAt      DateTime @updatedAt
+   296→
+   297→  company        Company  @relation(fields: [companyId], references: [id])
+   298→
+   299→  @@unique([companyId, code])
+   300→}
+   301→
+   302→// ---------------- BOM / Routing ----------------
+   303→
+   304→model Bom {
+   305→  id           String   @id @default(cuid())
+   306→  companyId    String
+   307→  code         String
+   308→  outputItemId String
+   309→  outputQty    Float    @default(1)
+   310→  version      String   @default("V1")
+   311→  scrapPct     Float    @default(0)
+   312→  status       String   @default("ACTIVE") // DRAFT|ACTIVE|RETIRED
+   313→  notes        String? @db.Text
+   314→  createdAt    DateTime @default(now())
+   315→  updatedAt    DateTime @updatedAt
+   316→
+   317→  items        BomItem[]
+   318→
+   319→  @@unique([companyId, code])
+   320→}
+   321→
+   322→model BomItem {
+   323→  id       String @id @default(cuid())
+   324→  bomId    String
+   325→  itemId   String
+   326→  qty      Float
+   327→  scrapPct Float  @default(0)
+   328→
+   329→  bom      Bom    @relation(fields: [bomId], references: [id], onDelete: Cascade)
+   330→}
+   331→
+   332→// ---------------- Sales ----------------
+   333→
+   334→model Enquiry {
+   335→  id          String   @id @default(cuid())
+   336→  companyId   String
+   337→  number      String
+   338→  customerId  String
+   339→  date        DateTime
+   340→  contactName String?
+   341→  source      String?  // WALK_IN|PHONE|WEB|REFERRAL
+   342→  notes       String? @db.Text
+   343→  status      String   @default("OPEN") // OPEN|QUOTED|WON|LOST|CLOSED
+   344→  requiredBy    DateTime?
+   345→  expectedValue Float?
+   346→  createdAt   DateTime @default(now())
+   347→  updatedAt   DateTime @updatedAt
+   348→
+   349→  items       EnquiryItem[]
+   350→  quotations  Quotation[]
+   351→
+   352→  @@unique([companyId, number])
+   353→  @@index([companyId, status])
+   354→  @@index([companyId, customerId])
+   355→}
+   356→
+   357→model EnquiryItem {
+   358→  id        String  @id @default(cuid())
+   359→  enquiryId String
+   360→  itemId    String
+   361→  qty       Float
+   362→  notes     String? @db.Text
+   363→
+   364→  enquiry   Enquiry @relation(fields: [enquiryId], references: [id], onDelete: Cascade)
+   365→}
+   366→
+   367→model Quotation {
+   368→  id            String    @id @default(cuid())
+   369→  companyId     String
+   370→  number        String
+   371→  enquiryId     String?
+   372→  customerId    String
+   373→  date          DateTime
+   374→  validUntil    DateTime?
+   375→  status        String    @default("DRAFT") // DRAFT|SENT|APPROVED|REJECTED|CONVERTED|CANCELLED
+   376→  subtotal      Float     @default(0)
+   377→  discountTotal Float     @default(0)
+   378→  cgst          Float     @default(0)
+   379→  sgst          Float     @default(0)
+   380→  igst          Float     @default(0)
+   381→  grandTotal    Float     @default(0)
+   382→  notes         String? @db.Text
+   383→  kindAttn      String?
+   384→  paymentTerms  String?
+   385→  deliveryTerms String?
+   386→  terms         String?   @db.Text
+   387→  createdAt     DateTime  @default(now())
+   388→  updatedAt     DateTime  @updatedAt
+   389→
+   390→  customer      Customer  @relation(fields: [customerId], references: [id])
+   391→  enquiry       Enquiry?  @relation(fields: [enquiryId], references: [id])
+   392→  items         QuotationItem[]
+   393→
+   394→  @@unique([companyId, number])
+   395→  @@index([companyId, status])
+   396→  @@index([companyId, customerId])
+   397→}
+   398→
+   399→model QuotationItem {
+   400→  id          String    @id @default(cuid())
+   401→  quotationId String
+   402→  itemId      String
+   403→  qty         Float
+   404→  rate        Float
+   405→  discountPct Float     @default(0)
+   406→  gstRate     Float     @default(18)
+   407→  lineTotal   Float     @default(0)
+   408→
+   409→  quotation   Quotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+   410→}
+   411→
+   412→model SalesOrder {
+   413→  id             String    @id @default(cuid())
+   414→  companyId      String
+   415→  number         String
+   416→  quotationId    String?
+   417→  customerId     String
+   418→  orderDate      DateTime
+   419→  deliveryDate   DateTime?
+   420→  status         String    @default("DRAFT") // DRAFT|CONFIRMED|IN_PRODUCTION|READY|PARTIALLY_DISPATCHED|DISPATCHED|COMPLETED|CANCELLED
+   421→  subtotal       Float     @default(0)
+   422→  discountTotal  Float     @default(0)
+   423→  cgst           Float     @default(0)
+   424→  sgst           Float     @default(0)
+   425→  igst           Float     @default(0)
+   426→  grandTotal     Float     @default(0)
+   427→  notes          String? @db.Text
+   428→  customerPoNo    String?
+   429→  customerPoDate  DateTime?
+   430→  paymentTerms    String?
+   431→  deliveryTerms   String?
+   432→  shippingAddress String?   @db.Text
+   433→  createdAt      DateTime  @default(now())
+   434→  updatedAt      DateTime  @updatedAt
+   435→
+   436→  customer       Customer  @relation(fields: [customerId], references: [id])
+   437→  items          SalesOrderItem[]
+   438→  workOrders     WorkOrder[]
+   439→  deliveries     DeliveryChallan[]
+   440→  invoices       SalesInvoice[]
+   441→
+   442→  @@unique([companyId, number])
+   443→  @@index([companyId, status])
+   444→  @@index([companyId, customerId])
+   445→  @@index([companyId, orderDate])
+   446→}
+   447→
+   448→model SalesOrderItem {
+   449→  id            String      @id @default(cuid())
+   450→  salesOrderId  String
+   451→  itemId        String
+   452→  qty           Float
+   453→  rate          Float
+   454→  discountPct   Float       @default(0)
+   455→  gstRate       Float       @default(18)
+   456→  lineTotal     Float       @default(0)
+   457→  dispatchedQty Float       @default(0)
+   458→  invoicedQty   Float       @default(0)
+   459→
+   460→  salesOrder    SalesOrder  @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+   461→}
+   462→
+   463→model DeliveryChallan {
+   464→  id            String      @id @default(cuid())
+   465→  companyId     String
+   466→  number        String
+   467→  salesOrderId  String
+   468→  warehouseId   String
+   469→  date          DateTime
+   470→  vehicleNo     String?
+   471→  transporter   String?
+   472→  ewayBillNo    String?
+   473→  status        String      @default("DRAFT") // DRAFT|DISPATCHED|CANCELLED
+   474→  notes         String? @db.Text
+   475→  lrNo            String?   // transporter LR / GR number
+   476→  lrDate          DateTime?
+   477→  shippingAddress String?   @db.Text
+   478→  driverPhone     String?
+   479→  createdAt     DateTime    @default(now())
+   480→  updatedAt     DateTime    @updatedAt
+   481→
+   482→  salesOrder    SalesOrder  @relation(fields: [salesOrderId], references: [id])
+   483→  items         DeliveryChallanItem[]
+   484→
+   485→  @@unique([companyId, number])
+   486→  @@index([companyId, status])
+   487→  @@index([companyId, date])
+   488→}
+   489→
+   490→model DeliveryChallanItem {
+   491→  id              String          @id @default(cuid())
+   492→  challanId       String
+   493→  salesOrderItemId String?
+   494→  itemId          String
+   495→  qty             Float
+   496→
+   497→  batchNo   String?
+   498→  serials   String?     @db.Text
+   499→  challan         DeliveryChallan @relation(fields: [challanId], references: [id], onDelete: Cascade)
+   500→}
+   501→
+   502→model SalesInvoice {
+   503→  id            String    @id @default(cuid())
+   504→  companyId     String
+   505→  number        String
+   506→  salesOrderId  String?
+   507→  challanId     String?
+   508→  customerId    String
+   509→  date          DateTime
+   510→  dueDate       DateTime?
+   511→  placeOfSupply String?
+   512→  isInterState  Boolean   @default(false)
+   513→  subtotal      Float     @default(0)
+   514→  discountTotal Float     @default(0)
+   515→  cgst          Float     @default(0)
+   516→  sgst          Float     @default(0)
+   517→  igst          Float     @default(0)
+   518→  grandTotal    Float     @default(0)
+   519→  paidAmount    Float     @default(0)
+   520→  status        String    @default("UNPAID") // UNPAID|PARTIALLY_PAID|PAID|CANCELLED
+   521→  irn           String?
+   522→  ewayBillNo    String?
+   523→  notes         String? @db.Text
+   524→  customerPoNo    String?
+   525→  customerPoDate  DateTime?
+   526→  shippingAddress String?   @db.Text
+   527→  vehicleNo       String?
+   528→  transporter     String?
+   529→  // ---- Bill-level adjustments (Phase 1) ----
+   530→  billDiscount   Float     @default(0) // flat ₹ off the whole bill, applied before GST across lines
+   531→  freightCharge  Float     @default(0)
+   532→  freightGstRate Float     @default(18)
+   533→  packingCharge  Float     @default(0)
+   534→  packingGstRate Float     @default(18)
+   535→  roundOff       Float     @default(0) // + / − paise to make the total a whole rupee
+   536→  isCashSale     Boolean   @default(false)
+   537→  billingName     String?   // printed instead of the party name (e.g. "M/s Sharma Traders")
+   538→  driverPhone     String?
+   539→  deductStock     Boolean   @default(false) // direct / cash sale (no challan): stock went out with this invoice
+   540→  stockWarehouseId String?
+   541→  cess            Float     @default(0)
+   542→  accountId       String?   // where "Received now" money went (Cash & Bank)
+   543→  shareToken      String?   @unique // public share link (WhatsApp / PDF)
+   544→  // ---- GST document options (ported from the free GST billing app) ----
+   545→  docType         String    @default("TAX_INVOICE") // TAX_INVOICE | BILL_OF_SUPPLY | PROFORMA
+   546→  // ---- Tally export (voucher JSON/XML) ----
+   547→  tallyXmlDownloadedAt DateTime? // last time the import file was downloaded
+   548→  tallySentAt          DateTime? // marked as imported into Tally (locks nothing, just records it)
+   549→  reverseCharge   Boolean   @default(false) // GST payable by the recipient (Sec 9(3)/9(4))
+   550→  currency        String    @default("INR") // document currency (ISO-4217)
+   551→  fxRate          Float     @default(1) // 1 unit of `currency` in INR
+   552→  createdAt     DateTime  @default(now())
+   553→  updatedAt     DateTime  @updatedAt
+   554→
+   555→  customer      Customer  @relation(fields: [customerId], references: [id])
+   556→  salesOrder    SalesOrder? @relation(fields: [salesOrderId], references: [id])
+   557→  items         SalesInvoiceItem[]
+   558→
+   559→  @@unique([companyId, number])
+   560→  @@index([companyId, status])
+   561→  @@index([companyId, customerId])
+   562→  @@index([companyId, date])
+   563→}
+   564→
+   565→model SalesInvoiceItem {
+   566→  id        String       @id @default(cuid())
+   567→  invoiceId String
+   568→  itemId    String
+   569→  hsn       String?
+   570→  qty       Float
+   571→  rate      Float
+   572→  discountPct Float      @default(0)
+   573→  gstRate   Float        @default(18)
+   574→  lineTotal Float        @default(0)
+   575→
+   576→  cessRate  Float        @default(0)
+   577→  batchNo   String?
+   578→  serials   String?      @db.Text // newline-separated serial / IMEI numbers
+   579→  invoice   SalesInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+   580→}
+   581→
+   582→// ---------------- Purchase ----------------
+   583→
+   584→model PurchaseRequisition {
+   585→  id          String   @id @default(cuid())
+   586→  companyId   String
+   587→  number      String
+   588→  date        DateTime
+   589→  requiredBy  DateTime?
+   590→  department  String?
+   591→  raisedBy    String?
+   592→  status      String   @default("PENDING") // PENDING|APPROVED|REJECTED|CONVERTED|CLOSED
+   593→  notes       String? @db.Text
+   594→  createdAt   DateTime @default(now())
+   595→  updatedAt   DateTime @updatedAt
+   596→
+   597→  items       PurchaseRequisitionItem[]
+   598→
+   599→  @@unique([companyId, number])
+   600→  @@index([companyId, status])
+   601→}
+   602→
+   603→model PurchaseRequisitionItem {
+   604→  id        String              @id @default(cuid())
+   605→  prId      String
+   606→  itemId    String
+   607→  qty       Float
+   608→  notes     String? @db.Text
+   609→
+   610→  pr        PurchaseRequisition @relation(fields: [prId], references: [id], onDelete: Cascade)
+   611→}
+   612→
+   613→model PurchaseOrder {
+   614→  id             String    @id @default(cuid())
+   615→  companyId      String
+   616→  number         String
+   617→  prId           String?
+   618→  supplierId     String
+   619→  orderDate      DateTime
+   620→  expectedDate   DateTime?
+   621→  status         String    @default("PENDING_APPROVAL") // DRAFT|PENDING_APPROVAL|APPROVED|PARTIALLY_RECEIVED|RECEIVED|INVOICED|CANCELLED
+   622→  subtotal       Float     @default(0)
+   623→  discountTotal  Float     @default(0)
+   624→  cgst           Float     @default(0)
+   625→  sgst           Float     @default(0)
+   626→  igst           Float     @default(0)
+   627→  grandTotal     Float     @default(0)
+   628→  approvedBy     String?
+   629→  approvedAt     DateTime?
+   630→  notes          String? @db.Text
+   631→  paymentTerms   String?
+   632→  deliveryTerms  String?
+   633→  createdAt      DateTime  @default(now())
+   634→  updatedAt      DateTime  @updatedAt
+   635→
+   636→  supplier       Supplier  @relation(fields: [supplierId], references: [id])
+   637→  items          PurchaseOrderItem[]
+   638→  grns           Grn[]
+   639→  invoices       PurchaseInvoice[]
+   640→
+   641→  @@unique([companyId, number])
+   642→  @@index([companyId, status])
+   643→  @@index([companyId, supplierId])
+   644→  @@index([companyId, orderDate])
+   645→}
+   646→
+   647→model PurchaseOrderItem {
+   648→  id          String        @id @default(cuid())
+   649→  poId        String
+   650→  itemId      String
+   651→  qty         Float
+   652→  rate        Float
+   653→  gstRate     Float         @default(18)
+   654→  lineTotal   Float         @default(0)
+   655→  receivedQty Float         @default(0)
+   656→
+   657→  po          PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+   658→}
+   659→
+   660→model Grn {
+   661→  id          String   @id @default(cuid())
+   662→  companyId   String
+   663→  number      String
+   664→  poId        String
+   665→  warehouseId String
+   666→  date        DateTime
+   667→  supplierInvNo String?
+   668→  status      String   @default("PENDING_QC") // PENDING_QC|QC_COMPLETED|PARTIALLY_ACCEPTED|POSTED|CANCELLED
+   669→  notes       String? @db.Text
+   670→  supplierInvDate   DateTime?
+   671→  supplierChallanNo String?
+   672→  vehicleNo         String?
+   673→  createdAt   DateTime @default(now())
+   674→  updatedAt   DateTime @updatedAt
+   675→
+   676→  po          PurchaseOrder @relation(fields: [poId], references: [id])
+   677→  items       GrnItem[]
+   678→
+   679→  @@unique([companyId, number])
+   680→  @@index([companyId, status])
+   681→  @@index([companyId, date])
+   682→}
+   683→
+   684→model GrnItem {
+   685→  id          String @id @default(cuid())
+   686→  grnId       String
+   687→  poItemId    String?
+   688→  itemId      String
+   689→  orderedQty  Float
+   690→  receivedQty Float
+   691→  acceptedQty Float  @default(0)
+   692→  rejectedQty Float  @default(0)
+   693→  qcStatus    String @default("PENDING") // PENDING|PASSED|FAILED|PARTIAL
+   694→
+   695→  batchNo   String?
+   696→  mfgDate   DateTime?
+   697→  expiryDate DateTime?
+   698→  serials   String?     @db.Text
+   699→  grn         Grn    @relation(fields: [grnId], references: [id], onDelete: Cascade)
+   700→}
+   701→
+   702→model PurchaseInvoice {
+   703→  id            String    @id @default(cuid())
+   704→  companyId     String
+   705→  number        String
+   706→  poId          String?
+   707→  grnId         String?
+   708→  supplierId    String
+   709→  date          DateTime
+   710→  supplierInvNo String?
+   711→  isInterState  Boolean   @default(false)
+   712→  subtotal      Float     @default(0)
+   713→  discountTotal Float     @default(0)
+   714→  cgst          Float     @default(0)
+   715→  sgst          Float     @default(0)
+   716→  igst          Float     @default(0)
+   717→  grandTotal    Float     @default(0)
+   718→  paidAmount    Float     @default(0)
+   719→  status        String    @default("UNPAID") // UNPAID|PARTIALLY_PAID|PAID|CANCELLED
+   720→  notes         String? @db.Text
+   721→  supplierInvDate DateTime?
+   722→  dueDate         DateTime?
+   723→  // ---- Bill-level adjustments (Phase 1) ----
+   724→  billDiscount   Float     @default(0) // flat ₹ off the whole bill, applied before GST across lines
+   725→  freightCharge  Float     @default(0)
+   726→  freightGstRate Float     @default(18)
+   727→  packingCharge  Float     @default(0)
+   728→  packingGstRate Float     @default(18)
+   729→  roundOff       Float     @default(0) // + / − paise to make the total a whole rupee
+   730→  cess            Float     @default(0)
+   731→  accountId       String?   // where "Paid now" money came from
+   732→  reverseCharge   Boolean   @default(false) // RCM purchase: the company pays the GST (Sec 9(3)/9(4))
+   733→  createdAt     DateTime  @default(now())
+   734→  updatedAt     DateTime  @updatedAt
+   735→
+   736→  supplier      Supplier  @relation(fields: [supplierId], references: [id])
+   737→  po            PurchaseOrder? @relation(fields: [poId], references: [id])
+   738→  items         PurchaseInvoiceItem[]
+   739→
+   740→  @@unique([companyId, number])
+   741→  @@index([companyId, status])
+   742→  @@index([companyId, supplierId])
+   743→  @@index([companyId, date])
+   744→}
+   745→
+   746→model PurchaseInvoiceItem {
+   747→  id        String          @id @default(cuid())
+   748→  invoiceId String
+   749→  itemId    String
+   750→  hsn       String?
+   751→  qty       Float
+   752→  rate      Float
+   753→  gstRate   Float           @default(18)
+   754→  lineTotal Float           @default(0)
+   755→
+   756→  cessRate  Float           @default(0)
+   757→  batchNo   String?
+   758→  mfgDate   DateTime?
+   759→  expiryDate DateTime?
+   760→  serials   String?         @db.Text
+   761→  invoice   PurchaseInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+   762→}
+   763→
+   764→// ---------------- Payments / Finance ----------------
+   765→
+   766→model Payment {
+   767→  id          String   @id @default(cuid())
+   768→  companyId   String
+   769→  number      String
+   770→  type        String // RECEIPT (from customer) | PAYMENT (to supplier)
+   771→  partyType   String   @default("CUSTOMER") // CUSTOMER|SUPPLIER
+   772→  customerId  String?
+   773→  supplierId  String?
+   774→  invoiceType String?  // SALES|PURCHASE
+   775→  invoiceId   String?
+   776→  amount      Float
+   777→  mode        String   @default("NEFT") // CASH|BANK|UPI|CHEQUE|NEFT|RTGS|CREDIT_NOTE|DEBIT_NOTE
+   778→  date        DateTime
+   779→  reference   String?
+   780→  notes       String? @db.Text
+   781→  accountId   String?   // Cash & Bank account
+   782→  // Application rows (no money moves): the source of the credit applied to `invoiceId` — the customer advance
+   783→  // payment (mode ADVANCE_ADJ) or the sales return whose credit is applied to another invoice (mode CREDIT_NOTE)
+   784→  allocatedFromId String?
+   785→  chequeNo    String?
+   786→  chequeDate  DateTime?
+   787→  chequeStatus String?  // PENDING|DEPOSITED|CLEARED|BOUNCED (post-dated cheques)
+   788→  clearedDate DateTime? // bank reconciliation
+   789→  createdAt   DateTime @default(now())
+   790→  updatedAt   DateTime @updatedAt
+   791→
+   792→  @@unique([companyId, number])
+   793→  @@index([companyId, type])
+   794→  @@index([companyId, customerId])
+   795→  @@index([companyId, supplierId])
+   796→  @@index([invoiceId])
+   797→  @@index([companyId, date])
+   798→  @@index([allocatedFromId])
+   799→}
+   800→
+   801→model Expense {
+   802→  id          String   @id @default(cuid())
+   803→  companyId   String
+   804→  number      String
+   805→  date        DateTime
+   806→  category    String   @default("GENERAL") // UTILITIES|FREIGHT|RENT|SALARY|MAINTENANCE|TOOLING|OTHER
+   807→  description String @db.Text
+   808→  amount      Float
+   809→  paymentMode String   @default("CASH")
+   810→  paidTo      String?
+   811→  gstAmount   Float    @default(0)
+   812→  status      String   @default("POSTED") // DRAFT|POSTED|CANCELLED
+   813→  vendorGstin String?
+   814→  billNo      String?
+   815→  billDate    DateTime?
+   816→  itcEligible Boolean  @default(false) // GST input credit can be claimed
+   817→  accountId   String?
+   818→  expenseType String   @default("INDIRECT") // DIRECT (production/freight) | INDIRECT (rent, salary…)
+   819→  clearedDate DateTime?
+   820→  createdAt   DateTime @default(now())
+   821→  updatedAt   DateTime @updatedAt
+   822→
+   823→  @@unique([companyId, number])
+   824→  @@index([companyId, category])
+   825→  @@index([companyId, date])
+   826→}
+   827→
+   828→// ---------------- Manufacturing ----------------
+   829→
+   830→model WorkOrder {
+   831→  id            String    @id @default(cuid())
+   832→  companyId     String
+   833→  number        String
+   834→  itemId        String
+   835→  bomId         String?
+   836→  salesOrderId  String?
+   837→  warehouseId   String
+   838→  plannedQty    Float
+   839→  producedQty   Float     @default(0)
+   840→  rejectedQty   Float     @default(0)
+   841→  scrapQty      Float     @default(0)
+   842→  status        String    @default("PLANNED") // PLANNED|RELEASED|IN_PROGRESS|COMPLETED|CANCELLED
+   843→  startDate     DateTime
+   844→  dueDate       DateTime?
+   845→  priority      String    @default("NORMAL") // NORMAL|HIGH|URGENT
+   846→  notes         String? @db.Text
+   847→  createdAt     DateTime  @default(now())
+   848→  updatedAt     DateTime  @updatedAt
+   849→
+   850→  salesOrder    SalesOrder? @relation(fields: [salesOrderId], references: [id])
+   851→  issues        MaterialIssue[]
+   852→  entries       ProductionEntry[]
+   853→
+   854→  @@unique([companyId, number])
+   855→  @@index([companyId, status])
+   856→  @@index([companyId, itemId])
+   857→  @@index([bomId])
+   858→}
+   859→
+   860→model MaterialIssue {
+   861→  id          String    @id @default(cuid())
+   862→  companyId   String
+   863→  number      String
+   864→  workOrderId String
+   865→  date        DateTime
+   866→  status      String    @default("POSTED") // DRAFT|POSTED|CANCELLED
+   867→  notes       String? @db.Text
+   868→  createdAt   DateTime  @default(now())
+   869→  updatedAt   DateTime  @updatedAt
+   870→
+   871→  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id])
+   872→  items       MaterialIssueItem[]
+   873→
+   874→  @@unique([companyId, number])
+   875→  @@index([companyId, status])
+   876→}
+   877→
+   878→model MaterialIssueItem {
+   879→  id          String        @id @default(cuid())
+   880→  issueId     String
+   881→  itemId      String
+   882→  requiredQty Float
+   883→  issuedQty   Float
+   884→
+   885→  issue       MaterialIssue @relation(fields: [issueId], references: [id], onDelete: Cascade)
+   886→}
+   887→
+   888→model ProductionEntry {
+   889→  id          String    @id @default(cuid())
+   890→  companyId   String
+   891→  workOrderId String
+   892→  date        DateTime
+   893→  producedQty Float
+   894→  rejectedQty Float     @default(0)
+   895→  scrapQty    Float     @default(0)
+   896→  operator    String?
+   897→  downtimeMins Int      @default(0)
+   898→  notes       String? @db.Text
+   899→  createdAt   DateTime  @default(now())
+   900→
+   901→  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id])
+   902→  @@index([companyId, date])
+   903→}
+   904→
+   905→// ---------------- Quality ----------------
+   906→
+   907→model QcInspection {
+   908→  id          String   @id @default(cuid())
+   909→  companyId   String
+   910→  number      String
+   911→  type        String // INCOMING|IN_PROCESS|FINAL
+   912→  refType     String // GRN|WORK_ORDER
+   913→  refId       String
+   914→  refNumber   String?
+   915→  grnItemId   String? // INCOMING inspections: the GRN line this result belongs to (empty on older rows)
+   916→  itemId      String
+   917→  qtyChecked  Float
+   918→  qtyAccepted Float    @default(0)
+   919→  qtyRejected Float    @default(0)
+   920→  parameters  String? @db.Text // JSON: [{name, expected, actual, ok}]
+   921→  status      String   @default("PENDING") // PENDING|PASSED|FAILED|PARTIAL
+   922→  inspector   String?
+   923→  date        DateTime
+   924→  remarks     String? @db.Text
+   925→  createdAt   DateTime @default(now())
+   926→  updatedAt   DateTime @updatedAt
+   927→
+   928→  @@unique([companyId, number])
+   929→  @@index([companyId, status])
+   930→  @@index([refType, refId])
+   931→  @@index([grnItemId])
+   932→}
+   933→
+   934→// ---------------- Inventory ----------------
+   935→
+   936→model StockLedger {
+   937→  id           String   @id @default(cuid())
+   938→  companyId    String
+   939→  date         DateTime
+   940→  itemId       String
+   941→  warehouseId  String
+   942→  type         String // OPENING|GRN_IN|ISSUE_OUT|PRODUCTION_IN|DISPATCH_OUT|TRANSFER_IN|TRANSFER_OUT|ADJUST_IN|ADJUST_OUT|RETURN_IN|QC_REJECT|SALES_RETURN
+   943→  qtyIn        Float    @default(0)
+   944→  qtyOut       Float    @default(0)
+   945→  rate         Float    @default(0)
+   946→  // Outward rows: the weighted-average inventory cost per unit at the moment the stock left (sales returns
+   947→  // re-enter goods at this cost). `rate` on sale rows is the selling price. Null = row written before this field.
+   948→  costRate     Float?
+   949→  refType      String?  // GRN|MATERIAL_ISSUE|WORK_ORDER|DELIVERY|TRANSFER|ADJUSTMENT|OPENING
+   950→  refId        String?
+   951→  refNumber    String?
+   952→  notes        String? @db.Text
+   953→  reasonType   String?  // adjustments: DAMAGE|EXPIRY|THEFT|SAMPLE|CORRECTION|OTHER
+   954→  createdAt    DateTime @default(now())
+   955→
+   956→  item         Item     @relation(fields: [itemId], references: [id])
+   957→
+   958→  @@index([companyId, itemId])
+   959→  @@index([companyId, date])
+   960→  @@index([refType, refId])
+   961→  @@index([companyId, warehouseId])
+   962→}
+   963→
+   964→model StockBalance {
+   965→  id          String @id @default(cuid())
+   966→  companyId   String
+   967→  itemId      String
+   968→  warehouseId String
+   969→  qty         Float  @default(0)
+   970→  avgRate     Float  @default(0)
+   971→
+   972→  item        Item   @relation(fields: [itemId], references: [id])
+   973→
+   974→  @@unique([itemId, warehouseId])
+   975→  @@index([companyId, itemId])
+   976→}
+   977→
+   978→// ---------------- System / Ops ----------------
+   979→
+   980→model AuditLog {
+   981→  id        String   @id @default(cuid())
+   982→  companyId String
+   983→  userName  String?
+   984→  action    String // CREATE|UPDATE|DELETE|APPROVE|REJECT|POST|COMPLETE|CANCEL|LOGIN|CONFIG
+   985→  entity    String
+   986→  entityId  String?
+   987→  details   String? @db.Text
+   988→  createdAt DateTime @default(now())
+   989→
+   990→  @@index([companyId, createdAt])
+   991→}
+   992→
+   993→model Notification {
+   994→  id        String   @id @default(cuid())
+   995→  companyId String
+   996→  title     String
+   997→  message   String? @db.Text
+   998→  level     String   @default("INFO") // INFO|WARNING|CRITICAL
+   999→  read      Boolean  @default(false)
+  1000→  createdAt DateTime @default(now())
+  1001→
+  1002→  @@index([companyId, read])
+  1003→}
+  1004→
+  1005→model NumberSeq {
+  1006→  id            String @id @default(cuid())
+  1007→  companyId     String
+  1008→  docType       String // SO|PO|INV|PINV|GRN|WO|QC|PR|ENQ|QT|DN|MI|RCPT|PYMT|EXP|TRF|ADJ
+  1009→  prefix        String
+  1010→  financialYear String
+  1011→  nextNumber    Int    @default(1)
+  1012→
+  1013→  @@unique([companyId, docType, financialYear])
+  1014→}
+  1015→
+  1016→// Cash & Bank Phase 5: one row per Idempotency-Key a client sent with a money-creating request. The row is
+  1017→// claimed (PENDING) before the business transaction and marked DONE inside it, together with the response that a
+  1018→// retry with the same key gets back. Failed requests remove their row; rows are purged after 7 days.
+  1019→// One change to an already submitted GRN inspection result, with the values before and after. Append-only: the first
+  1020→// row of an inspection holds its original result.
+  1021→model QcCorrection {
+  1022→  id                String   @id @default(cuid())
+  1023→  companyId         String
+  1024→  inspectionId      String
+  1025→  inspectionNumber  String
+  1026→  grnId             String
+  1027→  grnNumber         String?
+  1028→  grnItemId         String?
+  1029→  previousAccepted  Float
+  1030→  previousRejected  Float
+  1031→  previousStatus    String
+  1032→  previousInspector String?
+  1033→  newAccepted       Float
+  1034→  newRejected       Float
+  1035→  newStatus         String
+  1036→  inspectedBy       String
+  1037→  reason            String   @db.Text
+  1038→  correctedByUserId String
+  1039→  correctedBy       String
+  1040→  createdAt         DateTime @default(now())
+  1041→
+  1042→  @@index([companyId, inspectionId])
+  1043→  @@index([grnId])
+  1044→}
+  1045→
+  1046→// Rejected PO quantity that will not be replaced: waived, or settled by a supplier credit note. Append-only.
+  1047→model PurchaseOrderClosure {
+  1048→  id        String   @id @default(cuid())
+  1049→  companyId String
+  1050→  poId      String
+  1051→  poItemId  String
+  1052→  qty       Float
+  1053→  type      String // WAIVED|CREDIT_NOTE
+  1054→  reason    String   @db.Text
+  1055→  reference String?
+  1056→  createdBy String
+  1057→  createdAt DateTime @default(now())
+  1058→
+  1059→  @@index([companyId, poId])
+  1060→  @@index([poItemId])
+  1061→}
+  1062→
+  1063→model IdempotencyKey {
+  1064→  id          String   @id @default(cuid())
+  1065→  companyId   String
+  1066→  key         String   @db.VarChar(100)
+  1067→  userId      String
+  1068→  route       String   @db.VarChar(120)
+  1069→  requestHash String   @db.VarChar(64)
+  1070→  status      String   @default("PENDING") // PENDING | DONE
+  1071→  statusCode  Int?
+  1072→  response    String?  @db.LongText
+  1073→  createdAt   DateTime @default(now())
+  1074→  updatedAt   DateTime @updatedAt
+  1075→
+  1076→  @@unique([companyId, key])
+  1077→  @@index([createdAt])
+  1078→}
+  1079→
+  1080→// ---------------- Returns (Phase 1) ----------------
+  1081→
+  1082→// Sales Return / Credit Note: goods back from a customer against a sales invoice.
+  1083→// Stock comes back in; the credit is adjusted against the invoice (as a CREDIT_NOTE payment).
+  1084→model SalesReturn {
+  1085→  id            String   @id @default(cuid())
+  1086→  companyId     String
+  1087→  number        String
+  1088→  invoiceId     String
+  1089→  customerId    String
+  1090→  warehouseId   String
+  1091→  date          DateTime
+  1092→  reason        String?
+  1093→  isInterState  Boolean  @default(false)
+  1094→  subtotal      Float    @default(0)
+  1095→  cgst          Float    @default(0)
+  1096→  sgst          Float    @default(0)
+  1097→  igst          Float    @default(0)
+  1098→  grandTotal    Float    @default(0)
+  1099→  status        String   @default("POSTED") // POSTED|CANCELLED
+  1100→  notes         String?  @db.Text
+  1101→  createdAt     DateTime @default(now())
+  1102→  updatedAt     DateTime @updatedAt
+  1103→
+  1104→  items         SalesReturnItem[]
+  1105→
+  1106→  @@unique([companyId, number])
+  1107→  @@index([companyId, invoiceId])
+  1108→  @@index([companyId, customerId])
+  1109→  @@index([companyId, date])
+  1110→}
+  1111→
+  1112→model SalesReturnItem {
+  1113→  id             String      @id @default(cuid())
+  1114→  returnId       String
+  1115→  invoiceItemId  String?
+  1116→  itemId         String
+  1117→  qty            Float
+  1118→  rate           Float
+  1119→  gstRate        Float       @default(18)
+  1120→  lineTotal      Float       @default(0)
+  1121→  ret            SalesReturn @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  1122→}
+  1123→
+  1124→// Purchase Return / Debit Note: goods sent back to a supplier against a purchase bill.
+  1125→// Stock goes out; the debit is adjusted against the bill (as a DEBIT_NOTE payment).
+  1126→model PurchaseReturn {
+  1127→  id            String   @id @default(cuid())
+  1128→  companyId     String
+  1129→  number        String
+  1130→  invoiceId     String
+  1131→  supplierId    String
+  1132→  warehouseId   String
+  1133→  date          DateTime
+  1134→  reason        String?
+  1135→  isInterState  Boolean  @default(false)
+  1136→  subtotal      Float    @default(0)
+  1137→  cgst          Float    @default(0)
+  1138→  sgst          Float    @default(0)
+  1139→  igst          Float    @default(0)
+  1140→  grandTotal    Float    @default(0)
+  1141→  status        String   @default("POSTED") // POSTED|CANCELLED
+  1142→  notes         String?  @db.Text
+  1143→  createdAt     DateTime @default(now())
+  1144→  updatedAt     DateTime @updatedAt
+  1145→
+  1146→  items         PurchaseReturnItem[]
+  1147→
+  1148→  @@unique([companyId, number])
+  1149→  @@index([companyId, invoiceId])
+  1150→  @@index([companyId, supplierId])
+  1151→  @@index([companyId, date])
+  1152→}
+  1153→
+  1154→model PurchaseReturnItem {
+  1155→  id             String         @id @default(cuid())
+  1156→  returnId       String
+  1157→  invoiceItemId  String?
+  1158→  itemId         String
+  1159→  qty            Float
+  1160→  rate           Float
+  1161→  gstRate        Float          @default(18)
+  1162→  lineTotal      Float          @default(0)
+  1163→  ret            PurchaseReturn @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  1164→}
+  1165→
+  1166→// ---------------- Cash & Bank (Phase 2) ----------------
+  1167→
+  1168→// A money account: the company's cash box or a bank account. Balance = opening + all money movements.
+  1169→model MoneyAccount {
+  1170→  id             String    @id @default(cuid())
+  1171→  companyId      String
+  1172→  type           String    // CASH | BANK
+  1173→  name           String    // display name, e.g. "Cash in Hand", "SBI Current A/c"
+  1174→  bankName       String?
+  1175→  accountNo      String?
+  1176→  ifsc           String?
+  1177→  branch         String?
+  1178→  upiId          String?
+  1179→  holderName     String?
+  1180→  openingBalance Float     @default(0)
+  1181→  openingDate    DateTime?
+  1182→  printOnInvoice Boolean   @default(false)
+  1183→  isDefault      Boolean   @default(false) // default for its type
+  1184→  active         Boolean   @default(true)
+  1185→  createdAt      DateTime  @default(now())
+  1186→  updatedAt      DateTime  @updatedAt
+  1187→
+  1188→  @@unique([companyId, name])
+  1189→  @@index([companyId, type])
+  1190→}
+  1191→
+  1192→// Money movement that is not a party payment or an expense:
+  1193→// cash/bank adjustments (capital, drawings, other income), contra transfers, loan receipts and EMIs.
+  1194→model AccountTxn {
+  1195→  id            String    @id @default(cuid())
+  1196→  companyId     String
+  1197→  number        String
+  1198→  date          DateTime
+  1199→  type          String    // ADJUST_IN | ADJUST_OUT | CONTRA | LOAN_IN | LOAN_EMI
+  1200→  fromAccountId String?   // money leaves this account
+  1201→  toAccountId   String?   // money enters this account
+  1202→  amount        Float
+  1203→  category      String?   // CAPITAL | DRAWINGS | OTHER_INCOME | OTHER_EXPENSE | OTHER
+  1204→  loanId        String?
+  1205→  principal     Float?    // LOAN_EMI split
+  1206→  interest      Float?
+  1207→  reference     String?
+  1208→  notes         String?   @db.Text
+  1209→  clearedDate   DateTime?
+  1210→  createdAt     DateTime  @default(now())
+  1211→  updatedAt     DateTime  @updatedAt
+  1212→
+  1213→  @@unique([companyId, number])
+  1214→  @@index([companyId, date])
+  1215→  @@index([companyId, loanId])
+  1216→}
+  1217→
+  1218→model Loan {
+  1219→  id                String    @id @default(cuid())
+  1220→  companyId         String
+  1221→  name              String    // e.g. "HDFC Machinery Loan"
+  1222→  lender            String?
+  1223→  loanAccountNo     String?
+  1224→  principal         Float
+  1225→  interestRate      Float     @default(0) // % per year
+  1226→  processingFee     Float     @default(0)
+  1227→  startDate         DateTime
+  1228→  termMonths        Int?
+  1229→  emiAmount         Float?
+  1230→  receivedAccountId String?   // where the loan money was credited
+  1231→  status            String    @default("OPEN") // OPEN | CLOSED
+  1232→  notes             String?   @db.Text
+  1233→  createdAt         DateTime  @default(now())
+  1234→  updatedAt         DateTime  @updatedAt
+  1235→
+  1236→  @@index([companyId, status])
+  1237→}
+  1238→
+  1239→// ---------------- Batch / Serial (Phase 4) ----------------
+  1240→
+  1241→model ItemBatch {
+  1242→  id          String    @id @default(cuid())
+  1243→  companyId   String
+  1244→  itemId      String
+  1245→  warehouseId String
+  1246→  batchNo     String
+  1247→  mfgDate     DateTime?
+  1248→  expiryDate  DateTime?
+  1249→  qty         Float     @default(0)
+  1250→  createdAt   DateTime  @default(now())
+  1251→  updatedAt   DateTime  @updatedAt
+  1252→
+  1253→  @@unique([itemId, warehouseId, batchNo])
+  1254→  @@index([companyId, expiryDate])
+  1255→}
+  1256→
+  1257→model ItemSerial {
+  1258→  id          String    @id @default(cuid())
+  1259→  companyId   String
+  1260→  itemId      String
+  1261→  serialNo    String
+  1262→  status      String    @default("IN_STOCK") // IN_STOCK | SOLD | RETURNED_TO_SUPPLIER
+  1263→  warehouseId String?
+  1264→  inRefType   String?
+  1265→  inRefId     String?
+  1266→  outRefType  String?
+  1267→  outRefId    String?
+  1268→  createdAt   DateTime  @default(now())
+  1269→  updatedAt   DateTime  @updatedAt
+  1270→
+  1271→  @@unique([companyId, itemId, serialNo])
+  1272→  @@index([companyId, status])
+  1273→}
+  1274→
+  1275→// ---------------- Multi-firm (Phase 5) ----------------
+  1276→
+  1277→// Extra companies a login may open (its home company is User.companyId). Same role in every firm.
+  1278→model UserCompanyAccess {
+  1279→  id        String   @id @default(cuid())
+  1280→  userId    String
+  1281→  companyId String
+  1282→  createdAt DateTime @default(now())
+  1283→
+  1284→  @@unique([userId, companyId])
+  1285→  @@index([companyId])
+  1286→}
+  1287→

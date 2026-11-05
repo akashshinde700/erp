@@ -31,7 +31,15 @@
 | G2 | Engine↔screen drift risk (single app, but print code re-derives totals in places) | print templates | ONE shared engine `erp.ts::computeInvoiceTotals` used by UI preview AND server posting AND report aggregation (invariant #4) |
 | G3 | Manufacturing depth: single-level only | manufacturing module | Full jobwork chain with partial processing — but BOM/WO intentionally deferred to P2 |
 
-### akashshinde700/erpnashilk — **INACCESSIBLE (HTTP 404, verified `curl -w "%{http_code}"` → 404 and `git ls-remote` auth-fail). No analysis performed; no functionality invented for it** (mission Phase 1 rule).
+### akashshinde700/erpnashilk — initially INACCESSIBLE (HTTP 404 during original mission; recorded honestly, no analysis invented). **Repo made public 2026-11 — now analyzed (see REVERSE_ENGINEERING_SUMMARY.md §3.4). Findings:**
+
+| # | Finding | Evidence | Our mitigation |
+|---|---|---|---|
+| N1 | Money/qty as Float across 54 models (153 float columns); Decimal migration planned in `docs/money-precision-plan.md` but never applied | `prisma/schema.prisma`, `money-precision-plan.md` | Same SQLite constraint on our side — r2 every step + integer-paise bill math pattern to be adopted (Comparison addendum A1) |
+| N2 | No LICENSE file → all rights reserved | repo root (no LICENSE/COPYING) | Patterns/ideas only; zero code copying (mission rule, same as laserp) |
+| N3 | Accounting reports derived from documents without a GL (deliberate Vyapar-style choice) | `src/lib/accounting.ts` (737 lines, no ledger posting) | Our double-entry GL remains the stronger design (differentiator) |
+| N4 | Demo password constant `demo1234` shipped in `src/lib/password.ts` | `password.ts` | We ship no credentials; auth lands in P1 with no fallback passwords |
+| N5 | Repo lags author's local tree ("Phase 5 done locally — not deployed, not committed") | `PROJECT_STATUS.md` | N/A for us — our docs describe only committed, runnable state |
 
 ---
 

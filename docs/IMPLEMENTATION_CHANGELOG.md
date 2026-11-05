@@ -36,3 +36,11 @@ P1: auth/RBAC, Postgres+Decimal, returns (credit/debit notes), manual journals, 
 
 ## 8. Documentation set (10/10 complete)
 REVERSE_ENGINEERING_SUMMARY · SOURCE_REPOSITORY_COMPARISON · EXISTING_ARCHITECTURE · DATABASE_RELATIONSHIP_ANALYSIS · ERP_WORKFLOW_DOCUMENTATION · FEATURE_GAP_ANALYSIS · IMPLEMENTATION_ROADMAP · **BUG_AND_SECURITY_REPORT (new)** · **TESTING_REPORT (new)** · **IMPLEMENTATION_CHANGELOG (this file, new)**.
+
+## 9. Analysis addendum session (2026-11) — no application code changed
+User revealed that `akashshinde700/erpnashilk` was made public and provided a live commercial demo (demo.mapsofterp.in, Admin credentials) for reference. Actions taken (documentation only — zero changes to `src/`, schema, or APIs):
+1. Cloned erpnashilk (47 MB, HEAD `02ea494`) to `/home/z/repos/erpnashilk`; full structural + domain analysis via read-only exploration (54 Prisma models, 129 API route files, 40 screens, 41+ lib files).
+2. Verified: **no LICENSE file** (all rights reserved) → patterns-only rule maintained; **no jobwork module** (grep: zero matches in `src/`) → our flagship chain remains unique among all references; `computeBillTotals` integer-paise + largest-remainder math verified by direct read (erp-helpers.ts:414); `DEMO_PASSWORD='demo1234'` verified (password.ts:9).
+3. Logged into demo.mapsofterp.in read-only via browser automation; mapped all 18 modules and key screens (dashboard attention/pending panels, manufacturing job + raw-material grid Q-Avail/Q-WIP, GST=HSN master, hierarchical COA with GRNI clearing account, invoice list with IRN/Email status columns).
+4. Doc updates: REVERSE_ENGINEERING_SUMMARY.md §2 ledger + new §3.4/§3.5; SOURCE_REPOSITORY_COMPARISON.md addendum rows A1–A20 (ADOPT/ADAPT/AVOID verdicts); BUG_AND_SECURITY_REPORT.md erpnashilk findings N1–N5.
+5. Key roadmap inputs captured for future sessions: paisa-exact bill math (A1), bill-level freight/packing charges (A2), cheque lifecycle (A5), advances/credit-apply (A6), dashboard attention panels (A18).

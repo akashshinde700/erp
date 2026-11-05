@@ -22,7 +22,7 @@
 |---|---|---|---|
 | frappe/erpnext | OK (`git ls-remote` HEAD `c1634fc`) | 44 MB sparse (manufacturing, stock, accounts, selling, buying, controllers, regional) | Task 2-a — done |
 | akashshinde700/laserp | OK (HEAD `f05efc9`) | 11 MB full | Task 2-b — done |
-| akashshinde700/erpnashilk | **FAILED — 404/removed/private** (`git ls-remote` → auth prompt = not publicly resolvable) | — | **Not analyzed. No functionality invented for it.** Recorded per mission Phase 1 rule. |
+| akashshinde700/erpnashilk | **OK — repo made public after this mission started** (user confirmed 2026-11; full clone 47 MB at `/home/z/repos/erpnashilk`, HEAD `02ea494`) | Full (depth-1) | Task 2-e — done (see §3.4) |
 | IamRamgarhia/Free-GST-Billing-Software | OK (HEAD `6966543`) | 14 MB full | Task 2-c — done |
 | zhaoxuya520/reverse-skill | OK | 15 MB full | Task 2-d — methodology inspection only |
 | morluto/rea | OK | 127 MB full | Task 2-d — applicability verdict only |
@@ -58,7 +58,33 @@
 - Atomic gapless numbering with `peek` (preview without burning).
 - Weaknesses: JSON-file persistence, no RDBMS/multi-user/concurrency, manufacturing is single-level lite.
 
-### 3.4 erpnashilk — INACCESSIBLE (404). No analysis performed.
+### 3.4 erpnashilk / "ManuFlow ERP" (akashshinde700) — laserp's production-evolved sibling
+
+**Access history:** repo was 404 during the original mission (recorded honestly as "not analyzed"); the owner made it public afterwards (user-confirmed 2026-11-05). Now fully cloned and analyzed. **LICENSE: none (all rights reserved)** — same rule as laserp: patterns/ideas only, zero code copying.
+
+Identity: laserp and erpnashilk share the same author and skeleton (Next.js 16 App Router + Prisma + shadcn/ui, single-page `erp-app.tsx` module registry, `src/lib/erp-helpers.ts` toolkit, `postStock` primitive, NumberSeq per-FY numbering). erpnashilk is the **production-evolved fork** of the same product line — MySQL instead of SQLite, deployed multi-tenant SaaS, 54 Prisma models, 40 screens, 129 API route files.
+
+- **Scale:** 51 API route dirs / 129 handlers; `src/lib/` = 41 root files + 4 subpackages (`tally/` 7, `vyapar/` 6, `import/` 7, `services/` 8); 40 ERP screens in `src/components/erp/modules/`.
+- **Full chains:** Enquiry→Quotation→SO→DeliveryChallan→SalesInvoice(+IRN/eway/share-link)→SalesReturn; PR→PO(approval+line closures)→**GRN with QC gate**→PI(RCM)→PurchaseReturn; WorkOrder→MaterialIssue→ProductionEntry(**BOM backflush**)→QC; MRP shortage planning.
+- **Manufacturing = internal production only. NO outsourced Jobwork** (verified: zero `jobwork` matches in `src/`). Our Inward→JobCard→Certificate→Invoice chain remains a user-unique requirement none of the references implement.
+- **Paisa-exact billing math** (`erp-helpers.ts::computeBillTotals:414`): integer-paise (cents) arithmetic + **largest-remainder distribution** of bill discount across lines, so Σ line taxable === bill taxable with no 1-paisa drift; freight/packing as taxable charges; CGST+SGST ≡ line tax exactly. This is stronger than plain r2 rounding (which both laserp and our current `erp.ts` use).
+- **Cash & Bank (Vyapar-style, derived balances):** `MoneyAccount`/`AccountTxn`/`Loan`/`Payment`/`Expense`; balances always computed from documents, never stored; cheque lifecycle (PENDING→DEPOSITED→CLEARED/BOUNCED) with clearing-date accounting; negative-cash refusal (409) with admin override + duplicate-payment detection; idempotency keys on money endpoints; customer advances + sales-return credit application (row-locked).
+- **GST compliance depth:** GSTR-1 **GSTN offline-tool JSON** (b2b/b2cl/b2cs/cdnr/hsn), GSTR-2/3B/9, e-Invoice **IRP bulk-upload JSON v1.1** with pre-validation, cess, reverse charge on both sales & purchase, doc types TAX_INVOICE|BILL_OF_SUPPLY|PROFORMA, multi-currency with FX→INR reports.
+- **Tally integration:** per-invoice voucher export XML/JSON/Excel (REMOTEDID dedupe, ledger-name mapping on Company), "All Masters" import XML, and a read-only Tally connector PoC (pairing-code→token→heartbeat→named jobs, `connector/tally/manuflow-tally-connector.mjs`).
+- **Import Center:** unified upload→map→dryRun-preview→commit pipeline shared by xlsx/CSV upload, **Vyapar backup import** (`.vyb`/`.vyp` — hand-written read-only SQLite parser + zip-bomb-safe ZIP reader), and the Tally connector; cross-process import lock via `SELECT … FOR UPDATE` on Company; go-live date + opening-stock reconciliation (party opening balances deliberately **check-only**).
+- **Inventory:** immutable `StockLedger` (with `costRate` captured at outward movement for sales-return costing) + moving-average `StockBalance` + `ItemBatch` (FEFO) + `ItemSerial`; alternate units (1 BOX = 24 PCS); QC-gated GRN posting (only accepted qty stocks).
+- **Platform/SaaS:** Plan/Company with subscription state (trial/suspended/paid-until) + plan limits enforced at API (`assertLimit`), multi-firm (`UserCompanyAccess`), tenant JSON backup/restore (table order derived from Prisma schema itself).
+- **Security posture:** HMAC signed cookie with password-version invalidation; middleware CSRF origin check + `x-erp-*` header stripping; scrypt; 19 roles × module-key RBAC + finance-report visibility gate; security PIN for editing saved documents (423); CSP/HSTS headers; strict tenant scoping.
+- **Ops/testing:** bun-test API suite against a **guarded throwaway MySQL DB** (refuses non-`_test` loopback DBs) + Playwright E2E against in-browser mock API (config throws if someone tries live mode silently); socket.io notify-service mini-service on :3003; `deploy.py` (PM2 + rollback + pre-deploy dump); daily gzipped per-tenant backups, 14-day retention; PWA (service worker, offline page, mobile card tables).
+- **Honest limits:** money/qty are Float (153 columns; Decimal migration planned in `docs/money-precision-plan.md` but **not applied**); no general ledger — all accounting reports derived from documents (deliberate Vyapar-style choice, weaker than our double-entry GL); `next-intl` + `z-ai-web-dev-sdk` declared in package.json but **never imported** (scaffolding leftovers); latest state "Phase 5 done locally, not deployed, not committed" per PROJECT_STATUS.md — repo lags the author's local tree.
+
+### 3.5 Mapsoft ERP live demo (demo.mapsofterp.in) — commercial UX reference
+
+Live commercial ERP (Mapsoft Technologies LLP, server-rendered app — `/App/home/*` route style). User provided demo credentials; explored read-only via browser automation. **Proprietary product — UX inspiration only, absolutely no code.**
+
+Module map (18 top menus): Home (KPI cards + "Attention Required" overdue lists + "Pending Actions" approvals) · CRM (Leads/Deals/Tasks/Contacts/Proposals/Quotes) · Project (Projects/Phases/Tasks/Timesheets + Project&BOM) · Purchase (Vendors/POs/RFQs) · Inventory (Products/Adjustments/Purchase Receipts/Returns/Dispatch Orders/Requisitions/Store Consumption/Delivery Challans/Issue Materials) · Sales (Customers/Salespersons/Orders/Invoices/Sales Return/e-Way Bills/Back Orders/**POS**) · BOM · Manufacturing (**Manufacturing Batches + Material Requests only — no jobwork here either**) · General Ledger (Chart of Accounts/Bank Accounts/Financial Years) · AR (Payment Receipts) · AP (Vouchers/Vendor Bills/Vendor Payments) · Administration (Roles/Assign Roles/Users/Company Info/Units) · Settings (UOMs/Payment Terms/Product Types/Groups/Categories/Sub-Categories/Location) · Reports (Report Center: CRM/GL/Inventory/Payables/Projects/Purchases/Receivables/Sales) · Services (Service Calls/Invoices) · HRMS (Leaves/Attendance/Timesheets/Operations) · Taxes & Compliance (**GST = HSN master list, TDS Taxes, e-Invoicing**) · Setup (Transaction Series/Reminders/Module Settings/Email Notifications).
+
+Adoptable UX ideas: per-invoice **IRN Status + Email Status columns**; dashboard "Attention Required / Pending Actions" pattern (overdue bills, approvals awaiting); hierarchical **Chart of Accounts with GRNI Clearing Account** (Goods-Received-Not-Invoiced accrual); manufacturing job form with a **raw-material planning grid showing Q-Avail / Q-WIP / Req Qty / Vendor / PO No per line**; accordion sidebar with 18 module groups; transaction-series configuration screen.
 
 ## 4. Tool Usage Disclosure (mission rule: never claim usage that didn't happen)
 

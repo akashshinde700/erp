@@ -68,6 +68,7 @@ import { cn } from '@/lib/utils'
 import { dateStr, money } from '@/lib/erp'
 import {
   api,
+  ApiError,
   platformApi,
   toastError,
   type BlogPost,
@@ -152,6 +153,7 @@ export function PlatformView({ onExit, onLoginAs }: { onExit: () => void; onLogi
   const [admin, setAdmin] = useState<AdminIdentity | null>(null)
   const [apiKey, setApiKey] = useState<string | null>(null) // legacy key unlock
   const [probing, setProbing] = useState(true)
+  const [demoInstall, setDemoInstall] = useState(false)
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -166,6 +168,12 @@ export function PlatformView({ onExit, onLoginAs }: { onExit: () => void; onLogi
       .then((d) => setAdmin(d.admin))
       .catch(() => setAdmin(null))
       .finally(() => setProbing(false))
+    // Public probe (no sensitive data): demo installs may advertise the demo
+    // admin password on the gate; real installs show the honest mechanism
+    // instead — env password or the one-time server-log print.
+    api<{ demoHint: boolean }>('/api/auth/status')
+      .then((s) => setDemoInstall(!!s.demoHint))
+      .catch(() => setDemoInstall(false))
   }, [])
 
   const signIn = async (e?: React.FormEvent) => {
@@ -288,10 +296,17 @@ export function PlatformView({ onExit, onLoginAs }: { onExit: () => void; onLogi
                   {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <LogIn className="size-4" aria-hidden />}
                   {busy ? 'Signing in…' : 'Sign in'}
                 </Button>
-                <p className="text-xs text-muted-foreground">
-                  Demo admin: <span className="font-mono text-foreground">admin@forgeplatform.example.com</span> ·{' '}
-                  <span className="font-mono text-foreground">platform123</span>
-                </p>
+                {demoInstall ? (
+                  <p className="text-xs text-muted-foreground">
+                    Demo admin: <span className="font-mono text-foreground">admin@forgeplatform.example.com</span> ·{' '}
+                    <span className="font-mono text-foreground">platform123</span>
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    The password comes from <span className="font-mono text-foreground">PLATFORM_ADMIN_PASSWORD</span>, or is printed
+                    once in the server log at first boot.
+                  </p>
+                )}
               </form>
             ) : (
               <form onSubmit={unlockKey} className="space-y-4" noValidate>
@@ -386,7 +401,10 @@ function Console({
       setPosts(blog.posts)
     } catch (e) {
       toastError(e)
-      onAuthLost()
+      // Only a REAL auth loss (401) re-gates the console. Transient errors
+      // (409 race, 5xx, network) keep it mounted so the operator can retry
+      // instead of being dumped back to the sign-in screen.
+      if (e instanceof ApiError && e.status === 401) onAuthLost()
     } finally {
       setLoading(false)
     }

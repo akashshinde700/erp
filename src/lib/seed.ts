@@ -7,7 +7,7 @@
 import { db } from './db'
 import { makeGstin } from './erp'
 import { hashPassword } from './auth'
-import { ensurePlatformAdmin } from './platform'
+import { ensurePlatformAdmin, PLATFORM_ADMIN_EMAIL } from './platform'
 import {
   postOpeningStock,
   postPurchaseInvoice,
@@ -105,6 +105,17 @@ export async function seedDatabase(force = false) {
   // once in the server log — never a public repo constant. Created AFTER the
   // operating org so Shree Forge stays the first company.
   await ensurePlatformAdmin()
+  // The platform-console gate ADVERTISES the demo admin password
+  // (platform123) — make that true for demo installs. This seed only ever
+  // runs on a blank install; an explicit PLATFORM_ADMIN_PASSWORD env always
+  // wins (operator intent beats the demo default).
+  const envPwd = process.env.PLATFORM_ADMIN_PASSWORD
+  if (!envPwd || envPwd.length < 8) {
+    await db.orgUser.update({
+      where: { email: PLATFORM_ADMIN_EMAIL },
+      data: { passwordHash: hashPassword('platform123') },
+    })
+  }
 
   // ---------- Warehouses ----------
   const main = await db.warehouse.create({ data: { code: 'MAIN', name: 'Main Stores', location: 'Pune Plant 1' } })

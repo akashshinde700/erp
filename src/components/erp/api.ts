@@ -18,6 +18,18 @@ interface Envelope<T> {
   error?: string
 }
 
+/** API error carrying the HTTP status — lets callers distinguish auth loss
+ *  (401) from transient failures (409 races, 5xx, network). */
+export class ApiError extends Error {
+  status: number
+
+  constructor(message: string, status: number) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response
   try {
@@ -26,15 +38,15 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
       headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
     })
   } catch {
-    throw new Error('Network error — is the server running?')
+    throw new ApiError('Network error — is the server running?', 0)
   }
   let json: Envelope<T>
   try {
     json = (await res.json()) as Envelope<T>
   } catch {
-    throw new Error(`Request failed (${res.status})`)
+    throw new ApiError(`Request failed (${res.status})`, res.status)
   }
-  if (!res.ok || !json.success) throw new Error(json.error ?? `Request failed (${res.status})`)
+  if (!res.ok || !json.success) throw new ApiError(json.error ?? `Request failed (${res.status})`, res.status)
   return json.data as T
 }
 

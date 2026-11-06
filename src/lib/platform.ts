@@ -303,17 +303,25 @@ export async function assertLimit(kind: LimitKind, adding = 1): Promise<void> {
   }
 }
 
-/** Three starter plans so the console is never empty (idempotent). */
+/** Three starter plans so the console is never empty (idempotent, race-safe:
+ *  the orgs and plans tabs both call this on console mount — a concurrent
+ *  createMany hits the unique Plan.name and is simply the winner's echo). */
 export async function ensurePlans(): Promise<void> {
   const n = await db.plan.count()
   if (n > 0) return
-  await db.plan.createMany({
-    data: [
-      { name: 'Starter', priceMonthly: 499, priceYearly: 4990, maxItems: 500, maxWarehouses: 5, maxParties: 100 },
-      { name: 'Growth', priceMonthly: 1499, priceYearly: 14990, maxItems: 5000, maxWarehouses: 20, maxParties: 1000 },
-      { name: 'Enterprise', priceMonthly: 0, priceYearly: 0, maxItems: 0, maxWarehouses: 0, maxParties: 0 },
-    ],
-  })
+  try {
+    await db.plan.createMany({
+      data: [
+        { name: 'Starter', priceMonthly: 499, priceYearly: 4990, maxItems: 500, maxWarehouses: 5, maxParties: 100 },
+        { name: 'Growth', priceMonthly: 1499, priceYearly: 14990, maxItems: 5000, maxWarehouses: 20, maxParties: 1000 },
+        { name: 'Enterprise', priceMonthly: 0, priceYearly: 0, maxItems: 0, maxWarehouses: 0, maxParties: 0 },
+      ],
+    })
+  } catch (e) {
+    // A concurrent call created the starter plans first (Plan.name unique →
+    // P2002). The guarantee "plans exist" is already satisfied — not an error.
+    if ((e as { code?: string })?.code !== 'P2002') throw e
+  }
 }
 
 /** Usage counts for one org id. */

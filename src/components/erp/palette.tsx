@@ -27,7 +27,6 @@ import {
 import { CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Table, TableBody, TableCell, TableRow } from '@/components/ui/table'
-import { apiGet, type Party } from './api'
 import { setCreatePreset, readRecent, SHORTCUTS_HELP, GOTO_KEYS } from './nav'
 import { useErpUi, type ErpView } from './store'
 import { money } from '@/lib/erp'
@@ -152,7 +151,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           <>
             {results.parties.length > 0 ? (
               <CommandGroup heading="Parties">
-                {results.parties.map((p: Party) => (
+                {results.parties.map((p) => (
                   <CommandItem key={`p-${p.id}`} value={`${p.code} ${p.name}`} onSelect={() => go('masters')}>
                     <Wrench className="size-4 shrink-0 text-muted-foreground" aria-hidden />
                     <span className="truncate">

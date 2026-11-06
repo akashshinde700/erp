@@ -2,7 +2,7 @@ import { ok, fail, handleError } from '@/lib/api'
 import { db } from '@/lib/db'
 import { z } from 'zod'
 import { gstinChecksumValid } from '@/lib/erp'
-import { accessState, assertCompanyAccess, assertMutationAccess, operatingCompany } from '@/lib/platform'
+import { accessState, assertCompanyAccess, assertMutationAccess, operatingCompany, orgLoginCount } from '@/lib/platform'
 import { logAudit } from '@/lib/audit'
 
 /**
@@ -13,7 +13,9 @@ import { logAudit } from '@/lib/audit'
  */
 export async function GET() {
   try {
-    const logins = await db.orgUser.count()
+    // ORG logins gate the profile (platform SUPER_ADMIN never counts — it
+    // belongs to the operator's company, not the operating org).
+    const logins = await orgLoginCount()
     if (logins > 0) {
       // Authenticated path: session must belong to the operating org.
       await assertCompanyAccess()
@@ -62,12 +64,8 @@ export async function PUT(req: Request) {
     // privileged mutation (bank details feed every printed invoice): a
     // signed-in OWNER/ACCOUNTANT session is required (VIEWER is read-only).
     const existing = await db.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } })
-    const logins = await db.orgUser.count()
-    if (existing && logins > 0) {
-      await assertMutationAccess()
-    } else if (!existing && logins > 0) {
-      // Logins exist but no operating org (edge: org-less install) — still
-      // require an authenticated, non-VIEWER session.
+    const logins = await orgLoginCount()
+    if (logins > 0) {
       await assertMutationAccess()
     }
     const company = existing

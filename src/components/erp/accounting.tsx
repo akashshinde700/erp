@@ -43,7 +43,7 @@ import {
   type SalesInvoice,
 } from './api'
 import { EmptyState, Money, SectionHeading, StatusBadge, TableSkeleton } from './bits'
-import { onPreset, takeCreatePreset } from './nav'
+import { onPreset, takeCreatePreset, type CreatePreset } from './nav'
 import { dateStr, money, PAYMENT_MODES } from '@/lib/erp'
 
 type AnyInvoice = SalesInvoice | PurchaseInvoice

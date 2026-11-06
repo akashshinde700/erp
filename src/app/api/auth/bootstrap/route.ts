@@ -4,6 +4,7 @@ import { db } from '@/lib/db'
 import { fail, handleError } from '@/lib/api'
 import { logAudit } from '@/lib/audit'
 import { createSessionToken, hashPassword, setSessionCookie } from '@/lib/auth'
+import { orgLoginCount } from '@/lib/platform'
 import { buildSessionInfo } from '../_session'
 
 /**
@@ -26,7 +27,9 @@ export async function POST(req: Request) {
     const company = await db.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } })
     if (!company) return fail('Set up a company first (no organization exists yet)', 409)
 
-    const existingUsers = await db.orgUser.count()
+    // ORG logins only — the platform SUPER_ADMIN (operator's login) never
+    // blocks the first owner bootstrap.
+    const existingUsers = await orgLoginCount()
     if (existingUsers > 0) return fail('Logins already exist — sign in instead', 409)
 
     const emailTaken = await db.orgUser.findUnique({ where: { email: body.email } })

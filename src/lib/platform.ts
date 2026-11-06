@@ -228,6 +228,14 @@ export function accessState(
   }
 }
 
+/** Org logins that gate the ERP workspace sign-in. The platform SUPER_ADMIN
+ *  login is EXCLUDED — it belongs to the operator's company, not the operating
+ *  org. Counting it would brick first boot: the anonymous setup / seed /
+ *  owner-bootstrap paths would be refused before any org login exists. */
+export function orgLoginCount(): Promise<number> {
+  return db.orgUser.count({ where: { company: { isPlatform: false } } })
+}
+
 /** Guard for every business route (reads AND writes). Throws BusinessError(403/401).
  *  - org blocked (suspended/expired) → 403
  *  - logins exist → a session whose org IS the operating org is required;
@@ -241,7 +249,7 @@ export async function assertCompanyAccess(): Promise<{ role: string } | null> {
   // Sign-in gate: once org logins exist, every business route (GET included)
   // requires a session whose org IS the operating org (the workspace this
   // deployment serves).
-  const logins = await db.orgUser.count()
+  const logins = await orgLoginCount()
   if (logins > 0) {
     const session = await currentSession()
     if (!session) throw new BusinessError('Sign in to your organization first', 401)

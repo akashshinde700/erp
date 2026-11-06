@@ -1,6 +1,6 @@
 import { ok, handleError } from '@/lib/api'
 import { db } from '@/lib/db'
-import { PLATFORM_ADMIN_EMAIL, ensurePlatformAdmin } from '@/lib/platform'
+import { PLATFORM_ADMIN_EMAIL, ensurePlatformAdmin, orgLoginCount } from '@/lib/platform'
 
 /**
  * GET /api/auth/status — login-screen facts (public, no data).
@@ -15,7 +15,7 @@ export async function GET() {
     await ensurePlatformAdmin()
     const [operating, users, demoUser, platformAdmin] = await Promise.all([
       db.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' }, select: { id: true, name: true } }),
-      db.orgUser.count(),
+      orgLoginCount(),
       db.orgUser.findUnique({ where: { email: 'owner@shreeforge.example.com' }, select: { id: true } }),
       db.orgUser.findUnique({ where: { email: PLATFORM_ADMIN_EMAIL }, select: { id: true } }),
     ])

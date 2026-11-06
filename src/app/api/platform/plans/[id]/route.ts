@@ -20,9 +20,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       features: z.array(z.enum(PLAN_FEATURE_KEYS)).optional(),
     })
     const body = schema.parse(await req.json())
+    const { features, ...rest } = body
     const plan = await db.plan.update({
       where: { id },
-      data: { ...body, ...(body.features ? { features: body.features.join(',') } : {}) },
+      data: { ...rest, ...(features ? { features: features.join(',') } : {}) },
     })
     await logAudit('UPDATE', 'Plan', id, `${plan.name} updated`)
     return ok(planOut(plan))

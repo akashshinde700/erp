@@ -197,6 +197,7 @@ export interface SalesInvoice {
   status: string
   source: string
   remarks: string | null
+  tallySentAt?: string | null
   party?: PartyMini
   items?: InvoiceItem[]
 }
@@ -219,6 +220,7 @@ export interface PurchaseInvoice {
   paidAmount: number
   status: string
   remarks: string | null
+  tallySentAt?: string | null
   party?: PartyMini
   items?: InvoiceItem[]
 }

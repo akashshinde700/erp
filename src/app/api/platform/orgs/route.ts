@@ -87,7 +87,7 @@ export async function POST(req: Request) {
       const emailTaken = await db.orgUser.findUnique({ where: { email: body.ownerEmail } })
       if (emailTaken) return fail('A login with this owner email already exists', 409)
     }
-    let plan = null
+    let plan: { id: string; name: string } | null = null
     if (body.planId) {
       plan = await db.plan.findUnique({ where: { id: body.planId } })
       if (!plan) return fail('Plan not found', 404)

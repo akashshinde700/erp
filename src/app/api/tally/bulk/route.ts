@@ -3,7 +3,7 @@ import { handleError } from '@/lib/api'
 import { db } from '@/lib/db'
 import { logAudit } from '@/lib/audit'
 import { assertCompanyAccess, assertFeature } from '@/lib/platform'
-import { buildInvoiceVoucher, buildPaymentVoucher, getCompany, vouchersToXml } from '@/lib/tally'
+import { buildInvoiceVoucher, buildPaymentVoucher, getCompany, vouchersToXml, type TallyVoucher } from '@/lib/tally'
 
 /**
  * GET /api/tally/bulk?from=YYYY-MM-DD&to=YYYY-MM-DD
@@ -28,7 +28,7 @@ export async function GET(req: Request) {
     const wantPurchase = sp.get('purchase') !== '0'
     const wantPayments = sp.get('payments') !== '0'
 
-    const vouchers = []
+    const vouchers: TallyVoucher[] = []
 
     if (wantSales) {
       const rows = await db.salesInvoice.findMany({

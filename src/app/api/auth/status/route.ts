@@ -23,7 +23,8 @@ export async function GET() {
       companyExists: !!operating,
       companyName: operating?.name ?? null,
       usersExist: users > 0,
-      demoHint: !!demoUser,
+      // Demo credentials are never advertised on a production install.
+      demoHint: !!demoUser && process.env.NODE_ENV !== 'production',
       platformConfigured: !!platformAdmin,
     })
   } catch (e) {

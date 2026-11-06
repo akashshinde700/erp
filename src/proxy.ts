@@ -77,7 +77,6 @@ async function tokenValid(token: string | undefined): Promise<boolean> {
   }
 }
 
-export const runtime = 'nodejs'
 
 export async function proxy(req: NextRequest) {
   const path = req.nextUrl.pathname

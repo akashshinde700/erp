@@ -59,3 +59,6 @@ db/*.key
 .env.*.local
 db/*.db
 db/*.db-*
+
+# deploy credentials (SSH passwords) -- never commit
+deploy_config*.json

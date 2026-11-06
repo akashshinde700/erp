@@ -56,7 +56,9 @@ export function LoginView({
       )
   }, [])
 
-  const bootstrapMode = status ? !status.usersExist : false
+  // Owner bootstrap only when a company exists but has no login yet; a blank
+  // install shows the plain sign-in (orgs are created from the Platform Admin).
+  const bootstrapMode = status ? status.companyExists && !status.usersExist : false
 
   const submitLogin = async (e?: React.FormEvent) => {
     e?.preventDefault()
@@ -118,12 +120,27 @@ export function LoginView({
     <div className="flex min-h-dvh flex-col bg-muted/30">
       <header className="border-b bg-card pb-[max(0px,env(safe-area-inset-top))]">
         <div className="mx-auto flex h-14 w-full max-w-6xl items-center justify-between px-4">
-          <button type="button" className="flex items-center gap-2" aria-label="ForgeERP">
-            <span className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
-              <Factory className="size-4" aria-hidden />
+          <div className="flex items-center gap-2">
+            <span className="flex items-center gap-2" aria-label="ForgeERP">
+              <span className="flex size-7 items-center justify-center rounded-md bg-primary text-primary-foreground">
+                <Factory className="size-4" aria-hidden />
+              </span>
+              <span className="text-sm font-semibold tracking-tight">ForgeERP</span>
             </span>
-            <span className="text-sm font-semibold tracking-tight">ForgeERP</span>
-          </button>
+            {/* Platform admin is a SEPARATE console — opened from the login
+                screen only, via this icon (never from inside an org's ERP). */}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              onClick={onOpenPlatform}
+              className="size-8 text-muted-foreground"
+              aria-label="Platform admin"
+              title="Platform admin"
+            >
+              <ShieldAlert className="size-4" aria-hidden />
+            </Button>
+          </div>
           <Badge variant="secondary" className="font-normal">
             SaaS · one workspace per organization
           </Badge>
@@ -266,21 +283,6 @@ export function LoginView({
             </CardContent>
           </Card>
 
-          {/* Platform admin is a SEPARATE console — opened from the login
-              screen, never from inside an organization's ERP. */}
-          <div className="flex items-center gap-3">
-            <span className="h-px flex-1 bg-border" aria-hidden />
-            <span className="text-xs text-muted-foreground">platform staff</span>
-            <span className="h-px flex-1 bg-border" aria-hidden />
-          </div>
-          <Button
-            type="button"
-            variant="outline"
-            onClick={onOpenPlatform}
-            className="h-11 w-full gap-2 rounded-xl border-dashed"
-          >
-            <ShieldAlert className="size-4" aria-hidden /> Platform Admin console
-          </Button>
         </div>
       </main>
 

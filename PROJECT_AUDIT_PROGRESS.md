@@ -3,6 +3,8 @@
 **Branch:** `arena/c87300cc-erp` · **Base commit:** `cf7a911` · **Checkpoint:** 2026-11-07 (Asia/Kolkata)
 **Status:** ACTIVE WORK IN PROGRESS — this is a saved checkpoint, **not** a final production sign-off.
 
+> **2026-11-07 Quality UI continuation (branch `arena/16264bf2-erp`):** Manufacturing now includes a Quality workspace with pass/fail/quarantine KPIs, inspection audit table, versioned template creation with dynamic numeric/text/boolean parameters, and measurement entry that invokes server-side automatic evaluation. Failed measurements remain non-acceptable and default to quarantine.
+
 > **2026-11-07 traceability UI continuation (branch `arena/16264bf2-erp`):** Inventory now exposes a Lots & Serials workspace with live lot balances, warehouse, manufacture/expiry status, source document, available serial count and parent/child genealogy. A guarded recall action requires a reason and recursively recalls descendant lots/available serials.
 
 > **2026-11-07 lot/serial genealogy continuation (branch `arena/16264bf2-erp`):** added company/item/warehouse-scoped lots, globally item-unique serials per company, append-only lot movements and parent→child production genealogy. QC-accepted GRN and FG batches create trace balances; dispatch validates lot availability/status/expiry and issues the selected batch; document cancellations reverse both stock and trace movements. Serial count must equal tracked quantity, duplicates are blocked, and recursive lot recall marks descendants and available serials recalled. Transfer UI/API, FEFO auto-selection and customer-facing recall UI remain pending.

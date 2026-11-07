@@ -60,6 +60,12 @@ model Company {
   maxParties    Int?
 
   users OrgUser[]
+
+  purchaseRequisitions PurchaseRequisition[]
+  purchaseOrders       PurchaseOrder[]
+  goodsReceipts        GoodsReceipt[]
+  qualityInspections   QualityInspection[]
+  itemVendors          ItemVendor[]
 }
 
 // ---------- Organization logins (SaaS) ----------
@@ -178,6 +184,8 @@ model Party {
   payments         Payment[]
   processRates     PartyProcessRate[]
   projects         Project[]
+  purchaseOrders   PurchaseOrder[] @relation("PurchaseOrderSupplier")
+  itemVendors      ItemVendor[]
 
   @@index([types])
 }
@@ -205,6 +213,10 @@ model Item {
   bomLines     BomItem[]
   woLines      WorkOrderLine[]
   taskMaterial ProductionTask[] @relation("TaskMaterial")
+  requisitionLines PurchaseRequisitionLine[]
+  purchaseOrderLines PurchaseOrderLine[]
+  goodsReceiptLines GoodsReceiptLine[]
+  itemVendors ItemVendor[]
 }
 
 model Warehouse {
@@ -216,6 +228,7 @@ model Warehouse {
   createdAt DateTime @default(now())
 
   stockRows StockLedger[]
+  goodsReceipts GoodsReceipt[]
 }
 
 model Process {
@@ -364,6 +377,7 @@ model PurchaseInvoice {
   paidAmount   Float    @default(0)
   status       String   @default("POSTED") // POSTED | CANCELLED
   remarks      String? @db.Text
+  goodsReceiptId String? // controlled procurement source; null for direct/legacy invoices
   createdAt    DateTime @default(now())
 
   // Tally export stamps (records only — never blocks re-export)
@@ -395,6 +409,7 @@ model PurchaseInvoiceItem {
   sgst    Float   @default(0)
   igst    Float   @default(0)
   total   Float
+  goodsReceiptLineId String? // accepted receipt line billed by this invoice line
 }
 
 // ---------- Jobwork (Inward → Job Card → Certificate → Invoice) ----------
@@ -632,6 +647,193 @@ model ProductionTask {
   @@index([workOrderId])
   @@index([status])
   @@index([employeeId])
+}
+
+// ---------- Procurement (Requisition → PO → GRN/QC → Invoice) ----------
+
+model PurchaseRequisition {
+  id          String   @id @default(cuid())
+  companyId   String
+  company     Company  @relation(fields: [companyId], references: [id])
+  reqNo       String
+  date        DateTime
+  requiredBy  DateTime?
+  department  String?
+  purpose     String? @db.Text
+  status      String   @default("DRAFT") // DRAFT | SUBMITTED | APPROVED | REJECTED | CLOSED | CANCELLED
+  approvedBy  String?
+  approvedAt  DateTime?
+  createdBy   String?
+  createdAt   DateTime @default(now())
+  lines       PurchaseRequisitionLine[]
+  orders      PurchaseOrder[]
+
+  @@unique([companyId, reqNo])
+  @@index([companyId, status, date])
+}
+
+model PurchaseRequisitionLine {
+  id            String @id @default(cuid())
+  requisitionId String
+  requisition   PurchaseRequisition @relation(fields: [requisitionId], references: [id], onDelete: Cascade)
+  itemId        String
+  item          Item @relation(fields: [itemId], references: [id])
+  qty           Float
+  orderedQty    Float @default(0)
+  uom           String
+  estimatedRate Float @default(0)
+  remarks       String? @db.Text
+
+  @@index([requisitionId])
+  @@index([itemId])
+}
+
+model PurchaseOrder {
+  id             String @id @default(cuid())
+  companyId      String
+  company        Company @relation(fields: [companyId], references: [id])
+  poNo           String
+  date           DateTime
+  supplierId     String
+  supplier       Party @relation("PurchaseOrderSupplier", fields: [supplierId], references: [id])
+  requisitionId  String?
+  requisition    PurchaseRequisition? @relation(fields: [requisitionId], references: [id])
+  expectedDate   DateTime?
+  status         String @default("DRAFT") // DRAFT | APPROVED | PART_RECEIVED | RECEIVED | CLOSED | CANCELLED
+  taxInclusive   Boolean @default(false)
+  overReceiptPct Float @default(0)
+  subtotal       Float @default(0)
+  taxAmount      Float @default(0)
+  grandTotal     Float @default(0)
+  approvedBy     String?
+  approvedAt     DateTime?
+  terms          String? @db.Text
+  createdBy      String?
+  createdAt      DateTime @default(now())
+  lines          PurchaseOrderLine[]
+  receipts       GoodsReceipt[]
+
+  @@unique([companyId, poNo])
+  @@index([companyId, status, date])
+  @@index([supplierId])
+}
+
+model PurchaseOrderLine {
+  id              String @id @default(cuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  itemId          String
+  item             Item @relation(fields: [itemId], references: [id])
+  qty              Float
+  receivedQty      Float @default(0)
+  acceptedQty      Float @default(0)
+  rejectedQty      Float @default(0)
+  billedQty        Float @default(0)
+  uom              String
+  rate             Float
+  gstRate          Float
+  discountPct      Float @default(0)
+  amount           Float
+  remarks          String? @db.Text
+  receiptLines     GoodsReceiptLine[]
+
+  @@index([purchaseOrderId])
+  @@index([itemId])
+}
+
+model GoodsReceipt {
+  id              String @id @default(cuid())
+  companyId       String
+  company         Company @relation(fields: [companyId], references: [id])
+  grnNo           String
+  date            DateTime
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+  supplierDocNo   String?
+  supplierDocDate DateTime?
+  warehouseId     String
+  warehouse       Warehouse @relation(fields: [warehouseId], references: [id])
+  status          String @default("PENDING_QC") // PENDING_QC | ACCEPTED | PART_ACCEPTED | REJECTED | CANCELLED
+  remarks         String? @db.Text
+  createdBy       String?
+  postedAt        DateTime?
+  cancelledAt     DateTime?
+  createdAt       DateTime @default(now())
+  lines           GoodsReceiptLine[]
+  inspections     QualityInspection[]
+
+  @@unique([companyId, grnNo])
+  @@unique([companyId, supplierDocNo])
+  @@index([companyId, status, date])
+  @@index([purchaseOrderId])
+}
+
+model GoodsReceiptLine {
+  id                  String @id @default(cuid())
+  goodsReceiptId      String
+  goodsReceipt        GoodsReceipt @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
+  purchaseOrderLineId String
+  purchaseOrderLine   PurchaseOrderLine @relation(fields: [purchaseOrderLineId], references: [id])
+  itemId              String
+  item                Item @relation(fields: [itemId], references: [id])
+  receivedQty         Float
+  acceptedQty         Float @default(0)
+  rejectedQty         Float @default(0)
+  billedQty           Float @default(0)
+  batchNo             String?
+  manufactureDate     DateTime?
+  expiryDate          DateTime?
+  qcStatus            String @default("PENDING") // PENDING | PASSED | PARTIAL | FAILED
+  rejectionReason     String? @db.Text
+  inspections         QualityInspection[]
+
+  @@unique([goodsReceiptId, purchaseOrderLineId])
+  @@index([purchaseOrderLineId])
+  @@index([itemId, batchNo])
+}
+
+model QualityInspection {
+  id                 String @id @default(cuid())
+  companyId          String
+  company            Company @relation(fields: [companyId], references: [id])
+  inspectionNo       String
+  inspectionType     String // INWARD | PRODUCTION | DISPATCH | RETURN
+  referenceType      String
+  referenceId        String
+  goodsReceiptId     String?
+  goodsReceipt       GoodsReceipt? @relation(fields: [goodsReceiptId], references: [id])
+  goodsReceiptLineId String?
+  goodsReceiptLine   GoodsReceiptLine? @relation(fields: [goodsReceiptLineId], references: [id])
+  status             String @default("OPEN") // OPEN | PASSED | PARTIAL | FAILED | CANCELLED
+  inspectedBy        String?
+  inspectedAt        DateTime?
+  disposition        String? // ACCEPT | REWORK | SCRAP | RETURN_TO_VENDOR | QUARANTINE
+  resultsJson        String? @db.Text
+  notes              String? @db.Text
+  createdAt          DateTime @default(now())
+
+  @@unique([companyId, inspectionNo])
+  @@index([companyId, referenceType, referenceId])
+}
+
+model ItemVendor {
+  id             String @id @default(cuid())
+  companyId      String
+  company        Company @relation(fields: [companyId], references: [id])
+  itemId         String
+  item           Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  supplierId     String
+  supplier       Party @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  supplierSku    String?
+  lastRate       Float @default(0)
+  leadTimeDays   Int @default(0)
+  minOrderQty    Float @default(0)
+  preferred      Boolean @default(false)
+  active         Boolean @default(true)
+  createdAt      DateTime @default(now())
+
+  @@unique([companyId, itemId, supplierId])
+  @@index([supplierId])
 }
 
 // ---------- Payments ----------

@@ -3,6 +3,8 @@
 **Branch:** `arena/c87300cc-erp` · **Base commit:** `cf7a911` · **Checkpoint:** 2026-11-07 (Asia/Kolkata)
 **Status:** ACTIVE WORK IN PROGRESS — this is a saved checkpoint, **not** a final production sign-off.
 
+> **2026-11-07 controlled procurement foundation (branch `arena/16264bf2-erp`):** added company-scoped Material Requisition, Purchase Order, GRN, inward QC, generic inspection and item-vendor schema plus transactional services/API. Guards cover approval state, requisition caps, supplier role, duplicate GRN source lines/documents, over-receipt tolerance, full-quantity QC disposition, accepted-only stock posting, rejection reasons and batch/expiry metadata. Purchase-invoice three-way-match posting, returns/debit notes, UI, migration generation and real-MySQL regression remain pending; this checkpoint must not be represented as the complete Purchase-to-Pay workflow.
+
 > **2026-11-07 e-Way Bill continuation (branch `arena/d855eb24-erp`):** added pre-validated outward e-Way Bill portal JSON from posted sales invoices, including GST parties/addresses, tax and HSN item details, transport distance, road vehicle or transporter GSTIN, audit logging, and sales invoice list/detail actions. It intentionally generates an upload file only and does not claim NIC authentication or portal acknowledgement.
 
 > **2026-11-07 HSN/SAC continuation (branch `arena/81f22c2f-erp`):** added monthly outward and inward HSN/SAC summaries grouped by HSN, UOM and GST rate, including quantity, taxable value and component taxes, with explicit missing-HSN detection. This complements GSTR-1/GSTR-3B books working without claiming portal filing.

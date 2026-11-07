@@ -120,7 +120,7 @@ async function main() {
   const endpoints = [
     '/api', '/api/dashboard', '/api/masters/company', '/api/masters/items', '/api/masters/parties',
     '/api/masters/processes', '/api/masters/warehouses', `/api/masters/party-rates?partyId=${encodeURIComponent(customer.id ?? '')}`,
-    '/api/sales-invoices', '/api/purchase-invoices', '/api/payments',
+    '/api/sales-invoices', '/api/purchase-invoices', '/api/payments', '/api/procurement',
     '/api/jobwork/inwards', '/api/manufacturing/pending',
     '/api/manufacturing/stats', '/api/manufacturing/projects', '/api/manufacturing/boms',
     '/api/manufacturing/work-orders', '/api/manufacturing/tasks', '/api/manufacturing/employees',

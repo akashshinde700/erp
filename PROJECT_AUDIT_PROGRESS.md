@@ -175,7 +175,7 @@ Evidence: `tests/audit-results.json` (gitignored), console logs in `/tmp/erp-aud
 
 ### Critical (open)
 - **C1 Production runtime unproven.** `prisma/schema.prisma` is MySQL; `.env` points to an absent SQLite file; native Prisma engine downloads are TLS-blocked here; the local client is generated from `tests/schema.sqlite.prisma` (test-only). Before any deploy: provision MySQL, regenerate the client from the production schema, create a migration from the 33-model schema, verify a backup, and run the 59-check suite against MySQL. **No production DB was touched.**
-- **C2 No migration strategy.** `db:push --accept-data-loss` in `package.json` and `.zscripts/dev.sh`; no `prisma/migrations/`. A schema change today would need a reviewed migration + verified backup, not a push.
+- **C2 No checked-in migration baseline.** Destructive `db:push --accept-data-loss` and automatic dev-start push were removed on 2026-11-07; `db:deploy` now points to `prisma migrate deploy`. However, there is still no `prisma/migrations/` baseline because the required Prisma schema engine download is blocked in this environment. A schema change still requires a reviewed baseline/incremental migration + verified backup before deployment.
 - **C3 Full tenant isolation absent.** Business tables have no `companyId`; `src/lib/platform.ts` documents single-workspace operation. Multi-org SaaS claims in the platform console are not backed by row-level scoping. Architectural change — deliberately not attempted without approval.
 
 ### High (open)

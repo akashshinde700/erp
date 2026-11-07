@@ -174,7 +174,7 @@ export async function inspectGoodsReceipt(input: { goodsReceiptId: string; actor
   })
 }
 
-export async function invoiceAcceptedReceipt(input: { goodsReceiptId: string; date?: Date; taxInclusive?: boolean; remarks?: string; lines: { goodsReceiptLineId: string; qty: number; rate?: number }[] }) {
+export async function invoiceAcceptedReceipt(input: { goodsReceiptId: string; supplierInvoiceNo: string; date?: Date; taxInclusive?: boolean; remarks?: string; lines: { goodsReceiptLineId: string; qty: number; rate?: number }[] }) {
   return db.$transaction(async (tx) => {
     const company = await contextCompany(tx)
     const grn = await tx.goodsReceipt.findFirst({
@@ -182,6 +182,10 @@ export async function invoiceAcceptedReceipt(input: { goodsReceiptId: string; da
       include: { purchaseOrder: { include: { supplier: true } }, lines: { include: { item: true, purchaseOrderLine: true } } },
     })
     if (!grn) throw new BusinessError('Goods receipt not found', 404)
+    const supplierInvoiceNo = input.supplierInvoiceNo.trim()
+    if (!supplierInvoiceNo) throw new BusinessError('Supplier invoice number is required')
+    const duplicate = await tx.purchaseInvoice.findFirst({ where: { partyId: grn.purchaseOrder.supplierId, supplierInvoiceNo, status: { not: 'CANCELLED' } }, select: { invoiceNo: true } })
+    if (duplicate) throw new BusinessError(`Supplier invoice ${supplierInvoiceNo} is already posted as ${duplicate.invoiceNo}`, 409)
     if (!['ACCEPTED', 'PART_ACCEPTED'].includes(grn.status)) throw new BusinessError('Only a QC-accepted receipt can be invoiced')
     if (!input.lines.length) throw new BusinessError('At least one invoice line is required')
     const seen = new Set<string>()
@@ -203,7 +207,7 @@ export async function invoiceAcceptedReceipt(input: { goodsReceiptId: string; da
     const invoiceNo = await nextNumber(tx, company.id, 'PIN', date)
     const invoice = await tx.purchaseInvoice.create({
       data: {
-        invoiceNo, date, partyId: grn.purchaseOrder.supplierId, poNo: grn.purchaseOrder.poNo, interState, taxInclusive,
+        invoiceNo, date, partyId: grn.purchaseOrder.supplierId, poNo: grn.purchaseOrder.poNo, supplierInvoiceNo, interState, taxInclusive,
         taxable: totals.taxable, discount: totals.discount, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst,
         roundOff: totals.roundOff, grandTotal: totals.grandTotal, remarks: input.remarks, goodsReceiptId: grn.id,
         items: { create: selected.map(({ requested, line, rate }, index) => ({
@@ -261,10 +265,19 @@ export async function cancelGoodsReceipt(id: string) {
 export async function procurementDashboard() {
   const company = await db.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } })
   if (!company) throw new BusinessError('Operating company is not configured', 409)
-  const [requisitions, orders, receipts] = await Promise.all([
+  const [requisitions, orders, receipts, controlledInvoices] = await Promise.all([
     db.purchaseRequisition.findMany({ where: { companyId: company.id }, orderBy: { date: 'desc' }, include: { lines: { include: { item: true } } } }),
     db.purchaseOrder.findMany({ where: { companyId: company.id }, orderBy: { date: 'desc' }, include: { supplier: true, lines: { include: { item: true } } } }),
-    db.goodsReceipt.findMany({ where: { companyId: company.id }, orderBy: { date: 'desc' }, include: { purchaseOrder: true, lines: { include: { item: true } } } }),
+    db.goodsReceipt.findMany({ where: { companyId: company.id }, orderBy: { date: 'desc' }, include: { purchaseOrder: true, lines: { include: { item: true, purchaseOrderLine: true } } } }),
+    db.purchaseInvoice.findMany({ where: { goodsReceiptId: { not: null }, status: 'POSTED' }, include: { items: true } }),
   ])
-  return { requisitions, orders, receipts }
+  const invoiceLines = controlledInvoices.flatMap((invoice) => invoice.items.map((line) => ({ ...line, invoiceNo: invoice.invoiceNo, supplierInvoiceNo: invoice.supplierInvoiceNo })))
+  const matchExceptions = receipts.flatMap((receipt) => receipt.lines.flatMap((line) => {
+    const billed = invoiceLines.filter((invoiceLine) => invoiceLine.goodsReceiptLineId === line.id)
+    const billedQty = r2(billed.reduce((sum, row) => sum + row.qty, 0))
+    const rateVariance = billed.map((row) => r2(row.rate - line.purchaseOrderLine.rate)).filter((variance) => Math.abs(variance) > 0.004)
+    if (Math.abs(billedQty - line.acceptedQty) <= EPS && rateVariance.length === 0) return []
+    return [{ grnNo: receipt.grnNo, itemCode: line.item.code, acceptedQty: line.acceptedQty, billedQty, quantityVariance: r2(billedQty - line.acceptedQty), rateVariance, invoices: billed.map((row) => row.supplierInvoiceNo || row.invoiceNo) }]
+  }))
+  return { requisitions, orders, receipts, matchExceptions }
 }

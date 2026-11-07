@@ -49,7 +49,7 @@ export async function POST(req: Request) {
       return ok(await inspectGoodsReceipt({ ...parsed.data, actor: actor?.email ?? undefined }))
     }
     if (action === 'invoice-receipt') {
-      const parsed = z.object({ goodsReceiptId: z.string().min(1), date, taxInclusive: z.boolean().optional(), remarks: z.string().optional(), lines: z.array(z.object({ goodsReceiptLineId: z.string().min(1), qty: z.number().positive(), rate: z.number().nonnegative().optional() })).min(1) }).safeParse(body)
+      const parsed = z.object({ goodsReceiptId: z.string().min(1), supplierInvoiceNo: z.string().trim().min(1), date, taxInclusive: z.boolean().optional(), remarks: z.string().optional(), lines: z.array(z.object({ goodsReceiptLineId: z.string().min(1), qty: z.number().positive(), rate: z.number().nonnegative().optional() })).min(1) }).safeParse(body)
       if (!parsed.success) return fail(parsed.error.issues[0]?.message ?? 'Invalid receipt invoice')
       return ok(await invoiceAcceptedReceipt(parsed.data))
     }

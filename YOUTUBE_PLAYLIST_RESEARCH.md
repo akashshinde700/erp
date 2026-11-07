@@ -2,6 +2,8 @@
 
 **Checkpoint:** 2026-11-07 · **Branch:** `arena/b5710131-erp` · **Companion doc:** `PROJECT_AUDIT_PROGRESS.md` (Phase 2 / §9)
 
+> **Round 2 added 2026-11-07:** the user later supplied 12 Rootstock ERP 101 webinars + 5 more playlists (173 videos). Those are reviewed separately in **`YOUTUBE_ERP_COURSES_RESEARCH.md`**; this document is kept intact as the batch-1 record.
+
 ## Method & honesty notes
 
 - Both user-supplied playlists were fetched in full (all chunks). Individual `watch?v=` pages were fetched for **every visible video** — these return the video description **and the full auto-generated transcript**, so this is transcript-level content review, not just title reading.

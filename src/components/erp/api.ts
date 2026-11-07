@@ -504,6 +504,22 @@ export interface ManufacturingStats {
   tasks: { pending: number; assigned: number; inProgress: number }
 }
 
+export interface MaterialPlanRow {
+  item: { id: string; code: string; name: string; uom: string; reorderLevel: number }
+  requiredQty: number
+  issuedQty: number
+  remainingQty: number
+  availableQty: number
+  shortageQty: number
+  workOrders: { id: string; woNo: string; projectNo: string; projectName: string; dueDate: string | null; requiredQty: number }[]
+}
+
+export interface MaterialPlanReport {
+  rows: MaterialPlanRow[]
+  summary: { activeWorkOrders: number; materialItems: number; shortageItems: number; totalShortageQty: number; customerMaterialQty: number }
+  ownershipRule: string
+}
+
 export const MANUFACTURING_OPERATIONS: { key: string; label: string }[] = [
   { key: 'CUTTING', label: 'Material Cutting' },
   { key: 'CNC_LASER', label: 'CNC / Laser Cutting' },

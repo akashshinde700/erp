@@ -68,13 +68,13 @@ const NAV_GROUPS: { group: string; entries: NavEntry[] }[] = [
     entries: [
       { view: 'sales', label: 'Sales', icon: ReceiptText },
       { view: 'purchase', label: 'Purchase', icon: ShoppingCart },
-      { view: 'jobwork', label: 'Jobwork', icon: Factory },
     ],
   },
   {
     group: 'Manufacturing',
     entries: [
-      { view: 'manufacturing', label: 'Projects & Mfg', icon: FolderKanban },
+      { view: 'jobwork', label: 'Customer Jobwork', icon: Factory },
+      { view: 'manufacturing', label: 'Own Projects & Mfg', icon: FolderKanban },
     ],
   },
   {

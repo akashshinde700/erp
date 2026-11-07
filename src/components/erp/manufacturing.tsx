@@ -57,6 +57,7 @@ import {
   type Bom,
   type Employee,
   type ManufacturingStats,
+  type MaterialPlanReport,
   type PendingReport,
   type PendingTaskRow,
   type ProductionTask,
@@ -73,7 +74,7 @@ import { cn } from '@/lib/utils'
 // Module shell
 // ===========================================================================
 
-type MfgTab = 'projects' | 'boms' | 'work-orders' | 'tasks' | 'pending' | 'employees'
+type MfgTab = 'projects' | 'boms' | 'work-orders' | 'material-plan' | 'tasks' | 'pending' | 'employees'
 
 export function ManufacturingView() {
   const [tab, setTab] = useState<MfgTab>('projects')
@@ -89,8 +90,8 @@ export function ManufacturingView() {
   return (
     <div className="space-y-4">
       <SectionHeading
-        title="Projects & Manufacturing"
-        description="Customer fabrication projects → BOM → work orders → operation tasks (job cards) → completion. Material consumption posts straight to the stock ledger."
+        title="Own Projects & Manufacturing"
+        description="Make-to-order fabrication using company-owned material: project → BOM → work order → operation tasks. Customer-owned conversion work stays in Customer Jobwork and is never used as own stock."
       />
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
@@ -145,6 +146,9 @@ export function ManufacturingView() {
           <TabsTrigger value="work-orders" className="h-11 gap-1.5 sm:h-9">
             <ClipboardList className="size-4" aria-hidden /> Work Orders
           </TabsTrigger>
+          <TabsTrigger value="material-plan" className="h-11 gap-1.5 sm:h-9">
+            <PackageSearch className="size-4" aria-hidden /> Material Plan
+          </TabsTrigger>
           <TabsTrigger value="tasks" className="h-11 gap-1.5 sm:h-9">
             <Wrench className="size-4" aria-hidden /> Tasks
           </TabsTrigger>
@@ -164,6 +168,9 @@ export function ManufacturingView() {
         </TabsContent>
         <TabsContent value="work-orders" className="mt-4">
           <WorkOrdersTab onViewTasks={gotoTasks} onChanged={() => stats.reload()} />
+        </TabsContent>
+        <TabsContent value="material-plan" className="mt-4">
+          <MaterialPlanTab />
         </TabsContent>
         <TabsContent value="tasks" className="mt-4">
           <TasksTab woFilter={taskWoFilter} onWoFilterChange={setTaskWoFilter} onChanged={() => stats.reload()} />
@@ -213,6 +220,84 @@ function isOverdue(due: string | null): boolean {
   if (!due) return false
   const day = due.slice(0, 10)
   return day < todayISO()
+}
+
+// ===========================================================================
+// Consolidated material plan (MRP-lite)
+// ===========================================================================
+
+function MaterialPlanTab() {
+  const report = useApi<MaterialPlanReport | null>('/api/manufacturing/material-plan')
+  const data = report.data
+  if (report.loading) return <TableSkeleton rows={6} cols={7} />
+  if (report.error) return <ErrorState error={report.error} onRetry={() => report.reload()} entity="material plan" />
+  if (!data) return null
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <KpiCard title="Active Work Orders" value={String(data.summary.activeWorkOrders)} icon={ClipboardList} />
+        <KpiCard title="Materials Planned" value={String(data.summary.materialItems)} icon={PackageSearch} />
+        <KpiCard title="Shortage Items" value={String(data.summary.shortageItems)} icon={XCircle} tone={data.summary.shortageItems ? 'negative' : 'positive'} />
+        <KpiCard title="Customer Material" value={qtyFmt(data.summary.customerMaterialQty)} icon={BadgeCheck} hint="jobwork qty kept separate" />
+      </div>
+
+      <Card className="border-blue-500/30 bg-blue-500/5 p-4">
+        <p className="text-sm font-medium">No duplicate stock ownership</p>
+        <p className="mt-1 text-xs text-muted-foreground">{data.ownershipRule}</p>
+      </Card>
+
+      {data.rows.length === 0 ? (
+        <EmptyState title="No active material demand" hint="Create an active work order from an approved BOM. Its company-owned material requirement will appear here." icon={PackageSearch} />
+      ) : (
+        <Card className="p-0">
+          <CardContent className="p-0">
+            <div className="max-h-[62dvh] overflow-auto erp-scroll">
+              <Table>
+                <TableHeader className="sticky top-0 z-10 bg-card">
+                  <TableRow>
+                    <TableHead>Material</TableHead>
+                    <TableHead>Demand Sources</TableHead>
+                    <TableHead className="text-right">Planned</TableHead>
+                    <TableHead className="text-right">Issued</TableHead>
+                    <TableHead className="text-right">Remaining</TableHead>
+                    <TableHead className="text-right">Own Stock</TableHead>
+                    <TableHead className="text-right">Shortage</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {data.rows.map((row) => (
+                    <TableRow key={row.item.id}>
+                      <TableCell>
+                        <span className="block font-medium">{row.item.name}</span>
+                        <span className="text-xs text-muted-foreground">{row.item.code} · {row.item.uom}</span>
+                      </TableCell>
+                      <TableCell>
+                        <div className="max-w-64 space-y-0.5">
+                          {row.workOrders.map((wo) => (
+                            <p key={wo.id} className="truncate text-xs" title={`${wo.woNo} · ${wo.projectNo} · ${wo.projectName}`}>
+                              <span className="font-medium tabular-nums">{wo.woNo}</span> · {wo.projectNo} · {qtyFmt(wo.requiredQty)}
+                            </p>
+                          ))}
+                        </div>
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">{qtyFmt(row.requiredQty)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{qtyFmt(row.issuedQty)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{qtyFmt(row.remainingQty)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{qtyFmt(row.availableQty)}</TableCell>
+                      <TableCell className={cn('text-right font-semibold tabular-nums', row.shortageQty > 0 && 'text-destructive')}>
+                        {row.shortageQty > 0 ? qtyFmt(row.shortageQty) : '—'}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
+  )
 }
 
 // ===========================================================================

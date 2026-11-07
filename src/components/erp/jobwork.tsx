@@ -63,8 +63,8 @@ export function JobworkView() {
   return (
     <div className="space-y-4">
       <SectionHeading
-        title="Jobwork"
-        description="Customer material inwards → multi-process job cards → certificate → GST invoice. The core manufacturing chain."
+        title="Customer Jobwork"
+        description="Service/conversion flow for customer-owned material: inward → process job cards → certificate → GST invoice. This stock is kept separate from your own project manufacturing."
       />
       <Tabs defaultValue="inwards">
         <TabsList className="h-11 w-full justify-start overflow-x-auto sm:w-auto">

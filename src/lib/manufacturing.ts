@@ -696,6 +696,21 @@ export async function createWorkOrder(input: WorkOrderInput) {
       if (!bom) throw new BusinessError('BOM not found', 404)
       if (bom.projectId !== project.id) throw new BusinessError('BOM belongs to a different project', 400)
       if (bom.status !== 'APPROVED') throw new BusinessError('Only APPROVED BOMs can generate work orders')
+      // The current BOM has one fixed output/material quantity (there is no
+      // production-batch multiplier yet). A second live WO from the same BOM
+      // would silently duplicate material demand and is almost always a
+      // double-click/user error. Completed/cancelled history does not block a
+      // later repeat order.
+      const duplicate = await tx.workOrder.findFirst({
+        where: { bomId: bom.id, status: { in: ['OPEN', 'IN_PROGRESS'] } },
+        select: { woNo: true },
+      })
+      if (duplicate) {
+        throw new BusinessError(
+          `${duplicate.woNo} is already active for ${bom.bomNo} — use that work order instead of duplicating demand`,
+          409
+        )
+      }
       bomId = bom.id
       // WO quantity = BOM net + wastage allowance (the fabrication gross-up).
       lines = bom.items.map((bi) => ({
@@ -1095,6 +1110,100 @@ export async function pendingTasksReport() {
       unassigned: rows.filter((r) => !r.employeeId).length,
       inProgress: rows.filter((r) => r.status === 'IN_PROGRESS').length,
     },
+  }
+}
+
+// ---------- consolidated material plan ----------
+
+/**
+ * Net material demand for active company-owned production.
+ *
+ * This intentionally excludes JOBWORK_IN stock. Customer jobwork and own
+ * manufacturing are adjacent shop-floor workflows, not duplicate inventory:
+ * customer-owned material may never satisfy a project WO shortage.
+ */
+export async function materialPlanReport() {
+  const workOrders = await db.workOrder.findMany({
+    where: { status: { in: ['OPEN', 'IN_PROGRESS'] } },
+    orderBy: [{ priority: 'desc' }, { endDate: 'asc' }],
+    include: {
+      project: { select: { projectNo: true, name: true } },
+      lines: { include: { item: { select: { id: true, code: true, name: true, uom: true, reorderLevel: true } } } },
+      tasks: {
+        where: { status: 'COMPLETED', materialItemId: { not: null } },
+        select: { materialItemId: true, materialQty: true },
+      },
+    },
+  })
+
+  const demand = new Map<string, {
+    item: { id: string; code: string; name: string; uom: string; reorderLevel: number }
+    requiredQty: number
+    issuedQty: number
+    workOrders: { id: string; woNo: string; projectNo: string; projectName: string; dueDate: Date | null; requiredQty: number }[]
+  }>()
+
+  for (const wo of workOrders) {
+    const issuedByItem = new Map<string, number>()
+    for (const task of wo.tasks) {
+      if (task.materialItemId) issuedByItem.set(task.materialItemId, (issuedByItem.get(task.materialItemId) ?? 0) + task.materialQty)
+    }
+    // A BOM can legitimately contain the same catalog item on several lines
+    // (different drawing/grade notes). Aggregate those lines per WO first so
+    // completed task issues are subtracted exactly once, not once per line.
+    const plannedByItem = new Map<string, { item: typeof wo.lines[number]['item']; qty: number }>()
+    for (const line of wo.lines) {
+      const planned = plannedByItem.get(line.itemId) ?? { item: line.item, qty: 0 }
+      planned.qty = r2(planned.qty + line.plannedQty)
+      plannedByItem.set(line.itemId, planned)
+    }
+    for (const [itemId, planned] of plannedByItem) {
+      const row: {
+        item: { id: string; code: string; name: string; uom: string; reorderLevel: number }
+        requiredQty: number
+        issuedQty: number
+        workOrders: { id: string; woNo: string; projectNo: string; projectName: string; dueDate: Date | null; requiredQty: number }[]
+      } = demand.get(itemId) ?? { item: planned.item, requiredQty: 0, issuedQty: 0, workOrders: [] }
+      row.requiredQty = r2(row.requiredQty + planned.qty)
+      row.issuedQty = r2(row.issuedQty + (issuedByItem.get(itemId) ?? 0))
+      row.workOrders.push({
+        id: wo.id,
+        woNo: wo.woNo,
+        projectNo: wo.project.projectNo,
+        projectName: wo.project.name,
+        dueDate: wo.endDate,
+        requiredQty: planned.qty,
+      })
+      demand.set(itemId, row)
+    }
+  }
+
+  const tx = db as unknown as Tx
+  const rows = await Promise.all([...demand.values()].map(async (row) => {
+    const availableQty = await stockAvail(tx, row.item.id)
+    const remainingQty = r2(Math.max(0, row.requiredQty - row.issuedQty))
+    const shortageQty = r2(Math.max(0, remainingQty - availableQty))
+    return { ...row, remainingQty, availableQty, shortageQty }
+  }))
+  rows.sort((a, b) => (b.shortageQty - a.shortageQty) || a.item.code.localeCompare(b.item.code))
+
+  const customerMaterial = await db.jobworkInwardItem.aggregate({
+    where: { inward: { status: { in: ['OPEN', 'IN_PROGRESS', 'COMPLETED'] } } },
+    _sum: { qty: true, processedQty: true },
+  })
+  const customerReceived = r2(customerMaterial._sum.qty ?? 0)
+  const customerProcessed = r2(customerMaterial._sum.processedQty ?? 0)
+
+  return {
+    rows,
+    summary: {
+      activeWorkOrders: workOrders.length,
+      materialItems: rows.length,
+      shortageItems: rows.filter((r) => r.shortageQty > EPS).length,
+      totalShortageQty: r2(rows.reduce((sum, r) => sum + r.shortageQty, 0)),
+      customerMaterialQty: r2(Math.max(0, customerReceived - customerProcessed)),
+    },
+    ownershipRule: 'Company production demand uses company-owned stock only; customer JOBWORK_IN material is reported separately and never netted against shortages.',
   }
 }
 

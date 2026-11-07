@@ -70,6 +70,7 @@ model Company {
   quotations           SalesQuotation[]
   salesOrders          SalesOrder[]
   deliveryChallans     DeliveryChallan[]
+  productionReceipts   ProductionReceipt[]
 }
 
 // ---------- Organization logins (SaaS) ----------
@@ -229,6 +230,7 @@ model Item {
   quotationLines SalesQuotationLine[]
   salesOrderLines SalesOrderLine[]
   deliveryLines DeliveryChallanLine[]
+  productionReceipts ProductionReceipt[]
 }
 
 model Warehouse {
@@ -243,6 +245,7 @@ model Warehouse {
   goodsReceipts GoodsReceipt[]
   returnDocuments ReturnDocument[]
   deliveryChallans DeliveryChallan[]
+  productionReceipts ProductionReceipt[]
 }
 
 model Process {
@@ -617,6 +620,7 @@ model WorkOrder {
 
   lines WorkOrderLine[]
   tasks ProductionTask[]
+  productionReceipts ProductionReceipt[]
 
   @@index([projectId])
   @@index([status])
@@ -665,6 +669,45 @@ model ProductionTask {
   @@index([workOrderId])
   @@index([status])
   @@index([employeeId])
+}
+
+// ---------- Production output, QC and WIP settlement ----------
+
+model ProductionReceipt {
+  id             String @id @default(cuid())
+  companyId      String
+  company        Company @relation(fields: [companyId], references: [id])
+  receiptNo      String
+  date           DateTime
+  workOrderId    String
+  workOrder      WorkOrder @relation(fields: [workOrderId], references: [id])
+  outputItemId   String
+  outputItem     Item @relation(fields: [outputItemId], references: [id])
+  warehouseId    String
+  warehouse      Warehouse @relation(fields: [warehouseId], references: [id])
+  batchNo        String?
+  manufacturedAt DateTime?
+  expiryDate     DateTime?
+  producedQty    Float
+  acceptedQty    Float
+  rejectedQty    Float @default(0)
+  reworkQty      Float @default(0)
+  scrapQty       Float @default(0)
+  qcStatus       String // PASSED | PARTIAL | FAILED
+  qcNotes        String? @db.Text
+  expectedCost   Float @default(0)
+  actualCost     Float @default(0)
+  variance       Float @default(0)
+  status         String @default("POSTED") // POSTED | CANCELLED
+  postedAt       DateTime @default(now())
+  cancelledAt    DateTime?
+  createdBy      String?
+  createdAt      DateTime @default(now())
+
+  @@unique([companyId, receiptNo])
+  @@index([companyId, status, date])
+  @@index([workOrderId])
+  @@index([outputItemId, batchNo])
 }
 
 // ---------- Procurement (Requisition → PO → GRN/QC → Invoice) ----------

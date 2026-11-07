@@ -124,7 +124,7 @@ async function main() {
     '/api/jobwork/inwards', '/api/manufacturing/pending',
     '/api/manufacturing/stats', '/api/manufacturing/projects', '/api/manufacturing/boms',
     '/api/manufacturing/work-orders', '/api/manufacturing/tasks', '/api/manufacturing/employees',
-    '/api/manufacturing/material-plan',
+    '/api/manufacturing/material-plan', '/api/manufacturing/receipts',
     '/api/reports?type=trial-balance', '/api/reports?type=stock-summary', '/api/reports?type=inventory-planning', '/api/reports?type=customer-performance', '/api/reports?type=supplier-performance', '/api/reports?type=production-cost-variance', '/api/reports?type=production-efficiency', '/api/reports?type=action-center', '/api/reports?type=outstanding',
     '/api/reports?type=cash-bank-book&from=2026-01-01&to=2026-12-31', '/api/reports?type=gstr1', '/api/reports?type=gstr3b', '/api/reports?type=hsn-summary', '/api/reports?type=pnl', '/api/reports?type=jobwork-pending',
     '/api/audit', '/api/search?q=shree',

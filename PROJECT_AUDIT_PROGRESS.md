@@ -2,6 +2,8 @@
 
 **Branch:** `arena/c87300cc-erp` · **Base commit:** `cf7a911` · **Checkpoint:** 2026-11-07 (Asia/Kolkata)
 **Status:** ACTIVE WORK IN PROGRESS — this is a saved checkpoint, **not** a final production sign-off.
+
+> **2026-11-07 continuation update (branch `arena/3bd3ec40-erp`):** fetched and verified `origin/main` at PR #5 merge commit `94c8eb2`; re-read both YouTube research documents, GitHub research, and this audit. Added `docs/RESEARCH_IMPLEMENTATION_MAPPING.md`; verified that **Customer Jobwork** and **Own Projects & Manufacturing** are distinct ownership/commercial flows, not duplicate modules. Implemented an active-work-order material plan (planned/issued/remaining/company stock/shortage with source WOs), explicitly excludes customer `JOBWORK_IN`, reports customer material separately, prevents duplicate live WOs from the same fixed-quantity BOM, and clarified module names/navigation. Regression verification for this continuation is recorded below; C1/C2/H1 remain open.
 **Safety:** No production database was connected, modified, migrated or deleted. All runtime tests used an isolated throwaway SQLite database at `tests/erp-test.db`. No deploy was run.
 
 > User standing rules honoured: research before coding; preserve correct existing manufacturing logic; no destructive DB changes without backup/migration; no "working" claim without an executed test; continuous module-by-module execution, not just a report; independently identify what a practical manufacturer needs, not just what exists.
@@ -116,6 +118,15 @@ Passing baseline included: anonymous/forged 401, 27 read endpoints 200, seeded t
 ---
 
 ## 7. Verification actually executed (no unexecuted claims)
+
+### Continuation verification — 2026-11-07
+
+| Check | Result |
+|---|---|
+| Latest main | `git fetch origin main`; branch HEAD and `origin/main` both `94c8eb26fc20fc8a9b4e3cfb6a1dcc6d6f741ae7` (PR #5 merge) |
+| Changed-source ESLint | **PASS** for `manufacturing.ts`, material-plan route, API types, manufacturing UI and app navigation. `jobwork.tsx` still has its documented pre-existing `react-hooks/set-state-in-effect` error at line 1037; this update changed only its heading text. |
+| Patch integrity | `git diff --check` **PASS** |
+| Typecheck/build/API suite | **Not passed or claimed in this continuation.** Dependencies were reinstalled, but Prisma client generation still attempts blocked `binaries.prisma.sh` downloads (network/TLS failure), leaving `@prisma/client` types unavailable. Consequently the prior **59/59 at 2026-11-07T14:04:14Z remains only the baseline**, not evidence for these changes. C1/C2/H1 remain open. |
 
 | Check | Command / runtime | Result |
 |---|---|---|

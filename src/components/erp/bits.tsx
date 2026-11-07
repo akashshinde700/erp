@@ -21,8 +21,13 @@ const STATUS_VARIANT: Record<string, 'default' | 'secondary' | 'outline' | 'dest
   COMPLETED: 'default',
   INVOICED: 'default',
   ISSUED: 'default',
+  RUNNING: 'default',
+  APPROVED: 'default',
   OPEN: 'secondary',
+  PENDING: 'secondary',
+  ASSIGNED: 'secondary',
   IN_PROGRESS: 'outline',
+  DRAFT: 'outline',
   CANCELLED: 'destructive',
 }
 

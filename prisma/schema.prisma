@@ -175,6 +175,7 @@ model Party {
   jobworkInwards   JobworkInward[]
   payments         Payment[]
   processRates     PartyProcessRate[]
+  projects         Project[]
 
   @@index([types])
 }
@@ -199,6 +200,9 @@ model Item {
   salesLines   SalesInvoiceItem[]
   purchaseLines PurchaseInvoiceItem[]
   inwardLines  JobworkInwardItem[]
+  bomLines     BomItem[]
+  woLines      WorkOrderLine[]
+  taskMaterial ProductionTask[] @relation("TaskMaterial")
 }
 
 model Warehouse {
@@ -467,6 +471,162 @@ model JobworkCertificate {
   status      String   @default("ISSUED") // ISSUED | CANCELLED
   details     String? // process-wise summary (JSON string)
   createdAt   DateTime @default(now())
+}
+
+// ---------- Manufacturing (Project → BOM → Work Order → Production Tasks) ----------
+// Absolute-ERP-style fabrication flow. Projects belong to a customer Party;
+// BOM lines reference stock Items (grossed up by wastage %); Work Orders pull
+// lines from an approved BOM; Production Tasks are per-operation job cards
+// (Cutting → … → Finishing) assigned to Employees. Completion state machines
+// are guarded SERVER-side: a WO completes only when every task is done, and a
+// Project only when every WO is done (see src/lib/manufacturing.ts).
+
+model Employee {
+  id         String   @id @default(cuid())
+  code       String   @unique
+  name       String
+  role       String   @default("WORKER") // WORKER | SUPERVISOR | MANAGER
+  skill      String? // e.g. Welder, CNC Operator, Fitter, Painter
+  machineNo  String? // default machine allocation
+  shift      String   @default("GENERAL") // GENERAL | DAY | NIGHT
+  hourlyRate Float    @default(0) // labour cost per hour (INR)
+  phone      String?
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  tasks ProductionTask[]
+}
+
+model Project {
+  id          String    @id @default(cuid())
+  projectNo   String    @unique // PRJ-0001 (global counter, not FY-based)
+  name        String
+  partyId     String
+  party       Party     @relation(fields: [partyId], references: [id])
+  manager     String? // project manager name
+  location    String?
+  startDate   DateTime
+  endDate     DateTime? // planned delivery
+  budget      Float     @default(0) // customer contract / order value
+  estCost     Float     @default(0) // estimated cost (from approved BOMs)
+  documents   String? // drawing / technical document references
+  status      String    @default("PENDING") // PENDING | RUNNING | COMPLETED | CANCELLED
+  completedAt DateTime?
+  notes       String?
+  createdAt   DateTime  @default(now())
+
+  boms       Bom[]
+  workOrders WorkOrder[]
+
+  @@index([partyId])
+  @@index([status])
+}
+
+model Bom {
+  id          String    @id @default(cuid())
+  bomNo       String    @unique // BOM-2526-001 (FY-aware)
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  productName String // product / assembly name
+  drawingRef  String?
+  status      String    @default("DRAFT") // DRAFT | APPROVED | CANCELLED
+  approvedAt  DateTime?
+  notes       String?
+  createdAt   DateTime  @default(now())
+
+  items      BomItem[]
+  workOrders WorkOrder[]
+
+  @@index([projectId])
+}
+
+model BomItem {
+  id         String  @id @default(cuid())
+  bomId      String
+  bom        Bom     @relation(fields: [bomId], references: [id], onDelete: Cascade)
+  itemId     String
+  item       Item    @relation(fields: [itemId], references: [id])
+  grade      String? // material grade (IS2062, SS304…)
+  thickness  Float   @default(0) // mm
+  length     Float   @default(0) // mm
+  width      Float   @default(0) // mm
+  qty        Float // required quantity (net)
+  uom        String // KG | PCS | MTR | LTR
+  wastagePct Float   @default(0)
+  rate       Float   @default(0) // estimated rate
+  estCost    Float   @default(0) // qty × (1 + wastage%) × rate
+  drawingRef String?
+  remarks    String?
+
+  woLines WorkOrderLine[]
+}
+
+model WorkOrder {
+  id          String    @id @default(cuid())
+  woNo        String    @unique // WO-2526-001 (FY-aware)
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id])
+  bomId       String?
+  bom         Bom?      @relation(fields: [bomId], references: [id])
+  date        DateTime
+  startDate   DateTime?
+  endDate     DateTime?
+  priority    String    @default("NORMAL") // LOW | NORMAL | HIGH | URGENT
+  status      String    @default("OPEN") // OPEN | IN_PROGRESS | COMPLETED | CANCELLED
+  completedAt DateTime?
+  notes       String?
+  createdAt   DateTime  @default(now())
+
+  lines WorkOrderLine[]
+  tasks ProductionTask[]
+
+  @@index([projectId])
+  @@index([status])
+}
+
+model WorkOrderLine {
+  id          String     @id @default(cuid())
+  workOrderId String
+  workOrder   WorkOrder  @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  bomItemId   String?
+  bomItem     BomItem?   @relation(fields: [bomItemId], references: [id])
+  itemId      String
+  item        Item       @relation(fields: [itemId], references: [id])
+  description String? // product / assembly being made
+  plannedQty  Float
+  uom         String
+}
+
+model ProductionTask {
+  id              String    @id @default(cuid())
+  taskNo          String    @unique // TASK-2526-001 (FY-aware)
+  workOrderId     String
+  workOrder       WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  seq             Int       @default(0) // operation order
+  operation       String // CUTTING | CNC_LASER | BENDING | DRILLING | WELDING | GRINDING | ASSEMBLY | PAINTING | FINISHING | OTHER
+  employeeId      String? // assigned worker (task assigning)
+  employee        Employee? @relation(fields: [employeeId], references: [id])
+  machineNo       String?
+  plannedQty      Float
+  actualQty       Float     @default(0)
+  rejectionQty    Float     @default(0)
+  hours           Float     @default(0) // production time
+  labourRate      Float     @default(0) // INR/hour (snapshotted from employee)
+  labourCost      Float     @default(0) // hours × rate
+  materialItemId  String? // material consumed → StockLedger MFG_ISSUE
+  materialItem    Item?     @relation("TaskMaterial", fields: [materialItemId], references: [id])
+  materialQty     Float     @default(0)
+  materialCost    Float     @default(0) // at avg cost on issue date
+  status          String    @default("PENDING") // PENDING | ASSIGNED | IN_PROGRESS | COMPLETED | CANCELLED
+  dueDate         DateTime?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  notes           String?
+  createdAt       DateTime  @default(now())
+
+  @@index([workOrderId])
+  @@index([status])
+  @@index([employeeId])
 }
 
 // ---------- Payments ----------

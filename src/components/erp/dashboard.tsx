@@ -10,6 +10,7 @@ import {
   ArrowUpRight,
   Boxes,
   Factory,
+  FolderKanban,
   HandCoins,
   PackageOpen,
   Plus,
@@ -110,13 +111,14 @@ export function DashboardView() {
         ))}
       </div>
 
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-6">
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-7">
         <KpiCard title="Month Sales" value={`₹ ${money(data.monthSales)}`} icon={ReceiptText} hint="Posted sales this month" onClick={() => setView('sales')} />
         <KpiCard title="Month Purchase" value={`₹ ${money(data.monthPurchase)}`} icon={ShoppingCart} hint="Posted purchases this month" onClick={() => setView('purchase')} />
         <KpiCard title="Receivables" value={`₹ ${money(data.receivables)}`} icon={HandCoins} tone="positive" hint="Customer outstanding" onClick={() => setView('accounting')} />
         <KpiCard title="Payables" value={`₹ ${money(data.payables)}`} icon={HandCoins} tone="negative" hint="Supplier outstanding" onClick={() => setView('accounting')} />
         <KpiCard title="Stock Value" value={`₹ ${money(data.stockValue)}`} icon={Boxes} hint="Closing @ avg cost" onClick={() => setView('inventory')} />
         <KpiCard title="Open Jobwork" value={`₹ ${money(data.openJobworkValue)}`} icon={Factory} tone="warning" hint="Completed cards, not invoiced" onClick={() => setView('jobwork')} />
+        <KpiCard title="Projects & Tasks" value={`${data.runningProjects} / ${data.pendingTasks}`} icon={FolderKanban} tone={data.pendingTasks > 0 ? 'warning' : 'default'} hint="Active projects / pending tasks" onClick={() => setView('manufacturing')} />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-[2fr_1fr]">

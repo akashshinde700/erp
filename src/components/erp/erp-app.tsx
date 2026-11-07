@@ -14,6 +14,7 @@ import {
   Calculator,
   Database,
   Factory,
+  FolderKanban,
   LayoutDashboard,
   Loader2,
   LogOut,
@@ -73,6 +74,12 @@ const NAV_GROUPS: { group: string; entries: NavEntry[] }[] = [
     ],
   },
   {
+    group: 'Manufacturing',
+    entries: [
+      { view: 'manufacturing', label: 'Projects & Mfg', icon: FolderKanban },
+    ],
+  },
+  {
     group: 'Books',
     entries: [
       { view: 'inventory', label: 'Inventory', icon: Boxes },
@@ -92,6 +99,8 @@ const NAV_GROUPS: { group: string; entries: NavEntry[] }[] = [
 
 function NavList({ onNavigate }: { onNavigate?: () => void }) {
   const { view, setView } = useErpUi()
+  const isActive = (entryView: ErpView) =>
+    view === entryView || view === `${entryView}-detail` || (entryView === 'manufacturing' && view === 'project-detail')
   return (
     <nav aria-label="ERP modules" className="flex flex-col gap-0.5 p-2">
       {NAV_GROUPS.map((g) => (
@@ -100,7 +109,7 @@ function NavList({ onNavigate }: { onNavigate?: () => void }) {
             {g.group}
           </p>
           {g.entries.map((e) => {
-            const active = view === e.view || view === `${e.view}-detail`
+            const active = isActive(e.view)
             return (
               <button
                 key={e.view}
@@ -180,6 +189,8 @@ const PurchaseDetailView = lazy(() => import('./purchase').then((m) => ({ defaul
 const InventoryView = lazy(() => import('./inventory').then((m) => ({ default: m.InventoryView })))
 const JobworkView = lazy(() => import('./jobwork').then((m) => ({ default: m.JobworkView })))
 const JobworkDetailView = lazy(() => import('./jobwork').then((m) => ({ default: m.JobworkDetailView })))
+const ManufacturingView = lazy(() => import('./manufacturing').then((m) => ({ default: m.ManufacturingView })))
+const ProjectDetailView = lazy(() => import('./manufacturing').then((m) => ({ default: m.ProjectDetailView })))
 const AccountingView = lazy(() => import('./accounting').then((m) => ({ default: m.AccountingView })))
 const ReportsView = lazy(() => import('./reports').then((m) => ({ default: m.ReportsView })))
 const MastersView = lazy(() => import('./masters').then((m) => ({ default: m.MastersView })))
@@ -540,6 +551,12 @@ export function ErpApp() {
       break
     case 'jobwork-detail':
       content = <JobworkDetailView id={params.id ?? ''} />
+      break
+    case 'manufacturing':
+      content = <ManufacturingView />
+      break
+    case 'project-detail':
+      content = <ProjectDetailView id={params.id ?? ''} />
       break
     case 'inventory':
       content = <InventoryView />

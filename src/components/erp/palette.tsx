@@ -15,6 +15,7 @@ import {
   Database,
   Factory,
   FileText,
+  FolderKanban,
   Keyboard,
   LayoutDashboard,
   ReceiptText,
@@ -37,6 +38,7 @@ interface SearchResults {
   salesInvoices: { id: string; invoiceNo: string; grandTotal: number; status: string; party: { name: string } | null }[]
   purchaseInvoices: { id: string; invoiceNo: string; grandTotal: number; status: string; party: { name: string } | null }[]
   inwards: { id: string; inwardNo: string; status: string; party: { name: string } | null }[]
+  projects: { id: string; projectNo: string; name: string; status: string; party: { name: string } | null }[]
 }
 
 const MODULES: { view: ErpView; label: string; icon: typeof LayoutDashboard; keywords: string }[] = [
@@ -44,6 +46,7 @@ const MODULES: { view: ErpView; label: string; icon: typeof LayoutDashboard; key
   { view: 'sales', label: 'Sales Invoices', icon: ReceiptText, keywords: 'invoice gst customer billing tax' },
   { view: 'purchase', label: 'Purchase Invoices', icon: ShoppingCart, keywords: 'supplier bill input gst' },
   { view: 'jobwork', label: 'Jobwork', icon: Factory, keywords: 'inward job card certificate process lot' },
+  { view: 'manufacturing', label: 'Projects & Manufacturing', icon: FolderKanban, keywords: 'project bom work order production task fabrication cutting welding assembly employee assign pending completion' },
   { view: 'inventory', label: 'Inventory', icon: Boxes, keywords: 'stock ledger warehouse balance' },
   { view: 'accounting', label: 'Accounting', icon: Calculator, keywords: 'payment receipt ledger allocation party' },
   { view: 'reports', label: 'Reports', icon: FileText, keywords: 'gstr1 trial balance pnl outstanding' },
@@ -61,6 +64,8 @@ const RECENT_LABELS: Record<string, string> = {
   'purchase-detail': 'Purchase invoice detail',
   jobwork: 'Jobwork',
   'jobwork-detail': 'Jobwork inward detail',
+  manufacturing: 'Projects & Manufacturing',
+  'project-detail': 'Project detail',
   inventory: 'Inventory',
   accounting: 'Accounting',
   reports: 'Reports',
@@ -135,12 +140,12 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   const newInward = () => go('jobwork')
 
   const hasResults =
-    results && (results.parties.length > 0 || results.items.length > 0 || results.salesInvoices.length > 0 || results.purchaseInvoices.length > 0 || results.inwards.length > 0)
+    results && (results.parties.length > 0 || results.items.length > 0 || results.salesInvoices.length > 0 || results.purchaseInvoices.length > 0 || results.inwards.length > 0 || results.projects.length > 0)
 
   return (
     <CommandDialog open={open} onOpenChange={onOpenChange} className="sm:max-w-xl">
       <CommandInput
-        placeholder="Search parties, items, invoices, inwards — or jump to a module…"
+        placeholder="Search parties, items, invoices, projects — or jump to a module…"
         value={query}
         onValueChange={setQuery}
       />
@@ -198,6 +203,18 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                 ))}
               </CommandGroup>
             ) : null}
+            {results.projects.length > 0 ? (
+              <CommandGroup heading="Projects">
+                {results.projects.map((pj) => (
+                  <CommandItem key={`pj-${pj.id}`} value={`${pj.projectNo} ${pj.name} ${pj.party?.name ?? ''}`} onSelect={() => go('project-detail', { id: pj.id })}>
+                    <FolderKanban className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                    <span className="truncate tabular-nums">{pj.projectNo}</span>
+                    <span className="truncate text-xs text-muted-foreground">{pj.name}</span>
+                    <span className="ml-auto text-xs text-muted-foreground">{pj.status}</span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            ) : null}
             {results.items.length > 0 ? (
               <CommandGroup heading="Items">
                 {results.items.map((it) => (
@@ -240,6 +257,10 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
           <CommandItem onSelect={newInward} value="new jobwork inward challan material">
             <Factory className="size-4 shrink-0" aria-hidden />
             New Jobwork Inward
+          </CommandItem>
+          <CommandItem onSelect={() => go('manufacturing')} value="new project bom work order task fabrication">
+            <FolderKanban className="size-4 shrink-0" aria-hidden />
+            New Project / BOM / Task
           </CommandItem>
         </CommandGroup>
 

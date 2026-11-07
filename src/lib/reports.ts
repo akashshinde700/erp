@@ -343,7 +343,7 @@ export async function dashboardData() {
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
   const monthKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
 
-  const [salesMonth, purchaseMonth, salesAll, purchaseAll, parties, stockSummary, jobwork, recent] =
+  const [salesMonth, purchaseMonth, salesAll, purchaseAll, parties, stockSummary, jobwork, recent, projAgg, taskAgg] =
     await Promise.all([
       db.salesInvoice.aggregate({ where: { status: 'POSTED', date: { gte: monthStart } }, _sum: { grandTotal: true } }),
       db.purchaseInvoice.aggregate({ where: { status: 'POSTED', date: { gte: monthStart } }, _sum: { grandTotal: true } }),
@@ -361,6 +361,8 @@ export async function dashboardData() {
         take: 8,
         include: { party: { select: { name: true } } },
       }),
+      db.project.groupBy({ by: ['status'], _count: true }),
+      db.productionTask.groupBy({ by: ['status'], _count: true }),
     ])
 
   // outstanding from live invoices
@@ -393,6 +395,9 @@ export async function dashboardData() {
     jobwork.reduce((s, iw) => s + iw.jobCards.reduce((x, c) => x + c.totalAmount, 0), 0)
   )
   const lowStock = stockSummary.filter((i) => i.lowStock)
+  const cnt = (rows: { status: string; _count: number }[], s: string) => rows.find((r) => r.status === s)?._count ?? 0
+  const runningProjects = cnt(projAgg, 'RUNNING') + cnt(projAgg, 'PENDING')
+  const pendingTasks = cnt(taskAgg, 'PENDING') + cnt(taskAgg, 'ASSIGNED') + cnt(taskAgg, 'IN_PROGRESS')
 
   return {
     monthSales: r2(salesMonth._sum.grandTotal ?? 0),
@@ -401,6 +406,8 @@ export async function dashboardData() {
     payables,
     stockValue,
     openJobworkValue,
+    runningProjects,
+    pendingTasks,
     trend,
     recentInvoices: recent.map((i) => ({
       id: i.id,

@@ -15,6 +15,8 @@ export type ErpView =
   | 'purchase-detail'
   | 'jobwork'
   | 'jobwork-detail'
+  | 'manufacturing'
+  | 'project-detail'
   | 'inventory'
   | 'accounting'
   | 'reports'

@@ -327,6 +327,201 @@ export interface JobworkInward {
   certificates: JobworkCertificate[]
 }
 
+// ---------- manufacturing (Project → BOM → Work Order → Tasks) ----------
+
+export interface Employee {
+  id: string
+  code: string
+  name: string
+  role: string // WORKER | SUPERVISOR | MANAGER
+  skill: string | null
+  machineNo: string | null
+  shift: string // GENERAL | DAY | NIGHT
+  hourlyRate: number
+  phone: string | null
+  active: boolean
+  createdAt: string
+  _count?: { tasks: number }
+}
+
+export interface ProjectStats {
+  bomCount: number
+  woCount: number
+  taskTotal: number
+  taskDone: number
+  progressPct: number
+  actualCost: number
+  labourCost: number
+  materialCost: number
+}
+
+export interface Project {
+  id: string
+  projectNo: string
+  name: string
+  partyId: string
+  party: { id: string; code: string; name: string; city: string | null }
+  manager: string | null
+  location: string | null
+  startDate: string
+  endDate: string | null
+  budget: number
+  estCost: number
+  documents: string | null
+  status: string // PENDING | RUNNING | COMPLETED | CANCELLED
+  completedAt: string | null
+  notes: string | null
+  createdAt: string
+  stats: ProjectStats
+}
+
+export interface BomItemRow {
+  id: string
+  itemId: string
+  item: { id?: string; code: string; name: string; uom: string; costRate?: number }
+  grade: string | null
+  thickness: number
+  length: number
+  width: number
+  qty: number
+  uom: string
+  wastagePct: number
+  rate: number
+  estCost: number
+  drawingRef: string | null
+  remarks: string | null
+  /** MRP stock check */
+  avail: number
+  grossQty: number
+  shortage: number
+}
+
+export interface Bom {
+  id: string
+  bomNo: string
+  projectId: string
+  project: { id: string; projectNo: string; name: string; status: string }
+  productName: string
+  drawingRef: string | null
+  status: string // DRAFT | APPROVED | CANCELLED
+  approvedAt: string | null
+  notes: string | null
+  createdAt: string
+  items: BomItemRow[]
+  totalEstCost: number
+  _count?: { workOrders: number }
+}
+
+export interface WorkOrderLineRow {
+  id: string
+  itemId: string
+  item: { code: string; name: string; uom: string }
+  description: string | null
+  plannedQty: number
+  uom: string
+}
+
+export interface ProductionTask {
+  id: string
+  taskNo: string
+  workOrderId: string
+  seq: number
+  operation: string
+  employeeId: string | null
+  employee?: { id: string; code: string; name: string; machineNo?: string | null; shift?: string } | null
+  machineNo: string | null
+  plannedQty: number
+  actualQty: number
+  rejectionQty: number
+  hours: number
+  labourRate: number
+  labourCost: number
+  materialItemId: string | null
+  materialItem?: { id: string; code: string; name: string; uom: string } | null
+  materialQty: number
+  materialCost: number
+  status: string // PENDING | ASSIGNED | IN_PROGRESS | COMPLETED | CANCELLED
+  dueDate: string | null
+  startedAt: string | null
+  completedAt: string | null
+  notes: string | null
+  createdAt: string
+}
+
+export interface WorkOrder {
+  id: string
+  woNo: string
+  projectId: string
+  project: { id: string; projectNo: string; name: string; status: string }
+  bomId: string | null
+  bom?: { id: string; bomNo: string; productName: string } | null
+  date: string
+  startDate: string | null
+  endDate: string | null
+  priority: string // LOW | NORMAL | HIGH | URGENT
+  status: string // OPEN | IN_PROGRESS | COMPLETED | CANCELLED
+  completedAt: string | null
+  notes: string | null
+  createdAt: string
+  lines: WorkOrderLineRow[]
+  tasks: ProductionTask[]
+  stats: { taskTotal: number; taskDone: number; progressPct: number; labourCost: number; materialCost: number }
+}
+
+export interface ProjectDetail extends Omit<Project, 'stats'> {
+  boms: (Bom & { items: BomItemRow[] })[]
+  workOrders: WorkOrder[]
+  stats: ProjectStats & {
+    estCost: number
+    budget: number
+    margin: number
+    pendingTasks: number
+  }
+}
+
+export interface PendingTaskRow extends ProductionTask {
+  employee: { id: string; code: string; name: string; shift: string } | null
+  workOrder: {
+    id: string
+    woNo: string
+    priority: string
+    status: string
+    endDate: string | null
+    project: { id: string; projectNo: string; name: string; status: string }
+  }
+  overdue: boolean
+  woOverdue: boolean
+}
+
+export interface PendingReport {
+  rows: PendingTaskRow[]
+  summary: { total: number; overdue: number; unassigned: number; inProgress: number }
+}
+
+export interface ManufacturingStats {
+  projects: { total: number; pending: number; running: number; completed: number }
+  workOrders: { open: number; inProgress: number; completed: number }
+  tasks: { pending: number; assigned: number; inProgress: number }
+}
+
+export const MANUFACTURING_OPERATIONS: { key: string; label: string }[] = [
+  { key: 'CUTTING', label: 'Material Cutting' },
+  { key: 'CNC_LASER', label: 'CNC / Laser Cutting' },
+  { key: 'BENDING', label: 'Bending' },
+  { key: 'DRILLING', label: 'Drilling' },
+  { key: 'WELDING', label: 'Welding' },
+  { key: 'GRINDING', label: 'Grinding' },
+  { key: 'ASSEMBLY', label: 'Assembly' },
+  { key: 'PAINTING', label: 'Painting / Powder Coating' },
+  { key: 'FINISHING', label: 'Final Finishing' },
+  { key: 'OTHER', label: 'Other' },
+]
+
+export const operationLabel = (key: string): string =>
+  MANUFACTURING_OPERATIONS.find((o) => o.key === key)?.label ?? key
+
+export const WO_PRIORITIES = ['LOW', 'NORMAL', 'HIGH', 'URGENT'] as const
+
 // ---------- reports ----------
 
 export interface StockLedgerRow {
@@ -478,6 +673,8 @@ export interface DashboardData {
   payables: number
   stockValue: number
   openJobworkValue: number
+  runningProjects: number
+  pendingTasks: number
   trend: { month: string; label: string; sales: number; purchase: number }[]
   recentInvoices: {
     id: string

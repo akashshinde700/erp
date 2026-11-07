@@ -66,6 +66,7 @@ model Company {
   goodsReceipts        GoodsReceipt[]
   qualityInspections   QualityInspection[]
   itemVendors          ItemVendor[]
+  returnDocuments      ReturnDocument[]
 }
 
 // ---------- Organization logins (SaaS) ----------
@@ -186,6 +187,7 @@ model Party {
   projects         Project[]
   purchaseOrders   PurchaseOrder[] @relation("PurchaseOrderSupplier")
   itemVendors      ItemVendor[]
+  returnDocuments  ReturnDocument[]
 
   @@index([types])
 }
@@ -217,6 +219,7 @@ model Item {
   purchaseOrderLines PurchaseOrderLine[]
   goodsReceiptLines GoodsReceiptLine[]
   itemVendors ItemVendor[]
+  returnLines ReturnDocumentLine[]
 }
 
 model Warehouse {
@@ -229,6 +232,7 @@ model Warehouse {
 
   stockRows StockLedger[]
   goodsReceipts GoodsReceipt[]
+  returnDocuments ReturnDocument[]
 }
 
 model Process {
@@ -834,6 +838,69 @@ model ItemVendor {
 
   @@unique([companyId, itemId, supplierId])
   @@index([supplierId])
+}
+
+// ---------- Commercial returns and tax adjustment notes ----------
+
+model ReturnDocument {
+  id              String @id @default(cuid())
+  companyId       String
+  company         Company @relation(fields: [companyId], references: [id])
+  returnNo        String
+  date            DateTime
+  returnType      String // SALES_RETURN | PURCHASE_RETURN
+  sourceInvoiceId String
+  sourceInvoiceNo String
+  partyId         String
+  party           Party @relation(fields: [partyId], references: [id])
+  warehouseId     String
+  warehouse       Warehouse @relation(fields: [warehouseId], references: [id])
+  qcStatus        String @default("PENDING") // PENDING | PASSED | PARTIAL | FAILED
+  status          String @default("DRAFT") // DRAFT | POSTED | CANCELLED
+  adjustmentType  String // CREDIT_NOTE for sales return | DEBIT_NOTE for purchase return
+  adjustmentNo    String?
+  taxable         Float @default(0)
+  cgst            Float @default(0)
+  sgst            Float @default(0)
+  igst            Float @default(0)
+  grandTotal      Float @default(0)
+  reason          String @db.Text
+  postedAt        DateTime?
+  cancelledAt     DateTime?
+  createdBy       String?
+  createdAt       DateTime @default(now())
+  lines           ReturnDocumentLine[]
+
+  @@unique([companyId, returnNo])
+  @@unique([companyId, adjustmentNo])
+  @@index([companyId, returnType, status, date])
+  @@index([sourceInvoiceId])
+}
+
+model ReturnDocumentLine {
+  id               String @id @default(cuid())
+  returnDocumentId String
+  returnDocument   ReturnDocument @relation(fields: [returnDocumentId], references: [id], onDelete: Cascade)
+  sourceLineId     String
+  itemId           String
+  item             Item @relation(fields: [itemId], references: [id])
+  requestedQty     Float
+  acceptedQty      Float @default(0)
+  rejectedQty      Float @default(0)
+  rate             Float
+  gstRate          Float
+  taxable          Float
+  cgst             Float @default(0)
+  sgst             Float @default(0)
+  igst             Float @default(0)
+  total            Float
+  disposition      String // RESTOCK | SCRAP | RETURN_TO_VENDOR | REJECT_TO_CUSTOMER
+  batchNo          String?
+  qcNotes          String? @db.Text
+
+  @@unique([returnDocumentId, sourceLineId])
+  @@index([sourceLineId])
+  @@index([itemId])
 }
 
 // ---------- Payments ----------

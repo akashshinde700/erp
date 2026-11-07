@@ -31,7 +31,7 @@ These modules are **not duplicates**, but the old labels/navigation made them lo
 | Project → BOM → WO → operations | Partial | Existing; needs routing master, dependencies, capacity calendar and task time logs |
 | Finish production → independent FG receipt | Missing (P0) | Add output item/qty, QC gate, atomic FG receipt + material variance posting |
 | Planned vs actual production cost/variance + WIP settlement | Partial | Labour/material actual cost exists; expected-vs-actual and WIP GL remain |
-| MRP demand/supply netting and purchase suggestions | Partial | Current report nets active WO demand against own on-hand only; open PO/PO workflow absent |
+| MRP demand/supply netting and purchase suggestions | Improved/partial | Active-WO plan nets demand against own stock; Inventory Planning adds reorder suggestions and ageing. Open PO/PO supply remains absent |
 | PO → partial GRN → QC → bill / three-way match | Missing (P0) | Implement as linked documents with accepted/rejected quantity and stock gate |
 | Quotation → SO → production → dispatch → invoice | Missing (P0) | Implement SO reservation and physical dispatch separate from invoice |
 | BOM revision/ECO/effective dates/Where-Used/phantom | Missing (P1) | Versioned immutable approved BOMs; no in-place mutation |

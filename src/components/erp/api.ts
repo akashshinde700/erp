@@ -578,6 +578,21 @@ export interface StockSummaryRow {
   warehouses?: { code: string; closing: number }[]
 }
 
+export interface InventoryPlanningRow extends StockSummaryRow {
+  lastMovementAt: string | null
+  lastVoucherType: string | null
+  lastVoucherNo: string | null
+  inactiveDays: number | null
+  ageingClass: 'ACTIVE' | 'SLOW' | 'DEAD' | 'NO_MOVEMENT'
+  suggestedOrderQty: number
+}
+
+export interface InventoryPlanningReport {
+  asOf: string
+  rows: InventoryPlanningRow[]
+  summary: { itemCount: number; reorderItems: number; deadItems: number; slowItems: number; stockValue: number }
+}
+
 export interface Gstr1Bucket {
   rate: number
   count: number

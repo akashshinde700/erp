@@ -219,6 +219,73 @@ export async function supplierPerformanceReport() {
   }
 }
 
+// ---------- Customer sales performance ----------
+
+/**
+ * Customer history and value analysis from posted sales documents. Invoice
+ * outstanding is intentionally document-scoped here; the Outstanding report
+ * remains the control view that also includes opening balances and advances.
+ */
+export async function customerPerformanceReport() {
+  const [customers, invoices] = await Promise.all([
+    db.party.findMany({ where: { types: { contains: 'CUSTOMER' } }, orderBy: { name: 'asc' } }),
+    db.salesInvoice.findMany({
+      include: { items: { include: { item: { select: { id: true, code: true, name: true, uom: true } } } } },
+      orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
+    }),
+  ])
+  const rows = customers.map((customer) => {
+    const all = invoices.filter((invoice) => invoice.partyId === customer.id)
+    const posted = all.filter((invoice) => invoice.status === 'POSTED')
+    const cancelled = all.filter((invoice) => invoice.status === 'CANCELLED')
+    const salesValue = r2(posted.reduce((sum, invoice) => sum + invoice.grandTotal, 0))
+    const receivedValue = r2(posted.reduce((sum, invoice) => sum + invoice.paidAmount, 0))
+    const invoiceOutstanding = r2(Math.max(0, salesValue - receivedValue))
+    const jobworkValue = r2(posted.filter((invoice) => invoice.source === 'JOBWORK').reduce((sum, invoice) => sum + invoice.grandTotal, 0))
+    const itemMap = new Map<string, { item: { id: string; code: string; name: string; uom: string }; qty: number; taxableValue: number }>()
+    for (const invoice of posted) {
+      for (const line of invoice.items) {
+        const prev = itemMap.get(line.itemId) ?? { item: line.item, qty: 0, taxableValue: 0 }
+        prev.qty = r2(prev.qty + line.qty)
+        prev.taxableValue = r2(prev.taxableValue + line.taxable)
+        itemMap.set(line.itemId, prev)
+      }
+    }
+    const topItems = [...itemMap.values()]
+      .map((line) => ({ ...line, avgRate: line.qty > 0 ? r2(line.taxableValue / line.qty) : 0 }))
+      .sort((a, b) => b.taxableValue - a.taxableValue)
+      .slice(0, 5)
+    return {
+      customer: { id: customer.id, code: customer.code, name: customer.name, city: customer.city, gstin: customer.gstin, active: customer.active },
+      invoiceCount: posted.length,
+      cancelledCount: cancelled.length,
+      salesValue,
+      receivedValue,
+      invoiceOutstanding,
+      collectionPct: salesValue > 0 ? r2((receivedValue / salesValue) * 100) : 0,
+      avgInvoiceValue: posted.length > 0 ? r2(salesValue / posted.length) : 0,
+      jobworkValue,
+      jobworkSharePct: salesValue > 0 ? r2((jobworkValue / salesValue) * 100) : 0,
+      lastSaleAt: posted[0]?.date ?? null,
+      topItems,
+    }
+  })
+  rows.sort((a, b) => (b.salesValue - a.salesValue) || a.customer.name.localeCompare(b.customer.name))
+  return {
+    rows,
+    summary: {
+      customerCount: rows.length,
+      activeCustomers: rows.filter((row) => row.customer.active).length,
+      customersServed: rows.filter((row) => row.invoiceCount > 0).length,
+      totalSales: r2(rows.reduce((sum, row) => sum + row.salesValue, 0)),
+      totalReceived: r2(rows.reduce((sum, row) => sum + row.receivedValue, 0)),
+      invoiceOutstanding: r2(rows.reduce((sum, row) => sum + row.invoiceOutstanding, 0)),
+      jobworkSales: r2(rows.reduce((sum, row) => sum + row.jobworkValue, 0)),
+    },
+    note: 'Invoice outstanding excludes opening balances and unallocated advances; use Outstanding for the party control balance.',
+  }
+}
+
 // ---------- GSTR-1 summary (B2B / B2C, rate-wise) ----------
 
 export async function gstr1Report(month: string) {

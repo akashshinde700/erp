@@ -3,6 +3,8 @@
 **Branch:** `arena/c87300cc-erp` · **Base commit:** `cf7a911` · **Checkpoint:** 2026-11-07 (Asia/Kolkata)
 **Status:** ACTIVE WORK IN PROGRESS — this is a saved checkpoint, **not** a final production sign-off.
 
+> **2026-11-07 Customer Analysis continuation (branch `arena/93a6cb13-erp`):** implemented the Rootstock/Absolute customer order-history analysis layer from auditable posted sales: invoice/cancellation counts, sales, collections, invoice-scoped outstanding, average invoice, last sale, jobwork share and top items/services with average rates. The report clearly separates invoice outstanding from the control Outstanding report (which also includes opening balances and unallocated advances). Added API/UI and reconciliation assertions.
+
 > **2026-11-07 Supplier Analysis continuation (branch `arena/97112f28-erp`):** implemented Rootstock/Absolute-style vendor analysis using only auditable data currently available: supplier invoice/cancellation counts, gross purchases, paid/outstanding, payment %, average invoice value, last purchase and top purchased items with average rates. The UI explicitly refuses to fabricate on-time delivery, QC acceptance or three-way-match scores before PO→GRN→QC exists. Added API/UI and reconciliation assertions.
 
 > **2026-11-07 Cash & Bank continuation (branch `arena/3b38bfe6-erp`):** implemented the Mapsoft/Absolute/Vyapar-style Cash & Bank Book from ForgeERP's append-only GL. It calculates account-wise opening before the selected period, period receipts/payments, running balance and closing for CASH/BANK, retains voucher/party traceability, and respects cancellation reversals through `isCancelled=false`. Added API/UI and an accounting identity regression assertion.

@@ -39,6 +39,7 @@ These modules are **not duplicates**, but the old labels/navigation made them lo
 | Lot/serial genealogy and FIFO | Missing/very thin | General lot ledger, traceability and valuation required |
 | Work centers, calendars, OEE and maintenance | Missing (P1) | Add only after routing and production posting are correct |
 | MPS/ATP and forecast demand | Missing (P1) | Build on SO + MRP supply/demand foundation |
+| Customer sales history / analysis | Improved | Auditable sales, collections, invoice outstanding, jobwork share, average invoice, last sale and top items/services |
 | Supplier/vendor analysis | Improved/partial | Auditable invoice count, spend, paid/outstanding, average invoice, last purchase and top items; on-time/QC scores await PO→GRN→QC |
 | Cash & Bank / day book | Implemented | Ledger-backed period opening, receipts, payments, running account balance and closing for CASH/BANK |
 | Returns/credit/debit notes/refunds | Missing (P0) | Physical receipt gate and original-line quantity caps |

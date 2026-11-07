@@ -593,6 +593,25 @@ export interface InventoryPlanningReport {
   summary: { itemCount: number; reorderItems: number; deadItems: number; slowItems: number; stockValue: number }
 }
 
+export interface CustomerPerformanceReport {
+  rows: {
+    customer: { id: string; code: string; name: string; city: string | null; gstin: string | null; active: boolean }
+    invoiceCount: number
+    cancelledCount: number
+    salesValue: number
+    receivedValue: number
+    invoiceOutstanding: number
+    collectionPct: number
+    avgInvoiceValue: number
+    jobworkValue: number
+    jobworkSharePct: number
+    lastSaleAt: string | null
+    topItems: { item: { id: string; code: string; name: string; uom: string }; qty: number; taxableValue: number; avgRate: number }[]
+  }[]
+  summary: { customerCount: number; activeCustomers: number; customersServed: number; totalSales: number; totalReceived: number; invoiceOutstanding: number; jobworkSales: number }
+  note: string
+}
+
 export interface SupplierPerformanceReport {
   rows: {
     supplier: { id: string; code: string; name: string; city: string | null; gstin: string | null; active: boolean }

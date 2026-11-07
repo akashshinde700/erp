@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { handleError, ok, fail } from '@/lib/api'
 import { assertCompanyAccess, assertMutationAccess } from '@/lib/platform'
-import { approvePurchaseOrder, createGoodsReceipt, createPurchaseOrder, createPurchaseRequisition, inspectGoodsReceipt, procurementDashboard, transitionRequisition } from '@/lib/procurement'
+import { approvePurchaseOrder, cancelGoodsReceipt, createGoodsReceipt, createPurchaseOrder, createPurchaseRequisition, inspectGoodsReceipt, invoiceAcceptedReceipt, procurementDashboard, transitionRequisition } from '@/lib/procurement'
 
 const line = z.object({ itemId: z.string().min(1), qty: z.number().positive(), rate: z.number().nonnegative().optional(), remarks: z.string().optional() })
 const date = z.string().date().optional().transform((value) => value ? new Date(`${value}T00:00:00.000Z`) : undefined)
@@ -47,6 +47,16 @@ export async function POST(req: Request) {
       const parsed = z.object({ goodsReceiptId: z.string().min(1), notes: z.string().optional(), lines: z.array(z.object({ goodsReceiptLineId: z.string().min(1), acceptedQty: z.number().nonnegative(), rejectedQty: z.number().nonnegative(), rejectionReason: z.string().optional(), results: z.unknown().optional() })).min(1) }).safeParse(body)
       if (!parsed.success) return fail(parsed.error.issues[0]?.message ?? 'Invalid inspection')
       return ok(await inspectGoodsReceipt({ ...parsed.data, actor: actor?.email ?? undefined }))
+    }
+    if (action === 'invoice-receipt') {
+      const parsed = z.object({ goodsReceiptId: z.string().min(1), date, taxInclusive: z.boolean().optional(), remarks: z.string().optional(), lines: z.array(z.object({ goodsReceiptLineId: z.string().min(1), qty: z.number().positive(), rate: z.number().nonnegative().optional() })).min(1) }).safeParse(body)
+      if (!parsed.success) return fail(parsed.error.issues[0]?.message ?? 'Invalid receipt invoice')
+      return ok(await invoiceAcceptedReceipt(parsed.data))
+    }
+    if (action === 'cancel-receipt') {
+      const parsed = z.object({ id: z.string().min(1) }).safeParse(body)
+      if (!parsed.success) return fail('Goods receipt id is required')
+      return ok(await cancelGoodsReceipt(parsed.data.id))
     }
     return fail('Unknown procurement action')
   } catch (error) { return handleError(error) }

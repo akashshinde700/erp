@@ -1,6 +1,6 @@
 import { Prisma } from '@prisma/client'
 import { db } from './db'
-import { BusinessError } from './accounting'
+import { BusinessError, postGl, AccountCode } from './accounting'
 import { computeInvoiceTotals, fyCode, r2, EPS } from './erp'
 
 export type ProcurementLineInput = { itemId: string; qty: number; rate?: number; remarks?: string }
@@ -171,6 +171,90 @@ export async function inspectGoodsReceipt(input: { goodsReceiptId: string; actor
     }
     const status = acceptedTotal > EPS && rejectedTotal > EPS ? 'PART_ACCEPTED' : acceptedTotal > EPS ? 'ACCEPTED' : 'REJECTED'
     return tx.goodsReceipt.update({ where: { id: grn.id }, data: { status, postedAt: new Date(), remarks: input.notes ?? grn.remarks }, include: { lines: true, inspections: true } })
+  })
+}
+
+export async function invoiceAcceptedReceipt(input: { goodsReceiptId: string; date?: Date; taxInclusive?: boolean; remarks?: string; lines: { goodsReceiptLineId: string; qty: number; rate?: number }[] }) {
+  return db.$transaction(async (tx) => {
+    const company = await contextCompany(tx)
+    const grn = await tx.goodsReceipt.findFirst({
+      where: { id: input.goodsReceiptId, companyId: company.id },
+      include: { purchaseOrder: { include: { supplier: true } }, lines: { include: { item: true, purchaseOrderLine: true } } },
+    })
+    if (!grn) throw new BusinessError('Goods receipt not found', 404)
+    if (!['ACCEPTED', 'PART_ACCEPTED'].includes(grn.status)) throw new BusinessError('Only a QC-accepted receipt can be invoiced')
+    if (!input.lines.length) throw new BusinessError('At least one invoice line is required')
+    const seen = new Set<string>()
+    const selected = input.lines.map((requested) => {
+      if (seen.has(requested.goodsReceiptLineId)) throw new BusinessError('A GRN line may occur only once on an invoice')
+      seen.add(requested.goodsReceiptLineId)
+      const line = grn.lines.find((row) => row.id === requested.goodsReceiptLineId)
+      if (!line) throw new BusinessError('Invoice line does not belong to the selected GRN')
+      if (!(requested.qty > 0)) throw new BusinessError(`Billing quantity must be positive for ${line.item.name}`)
+      if (line.billedQty + requested.qty > line.acceptedQty + EPS) throw new BusinessError(`Billing quantity exceeds unbilled QC-accepted quantity for ${line.item.name}`)
+      const rate = requested.rate ?? line.purchaseOrderLine.rate
+      if (rate < 0) throw new BusinessError(`Rate cannot be negative for ${line.item.name}`)
+      return { requested, line, rate }
+    })
+    const interState = grn.purchaseOrder.supplier.stateCode !== company.stateCode
+    const taxInclusive = input.taxInclusive ?? grn.purchaseOrder.taxInclusive
+    const totals = computeInvoiceTotals(selected.map(({ requested, line, rate }) => ({ qty: requested.qty, rate, discPct: 0, gstRate: line.purchaseOrderLine.gstRate })), { taxInclusive, interState })
+    const date = input.date ?? new Date()
+    const invoiceNo = await nextNumber(tx, company.id, 'PIN', date)
+    const invoice = await tx.purchaseInvoice.create({
+      data: {
+        invoiceNo, date, partyId: grn.purchaseOrder.supplierId, poNo: grn.purchaseOrder.poNo, interState, taxInclusive,
+        taxable: totals.taxable, discount: totals.discount, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst,
+        roundOff: totals.roundOff, grandTotal: totals.grandTotal, remarks: input.remarks, goodsReceiptId: grn.id,
+        items: { create: selected.map(({ requested, line, rate }, index) => ({
+          itemId: line.itemId, detail: `GRN ${grn.grnNo}`, hsn: line.item.hsn, uom: line.item.uom,
+          qty: requested.qty, rate, discPct: 0, discAmt: totals.lines[index].discAmt, taxable: totals.lines[index].taxable,
+          gstRate: line.purchaseOrderLine.gstRate, cgst: totals.lines[index].cgst, sgst: totals.lines[index].sgst,
+          igst: totals.lines[index].igst, total: totals.lines[index].total, goodsReceiptLineId: line.id,
+        })) },
+      }, include: { items: true },
+    })
+    for (const { requested, line } of selected) {
+      const updated = await tx.goodsReceiptLine.updateMany({
+        where: { id: line.id, billedQty: { gte: r2(line.billedQty - 0.0001), lte: r2(line.billedQty + 0.0001) } },
+        data: { billedQty: r2(line.billedQty + requested.qty) },
+      })
+      if (updated.count !== 1) throw new BusinessError('GRN billing changed concurrently; refresh and retry', 409)
+      await tx.purchaseOrderLine.update({ where: { id: line.purchaseOrderLineId }, data: { billedQty: { increment: requested.qty } } })
+    }
+    const gl: Parameters<typeof postGl>[2] = [
+      { account: 'PURC' as AccountCode, debit: totals.taxable },
+      { account: 'CGSTI' as AccountCode, debit: totals.cgst },
+      { account: 'SGSTI' as AccountCode, debit: totals.sgst },
+      { account: 'IGSTI' as AccountCode, debit: totals.igst },
+      { account: 'CRED' as AccountCode, partyId: grn.purchaseOrder.supplierId, credit: totals.grandTotal, remarks: `Invoice ${invoiceNo} against ${grn.grnNo}` },
+    ]
+    if (Math.abs(totals.roundOff) > 0.004) gl.push(totals.roundOff > 0 ? { account: 'RND' as AccountCode, credit: totals.roundOff } : { account: 'RND' as AccountCode, debit: -totals.roundOff })
+    await postGl(tx, { date, voucherType: 'PURCHASE_INVOICE', voucherNo: invoiceNo }, gl)
+    return invoice
+  })
+}
+
+export async function cancelGoodsReceipt(id: string) {
+  return db.$transaction(async (tx) => {
+    const company = await contextCompany(tx)
+    const grn = await tx.goodsReceipt.findFirst({ where: { id, companyId: company.id }, include: { lines: { include: { item: true } } } })
+    if (!grn) throw new BusinessError('Goods receipt not found', 404)
+    if (grn.status === 'CANCELLED') throw new BusinessError('Goods receipt is already cancelled')
+    if (grn.lines.some((line) => line.billedQty > EPS)) throw new BusinessError('GRN has billed quantities; cancel the linked purchase invoice first')
+    for (const line of grn.lines) {
+      if (line.acceptedQty <= EPS || line.item.isService || !line.item.isStockItem) continue
+      const stock = await tx.stockLedger.aggregate({ where: { itemId: line.itemId, warehouseId: grn.warehouseId, isCancelled: false }, _sum: { qtyIn: true, qtyOut: true } })
+      const available = r2((stock._sum.qtyIn ?? 0) - (stock._sum.qtyOut ?? 0))
+      if (available + EPS < line.acceptedQty) throw new BusinessError(`Cannot cancel ${grn.grnNo}: ${line.item.name} stock has already been consumed/sold`)
+    }
+    const originals = await tx.stockLedger.findMany({ where: { voucherType: 'GRN', voucherNo: grn.grnNo, isCancelled: false } })
+    for (const row of originals) await tx.stockLedger.create({ data: { postingDate: new Date(), voucherType: 'GRN', voucherNo: grn.grnNo, itemId: row.itemId, warehouseId: row.warehouseId, qtyIn: 0, qtyOut: row.qtyIn, rate: row.rate, remarks: `Reversal of ${grn.grnNo}`, isCancelled: true } })
+    await tx.stockLedger.updateMany({ where: { voucherType: 'GRN', voucherNo: grn.grnNo, isCancelled: false }, data: { isCancelled: true } })
+    for (const line of grn.lines) await tx.purchaseOrderLine.update({ where: { id: line.purchaseOrderLineId }, data: { receivedQty: { decrement: line.receivedQty }, acceptedQty: { decrement: line.acceptedQty }, rejectedQty: { decrement: line.rejectedQty } } })
+    await tx.qualityInspection.updateMany({ where: { goodsReceiptId: grn.id }, data: { status: 'CANCELLED' } })
+    await tx.purchaseOrder.update({ where: { id: grn.purchaseOrderId }, data: { status: 'PART_RECEIVED' } })
+    return tx.goodsReceipt.update({ where: { id: grn.id }, data: { status: 'CANCELLED', cancelledAt: new Date() } })
   })
 }
 

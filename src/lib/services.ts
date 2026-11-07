@@ -429,7 +429,7 @@ export async function postPurchaseInvoice(input: PostPurchaseInput) {
 
 export async function cancelPurchaseInvoice(id: string) {
   return db.$transaction(async (tx) => {
-    const inv = await tx.purchaseInvoice.findUnique({ where: { id } })
+    const inv = await tx.purchaseInvoice.findUnique({ where: { id }, include: { items: true } })
     if (!inv) throw new BusinessError('Invoice not found', 404)
     if (inv.status === 'CANCELLED') throw new BusinessError('Invoice is already cancelled')
     if (inv.paidAmount > 0.004) {
@@ -438,6 +438,16 @@ export async function cancelPurchaseInvoice(id: string) {
     const now = new Date()
     await cancelStockForVoucher(tx, 'PURCHASE', inv.invoiceNo, now)
     await cancelGlForVoucher(tx, 'PURCHASE_INVOICE', inv.invoiceNo, now)
+    // Controlled procurement invoices do not post stock (the QC-accepted GRN
+    // does). Release their billed quantities so the same accepted receipt can
+    // be corrected/re-invoiced; direct legacy invoices have no source ids.
+    for (const line of inv.items) {
+      if (!line.goodsReceiptLineId) continue
+      const receiptLine = await tx.goodsReceiptLine.findUnique({ where: { id: line.goodsReceiptLineId } })
+      if (!receiptLine || receiptLine.billedQty + EPS < line.qty) throw new BusinessError('Linked GRN billing state is inconsistent; cancellation stopped', 409)
+      await tx.goodsReceiptLine.update({ where: { id: receiptLine.id }, data: { billedQty: { decrement: line.qty } } })
+      await tx.purchaseOrderLine.update({ where: { id: receiptLine.purchaseOrderLineId }, data: { billedQty: { decrement: line.qty } } })
+    }
     return tx.purchaseInvoice.update({ where: { id }, data: { status: 'CANCELLED' } })
   })
 }

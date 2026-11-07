@@ -968,6 +968,15 @@ export interface EInvoicePreview {
   totInvVal: number
 }
 
+export interface EWayBillPreview {
+  valid: boolean
+  docNo: string
+  errors: string[]
+  warnings: string[]
+  itemCount: number
+  totalValue: number
+}
+
 export interface EInvoiceBulkPreview {
   total: number
   eligible: number

@@ -40,6 +40,7 @@ import {
   type Company,
   type EInvoiceBulkPreview,
   type EInvoicePreview,
+  type EWayBillPreview,
   type TallyConnectorStatus,
   type TallyVoucherPreview,
 } from './api'
@@ -586,6 +587,31 @@ export async function markTallySent(doc: 'SALES' | 'PURCHASE', id: string, sent:
     toast.success(sent ? 'Marked as sent to Tally' : 'Tally sent mark cleared')
   } catch (e) {
     toastError(e)
+  }
+}
+
+/** e-Way Bill portal JSON with mandatory transport inputs and server-side pre-validation. */
+export async function exportEWayBillJson(id: string): Promise<void> {
+  const distanceRaw = window.prompt('Approximate transport distance in kilometres (1–4000):')
+  if (distanceRaw === null) return
+  const distance = Number(distanceRaw.trim())
+  const vehicleNo = window.prompt('Vehicle number (for road transport), or leave blank if using transporter GSTIN:')
+  if (vehicleNo === null) return
+  const transporterId = vehicleNo.trim() ? '' : (window.prompt('Transporter GSTIN:') ?? '')
+  const query = new URLSearchParams({ id, distance: String(distance), mode: '1', vehicleNo: vehicleNo.trim(), transporterId: transporterId.trim() })
+  try {
+    const preview = await apiGet<EWayBillPreview>(`/api/e-way-bill?${query}&preview=1`)
+    if (!preview.valid) {
+      toast.error(`${preview.docNo} failed e-Way Bill pre-validation`, { description: preview.errors.slice(0, 3).join(' · ') })
+      return
+    }
+    downloadUrl(`/api/e-way-bill?${query}`)
+    toast.success(`${preview.docNo} — e-Way Bill JSON downloaded`, {
+      description: `${preview.itemCount} item(s) · ₹${preview.totalValue.toFixed(2)}. Upload it on the official e-Way Bill portal; generation is not automatic.`,
+    })
+    if (preview.warnings.length) toast.warning('Check e-Way Bill warnings', { description: preview.warnings.slice(0, 3).join(' · ') })
+  } catch (error) {
+    toastError(error)
   }
 }
 

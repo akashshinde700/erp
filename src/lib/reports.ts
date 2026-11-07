@@ -377,6 +377,92 @@ export async function productionCostVarianceReport() {
   }
 }
 
+// ---------- Production efficiency: operation / machine / operator ----------
+
+/**
+ * Shop-floor efficiency from real production tasks. This is not labelled OEE:
+ * availability/downtime loss reasons are not captured yet. It reports only
+ * auditable throughput, yield, hours and cost dimensions already posted.
+ */
+export async function productionEfficiencyReport() {
+  const tasks = await db.productionTask.findMany({
+    where: { status: { not: 'CANCELLED' } },
+    include: {
+      employee: { select: { id: true, code: true, name: true } },
+      workOrder: { select: { id: true, woNo: true, project: { select: { projectNo: true, name: true } } } },
+    },
+    orderBy: [{ createdAt: 'desc' }],
+  })
+  type Bucket = { taskTotal: number; taskDone: number; plannedQty: number; actualQty: number; rejectionQty: number; hours: number; labourCost: number; materialCost: number }
+  const empty = (): Bucket => ({ taskTotal: 0, taskDone: 0, plannedQty: 0, actualQty: 0, rejectionQty: 0, hours: 0, labourCost: 0, materialCost: 0 })
+  const add = (bucket: Bucket, task: typeof tasks[number]) => {
+    bucket.taskTotal += 1
+    if (task.status === 'COMPLETED') {
+      bucket.taskDone += 1
+      bucket.plannedQty = r2(bucket.plannedQty + task.plannedQty)
+      bucket.actualQty = r2(bucket.actualQty + task.actualQty)
+      bucket.rejectionQty = r2(bucket.rejectionQty + task.rejectionQty)
+      bucket.hours = r2(bucket.hours + task.hours)
+      bucket.labourCost = r2(bucket.labourCost + task.labourCost)
+      bucket.materialCost = r2(bucket.materialCost + task.materialCost)
+    }
+  }
+  const finish = <T extends object>(identity: T, bucket: Bucket) => {
+    const processed = r2(bucket.actualQty + bucket.rejectionQty)
+    return {
+      ...identity,
+      ...bucket,
+      yieldPct: processed > 0 ? r2((bucket.actualQty / processed) * 100) : 0,
+      attainmentPct: bucket.plannedQty > 0 ? r2((bucket.actualQty / bucket.plannedQty) * 100) : 0,
+      outputPerHour: bucket.hours > 0 ? r2(bucket.actualQty / bucket.hours) : 0,
+      totalCost: r2(bucket.labourCost + bucket.materialCost),
+    }
+  }
+
+  const operationMap = new Map<string, Bucket>()
+  const machineMap = new Map<string, Bucket>()
+  const operatorMap = new Map<string, { employee: { id: string; code: string; name: string }; bucket: Bucket }>()
+  for (const task of tasks) {
+    const operation = operationMap.get(task.operation) ?? empty()
+    add(operation, task)
+    operationMap.set(task.operation, operation)
+    if (task.machineNo) {
+      const machine = machineMap.get(task.machineNo) ?? empty()
+      add(machine, task)
+      machineMap.set(task.machineNo, machine)
+    }
+    if (task.employee) {
+      const operator = operatorMap.get(task.employee.id) ?? { employee: task.employee, bucket: empty() }
+      add(operator.bucket, task)
+      operatorMap.set(task.employee.id, operator)
+    }
+  }
+  const operations = [...operationMap.entries()].map(([operation, bucket]) => finish({ operation }, bucket)).sort((a, b) => b.hours - a.hours)
+  const machines = [...machineMap.entries()].map(([machineNo, bucket]) => finish({ machineNo }, bucket)).sort((a, b) => b.hours - a.hours)
+  const operators = [...operatorMap.values()].map(({ employee, bucket }) => finish({ employee }, bucket)).sort((a, b) => b.hours - a.hours)
+  const totals = empty()
+  for (const task of tasks) add(totals, task)
+  return {
+    operations,
+    machines,
+    operators,
+    summary: finish({}, totals),
+    openTasks: tasks.filter((task) => task.status !== 'COMPLETED').map((task) => ({
+      id: task.id,
+      taskNo: task.taskNo,
+      operation: task.operation,
+      status: task.status,
+      machineNo: task.machineNo,
+      employee: task.employee,
+      woNo: task.workOrder.woNo,
+      projectNo: task.workOrder.project.projectNo,
+      projectName: task.workOrder.project.name,
+      dueDate: task.dueDate,
+    })),
+    note: 'OEE availability and downtime losses require work-center calendars and loss-reason capture; this report does not fabricate them.',
+  }
+}
+
 // ---------- GSTR-1 summary (B2B / B2C, rate-wise) ----------
 
 export async function gstr1Report(month: string) {

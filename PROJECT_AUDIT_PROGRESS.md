@@ -3,6 +3,8 @@
 **Branch:** `arena/c87300cc-erp` · **Base commit:** `cf7a911` · **Checkpoint:** 2026-11-07 (Asia/Kolkata)
 **Status:** ACTIVE WORK IN PROGRESS — this is a saved checkpoint, **not** a final production sign-off.
 
+> **2026-11-07 Production Efficiency continuation (branch `arena/93e00504-erp`):** implemented operation-, machine- and operator-level throughput from posted production tasks: planned/good/rejected quantity, yield, attainment, hours, output/hour, labour/material/total cost and completion counts. It is honestly labelled efficiency rather than OEE because calendars, availability and downtime loss reasons are not captured. Added API/UI and yield/cost reconciliation assertions.
+
 > **2026-11-07 Production Cost continuation (branch `arena/fbc19138-erp`):** implemented the Business Central/Odoo/SAP/Rootstock expected-vs-actual visibility layer across projects: approved-BOM expected cost, task-frozen material/labour actuals, cost variance, projected margin, production hours, task completion and rejection rate, with work-order drilldown data in the API. No synthetic overhead/WIP values are invented; WIP and overhead GL settlement remain open. Added report UI/API and reconciliation assertions.
 
 > **2026-11-07 Customer Analysis continuation (branch `arena/93a6cb13-erp`):** implemented the Rootstock/Absolute customer order-history analysis layer from auditable posted sales: invoice/cancellation counts, sales, collections, invoice-scoped outstanding, average invoice, last sale, jobwork share and top items/services with average rates. The report clearly separates invoice outstanding from the control Outstanding report (which also includes opening balances and unallocated advances). Added API/UI and reconciliation assertions.

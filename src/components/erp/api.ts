@@ -593,6 +593,30 @@ export interface InventoryPlanningReport {
   summary: { itemCount: number; reorderItems: number; deadItems: number; slowItems: number; stockValue: number }
 }
 
+export interface ProductionEfficiencyMetric {
+  taskTotal: number
+  taskDone: number
+  plannedQty: number
+  actualQty: number
+  rejectionQty: number
+  hours: number
+  labourCost: number
+  materialCost: number
+  yieldPct: number
+  attainmentPct: number
+  outputPerHour: number
+  totalCost: number
+}
+
+export interface ProductionEfficiencyReport {
+  operations: (ProductionEfficiencyMetric & { operation: string })[]
+  machines: (ProductionEfficiencyMetric & { machineNo: string })[]
+  operators: (ProductionEfficiencyMetric & { employee: { id: string; code: string; name: string } })[]
+  summary: ProductionEfficiencyMetric
+  openTasks: { id: string; taskNo: string; operation: string; status: string; machineNo: string | null; employee: { id: string; code: string; name: string } | null; woNo: string; projectNo: string; projectName: string; dueDate: string | null }[]
+  note: string
+}
+
 export interface ProductionCostVarianceReport {
   rows: {
     project: { id: string; projectNo: string; name: string; status: string; party: { id: string; code: string; name: string } }

@@ -19,7 +19,7 @@ Act as a complete senior ERP team: research established manufacturing ERPs, map 
 | Phase | Scope | Status |
 |---|---|---|
 | 1 | Full repo / architecture / module dependency map | **Done** (static map) — 397 files, 163 `src` files, 66 API routes, 1 Next page, 18 ERP UI components, 670-line MySQL Prisma schema / 33 models / no enums, 14 major `src/lib` services. |
-| 2 | Industry + user-supplied research | **Substantially done, still partial.** ERPNext, Odoo, SAP Business One, Dynamics 365 Business Central, Mapsoft landing page, both YouTube playlists (metadata), and 2 of 3 GitHub repos reviewed. Video transcripts and full repo-by-repo code comparison remain. |
+| 2 | Industry + user-supplied research | **YouTube portion complete; repo comparison still partial.** ERPNext, Odoo, SAP Business One, Dynamics 365 Business Central, Mapsoft landing page, both YouTube playlists (**all 39 visible Absolute ERP video transcripts + 9/9 Vyapar videos reviewed → `YOUTUBE_PLAYLIST_RESEARCH.md`**), and 2 of 3 GitHub repos reviewed. Full repo-by-repo code-level comparison remains. |
 | 3 | Lifecycle / workflow audit | **Done for implemented flows** (sales, purchase, payment, jobwork, manufacturing, opening stock, reports, cancellation). Reference flows that do not exist are listed as gaps in §9. |
 | 4 | Calculation / rule audit | **Done for implemented engine** (`erp.ts`, `accounting.ts`, `services.ts`, `manufacturing.ts`, `reports.ts`). Verified GST incl./excl., IGST vs CGST+SGST odd paisa, round-off, GSTIN checksum, weighted-average stock cost, append-only reversal GL, FY numbering, 5% jobwork tolerance, 10% task over-production, BOM wastage 0–50. |
 | 5 | DB / backend / transactions / races | **Done + fixes.** 33-table FK map, transaction boundaries, conditional-update race guards added, FK-safe full restore. |
@@ -58,7 +58,11 @@ Act as a complete senior ERP team: research established manufacturing ERPs, map 
 
 **User-supplied GitHub repos** — `akashshinde700/erpnashilk` is a **closely related, actively developed sibling ("ManuFlow ERP")** with 93 commits, a read-only Tally connector, universal XML/JSON/XLSX import with XXE protection, Cash & Bank module (`MoneyAccount`/`AccountTxn`/`Loan`/`Expense`), IST business-date normalisation, tenant isolation, refunds, negative-cash guard, idempotency, 190+ tests and mobile E2E specs (`https://github.com/akashshinde700/erpnashilk`, `PROJECT_STATUS.md`). `IamRamgarhia/Free-GST-Billing-Software` is an offline-first GST invoicing reference with GSTR-1/3B, quotations, credit notes, 22 currencies, daily backups and an explicit "no cloud / no tracking" security model (`https://github.com/IamRamgarhia/Free-GST-Billing-Software`). These are **reference points, not code to copy**: the sibling's maturity is used below only to identify gaps in this checkout.
 
-**YouTube playlists** — Absolute ERP (42 videos: BOM, routing, raw material, production processes, workgroups, multi-level inventory, GRN-against-PO, payment schedule against SO, quality inspection DFD, jobwork DFD) and Vyapar Desktop Demo LIVE (9 billing demos). Playlist metadata fetched; **transcripts/watching not performed**.
+**YouTube playlists — full content review (see `YOUTUBE_PLAYLIST_RESEARCH.md`)** — Absolute ERP "Demo Video for ERP Software" (42 videos / 5,858 views / 3 hidden → **39 transcripts individually read**) and "Vyapar Desktop Demo LIVE" (9 videos / 94,601 views / ≈9 h 37 m; intro Hindi transcript + all 8 LIVE official descriptions reviewed; LIVE transcripts return raw JS and were **not** claimed as watched).
+
+Concepts extracted from the transcripts, not just titles: routing is created **before** BOM and is **per-process**, with workgroup/machinery **or outsourced vendor**, setup time → fixed cost and cycle time → variable cost from machine hourly rate, and **testing processes carrying QC checklists**; BOM lines are **per operation** with parameter/variant relations and quantity-per-finished-unit (1.25 m silk per shirt), lock/copy/revision discipline. Production DFD: **Manufacturing Order** either Make-to-Order (against Sales Order, BOM/routing/parameters auto-fetched) or Make-to-Stock → production schedule + automatic material requisition slip → MRP → three branches (issue / purchase cycle / reservation) → production entry incl. QC + jobwork → **"Finish Production" updates FG stock** → delivery challan → invoice. Purchase DFD: BOM-driven indent → optional HOD approval → PO (Open/Fixed/General) → **partial GRN with pending qty** → QC → stock → bill-against-GRN → payment / PDC / purchase return / debit note. Sales chain: estimation → quotation (R1/R2 revision, follow-ups, approval) → SO (price-hidden view, lock, payment schedule) → **multiple partial delivery challans → one invoice** → receipt with FIFO allocation, TDS, advance application, credit notes/refunds. QC DFD: **inward/outward inspection templates with tolerance levels**, stock updated **only after** accepted inspection, outward QC report ships with invoice. Jobwork DFD: **returnable challan out** in two modes (same material returns vs transformed material returns) → MRN in → QC → stock. Stores DFD: gate entry / MRN / GRN, production and in-house jobwork as inward sources, returnable / non-returnable / dispatch challans outward. Cross-cutting: 6-level inventory classification (incl. WIP), item parameters/variants, purchase-vs-sale UOM conversion, tolerance, reorder alerts, barcode, storage hierarchy (warehouse/room/rack/shelf), damage records, Excel import/export, maintenance plans with checklists + reminders, configurable number series, multi-level approvals, lock/unlock, custom fields, bell/15-min/3-day-PDC notifications, multi-location and multi-currency, credit limits, and a large report catalogue (SO tracking through production, reason-wise pending/delay, sales forecast, lost opportunity, GSTR/P&L/day book).
+
+**Vyapar is a small-business billing app, not a manufacturing ERP** — no BOM/routing/WO/MRP/WIP/QC. It is usable only as a UX reference for GST reports, low-/dead-stock alerts, offline backups, Excel import and document sharing. Concept-level ForgeERP gap mapping and a P0/P1/P2 adaptation priority are recorded in `YOUTUBE_PLAYLIST_RESEARCH.md`; **nothing is to be copied verbatim**, and ForgeERP's append-only ledgers + mirrored reversals are explicitly stronger than the edit/delete/clone behaviour shown in the demos and must be preserved.
 
 ---
 
@@ -120,7 +124,7 @@ Passing baseline included: anonymous/forged 401, 27 read endpoints 200, seeded t
 
 Evidence: `tests/audit-results.json` (gitignored), console logs in `/tmp/erp-audit-*.log`, `/tmp/erp-build*.log`.
 
-**Not executed — explicitly NOT claimed as passed:** any UI click/form/modal/responsive test, browser console check, Playwright/E2E run, screenshot comparison, production MySQL connection, migration, deploy, live Mapsoft login, video transcript review. Reason: no browser binary or Playwright install; Prisma native engine downloads are blocked in this sandbox; demo host is not reachable from the shell.
+**Not executed — explicitly NOT claimed as passed:** any UI click/form/modal/responsive test, browser console check, Playwright/E2E run, screenshot comparison, production MySQL connection, migration, deploy, live Mapsoft login, or **visual watching of video frames**. YouTube research was performed by reading official descriptions + auto-generated transcripts (39/39 Absolute ERP, 1/9 Vyapar Hindi transcript, 8/9 Vyapar official descriptions), documented separately in `YOUTUBE_PLAYLIST_RESEARCH.md`; this is text-level review, not playback. Reason: no browser binary or Playwright install; Prisma native engine downloads are blocked in this sandbox; demo host is not reachable from the shell; YouTube LIVE parts return JS bootstrap instead of a transcript.
 
 ---
 
@@ -144,7 +148,7 @@ Evidence: `tests/audit-results.json` (gitignored), console logs in `/tmp/erp-aud
 - **M3** `docs/` historical reports drift from current code; not fully reconciled.
 - **M4** Exhaustive IDOR / CSRF / file-upload (`upload/`, `download/`) / rate-limit-per-route / privilege-escalation matrix not completed.
 - **M5** Mapsoft demo login not performed (read-only landing page only).
-- **M6** YouTube transcripts not reviewed; playlist metadata only.
+- **M6** (partially closed) YouTube **textual** research is complete — see `YOUTUBE_PLAYLIST_RESEARCH.md`. Remaining: 3 hidden/unavailable Absolute ERP videos, the 8 Vyapar LIVE-part transcripts (raw JS only), visual frame watching, and the full GitHub repo-by-repo code comparison.
 
 ### Low (open)
 - `package-lock.json` is untracked (kept for reproducibility; sibling repo ignores it because it uses bun).
@@ -186,21 +190,21 @@ These are **candidates**, not a mandate to copy: the sibling repo proves the own
 
 ## 11. Workspace / deliverables
 
-- **This checkpoint:** `PROJECT_AUDIT_PROGRESS.md` (required by the user's execution rules).
-- **Executable suite:** `tests/erp-audit.mjs` (`npm run test:audit`); writes `tests/audit-results.json`.
+- **This checkpoint:** `PROJECT_AUDIT_PROGRESS.md` (required by the user's execution rules) + `YOUTUBE_PLAYLIST_RESEARCH.md` (full playlist content review, added 2026-11-07).
+- **Executable suite:** `tests/erp-audit.mjs` (`npm run test:audit`); writes `tests/audit-results.json`. The committed/recorded result is **59/59 at 2026-11-07T14:04:14Z** on the isolated SQLite test DB (dev, `next start` and standalone builds).
 - **Local test harness (test-only, never a production migration):** `tests/make-local-schema.py`, `tests/schema.sqlite.prisma`, `tests/prisma.local.config.ts`, `tests/register-local-adapter.cjs`, `tests/erp-test.db`.
-- **Live preview:** standalone production server on port 3000 (`ForgeERP Production Standalone`), isolated SQLite test DB, no production data.
+- **Environment caveat (verified 2026-11-07 on `arena/b5710131-erp`):** `node_modules/`, `.next/` and `tests/erp-test.db` are gitignored and **are not persisted in this sandbox session**; no standalone server is running. `npm run typecheck` in this session fails with `tsc: not found`. Re-running the build/audit therefore requires re-provisioning (`npm install`, local SQLite Prisma generate/`db push` on the test schema, rebuild standalone, start server with the adapter preload). **This is environment state, not a code regression** — no source file was changed in this turn.
 - **Changed production source:** see §6.
 
 ---
 
 ## 12. Immediate next steps (continue from here)
 
-1. Re-run `npm run typecheck`, `npm run build`, `npm run test:audit` after every further change (all three currently green).
+1. Re-provision the sandbox (`npm install` + local SQLite Prisma harness + standalone build per §11), then re-run `npm run typecheck`, `npm run build`, `npm run test:audit` after every further change. The last recorded green run is **59/59 at 2026-11-07T14:04:14Z**; it has **not** been re-executed in this session because dependencies/build artifacts are absent (docs-only changes in this turn).
 2. Provision a real MySQL instance; regenerate Prisma client from `prisma/schema.prisma`; create a reviewed initial migration; replay the 59-check suite against MySQL. Close C1/C2.
 3. Install a browser runtime (Playwright + Chromium) and execute `tests/e2e_playwright.py`-style UI, responsive (390/768/1440 px), double-submit, form-reset, empty/error/loading, console-error and print/export checks. Close H1.
 4. Resolve the 17 ESLint effect-state errors with `useSyncExternalStore` / derived state, enabling `reactStrictMode:true`.
 5. Reconcile `deploy.py` / `.zscripts/*` / `.env` with the MySQL schema; remove `--reset-db` from unattended paths; force production password rotation.
 6. Decide, with the owner, which §9 gaps to implement first (recommended: MRP/low-stock + purchase/sales order lifecycle + QC + production costing), preferring a deliberate merge from `erpnashilk` over a rewrite.
-7. Complete Mapsoft read-only login check if a POST-capable browser session becomes available; review video transcripts; finish docs↔code reconciliation.
+7. Complete Mapsoft read-only login check if a POST-capable browser session becomes available; finish docs↔code reconciliation and the full GitHub repo-by-repo code comparison. YouTube playlist content review is **done** (`YOUTUBE_PLAYLIST_RESEARCH.md`) — use its P0/P1/P2 concept list when choosing §9 gaps.
 8. Only then produce the final sign-off report with total modules audited, issue counts by severity, fixes, remaining issues, improvements, test results, build status, DB changes, security and performance findings.

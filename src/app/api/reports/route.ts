@@ -12,6 +12,7 @@ import {
   workflowActionCenterReport,
   gstr1Report,
   gstr3bReport,
+  hsnSummaryReport,
   trialBalanceReport,
   outstandingReport,
   cashBankBookReport,
@@ -63,6 +64,12 @@ export async function GET(req: Request) {
         const month = sp.get('month') ?? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
         if (!monthString.safeParse(month).success) return fail('month must be YYYY-MM (01–12)')
         return ok(await gstr3bReport(month))
+      }
+      case 'hsn-summary': {
+        const d = new Date()
+        const month = sp.get('month') ?? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+        if (!monthString.safeParse(month).success) return fail('month must be YYYY-MM (01–12)')
+        return ok(await hsnSummaryReport(month))
       }
       case 'trial-balance': {
         const rangeErr = dateRangeError(sp.get('from'), sp.get('to'))

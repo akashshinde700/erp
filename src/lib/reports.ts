@@ -683,6 +683,43 @@ export async function gstr3bReport(month: string) {
   }
 }
 
+// ---------- GST HSN/SAC outward and inward summary ----------
+
+export async function hsnSummaryReport(month: string) {
+  const { from, to } = utcMonthRange(month)
+  const [sales, purchases] = await Promise.all([
+    db.salesInvoiceItem.findMany({ where: { invoice: { status: 'POSTED', date: { gte: from, lte: to } } }, include: { item: { select: { name: true, hsn: true } } } }),
+    db.purchaseInvoiceItem.findMany({ where: { invoice: { status: 'POSTED', date: { gte: from, lte: to } } }, include: { item: { select: { name: true, hsn: true } } } }),
+  ])
+  type Line = typeof sales[number]
+  const aggregate = (lines: Line[]) => {
+    const map = new Map<string, { hsn: string; description: string; uom: string; gstRate: number; qty: number; taxable: number; cgst: number; sgst: number; igst: number; total: number }>()
+    for (const line of lines) {
+      const hsn = (line.hsn || line.item.hsn || 'MISSING').trim()
+      const key = `${hsn}|${line.uom}|${line.gstRate}`
+      const row = map.get(key) ?? { hsn, description: line.item.name, uom: line.uom, gstRate: line.gstRate, qty: 0, taxable: 0, cgst: 0, sgst: 0, igst: 0, total: 0 }
+      row.qty = r2(row.qty + line.qty)
+      row.taxable = r2(row.taxable + line.taxable)
+      row.cgst = r2(row.cgst + line.cgst)
+      row.sgst = r2(row.sgst + line.sgst)
+      row.igst = r2(row.igst + line.igst)
+      row.total = r2(row.total + line.total)
+      map.set(key, row)
+    }
+    return [...map.values()].sort((a, b) => a.hsn.localeCompare(b.hsn) || a.gstRate - b.gstRate)
+  }
+  const outward = aggregate(sales)
+  const inward = aggregate(purchases as unknown as Line[])
+  return {
+    month,
+    outward,
+    inward,
+    missingHsnLines: outward.filter((row) => row.hsn === 'MISSING').length + inward.filter((row) => row.hsn === 'MISSING').length,
+    outwardTaxable: r2(outward.reduce((sum, row) => sum + row.taxable, 0)),
+    inwardTaxable: r2(inward.reduce((sum, row) => sum + row.taxable, 0)),
+  }
+}
+
 // ---------- Trial balance ----------
 
 export async function trialBalanceReport(from?: string, to?: string) {

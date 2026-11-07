@@ -22,6 +22,7 @@ import {
   type CustomerPerformanceReport,
   type Gstr1Report,
   type Gstr3bReport,
+  type HsnSummaryReport,
   type InventoryPlanningReport,
   type Outstanding,
   type Pnl,
@@ -48,6 +49,7 @@ export function ReportsView() {
           <TabsTrigger value="action-center" className="h-11 sm:h-9">Action Center</TabsTrigger>
           <TabsTrigger value="gstr1" className="h-11 sm:h-9">GSTR-1</TabsTrigger>
           <TabsTrigger value="gstr3b" className="h-11 sm:h-9">GSTR-3B</TabsTrigger>
+          <TabsTrigger value="hsn" className="h-11 sm:h-9">HSN Summary</TabsTrigger>
           <TabsTrigger value="trial" className="h-11 sm:h-9">Trial Balance</TabsTrigger>
           <TabsTrigger value="outstanding" className="h-11 sm:h-9">Outstanding</TabsTrigger>
           <TabsTrigger value="cashbook" className="h-11 sm:h-9">Cash &amp; Bank</TabsTrigger>
@@ -66,6 +68,9 @@ export function ReportsView() {
         </TabsContent>
         <TabsContent value="gstr3b" className="mt-4">
           <Gstr3bTab />
+        </TabsContent>
+        <TabsContent value="hsn" className="mt-4">
+          <HsnSummaryTab />
         </TabsContent>
         <TabsContent value="trial" className="mt-4">
           <TrialBalanceTab />
@@ -276,6 +281,16 @@ function Gstr3bTab() {
       </>}
     </div>
   )
+}
+
+// ---------- HSN/SAC summary ----------
+
+function HsnSummaryTab() {
+  const [month, setMonth] = useState(currentMonth())
+  const [applied, setApplied] = useState(currentMonth())
+  const { data, loading } = useApi<HsnSummaryReport>(`/api/reports?type=hsn-summary&month=${applied}`)
+  const table = (title: string, rows: HsnSummaryReport['outward']) => <Card className="p-0"><CardHeader className="border-b py-3"><CardTitle className="text-sm">{title}</CardTitle></CardHeader><CardContent className="p-0">{rows.length === 0 ? <p className="p-6 text-center text-sm text-muted-foreground">No lines this month.</p> : <div className="overflow-auto"><Table><TableHeader><TableRow><TableHead>HSN/SAC</TableHead><TableHead>Description</TableHead><TableHead className="text-right">Qty / UOM</TableHead><TableHead className="text-right">GST Rate</TableHead><TableHead className="text-right">Taxable</TableHead><TableHead className="text-right">CGST</TableHead><TableHead className="text-right">SGST</TableHead><TableHead className="text-right">IGST</TableHead></TableRow></TableHeader><TableBody>{rows.map((row) => <TableRow key={`${row.hsn}-${row.uom}-${row.gstRate}`}><TableCell><Badge variant={row.hsn === 'MISSING' ? 'destructive' : 'outline'}>{row.hsn}</Badge></TableCell><TableCell>{row.description}</TableCell><TableCell className="text-right tabular-nums">{row.qty} {row.uom}</TableCell><TableCell className="text-right tabular-nums">{row.gstRate}%</TableCell><TableCell className="text-right"><Money value={row.taxable} plain /></TableCell><TableCell className="text-right"><Money value={row.cgst} plain /></TableCell><TableCell className="text-right"><Money value={row.sgst} plain /></TableCell><TableCell className="text-right"><Money value={row.igst} plain /></TableCell></TableRow>)}</TableBody></Table></div>}</CardContent></Card>
+  return <div className="space-y-4"><div className="grid gap-2 sm:max-w-md sm:grid-cols-[1fr_auto] sm:items-end"><div className="space-y-1"><Label>Month</Label><Input type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="h-11" /></div><Button onClick={() => setApplied(month)} className="h-11">Run summary</Button></div>{loading ? <TableSkeleton rows={8} cols={8} /> : data ? <><div className="flex flex-wrap gap-2"><Badge variant="secondary">Outward taxable ₹{money(data.outwardTaxable)}</Badge><Badge variant="secondary">Inward taxable ₹{money(data.inwardTaxable)}</Badge>{data.missingHsnLines > 0 ? <Badge variant="destructive">{data.missingHsnLines} missing HSN group(s)</Badge> : <Badge>HSN complete</Badge>}</div>{table('Outward HSN/SAC', data.outward)}{table('Inward HSN/SAC', data.inward)}</> : null}</div>
 }
 
 // ---------- trial balance ----------

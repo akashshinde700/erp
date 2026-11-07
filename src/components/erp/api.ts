@@ -710,6 +710,9 @@ export interface CashBankBook {
   totalClosing: number
 }
 
+export interface HsnSummaryRow { hsn: string; description: string; uom: string; gstRate: number; qty: number; taxable: number; cgst: number; sgst: number; igst: number; total: number }
+export interface HsnSummaryReport { month: string; outward: HsnSummaryRow[]; inward: HsnSummaryRow[]; missingHsnLines: number; outwardTaxable: number; inwardTaxable: number }
+
 export interface Gstr3bReport {
   month: string
   salesInvoiceCount: number

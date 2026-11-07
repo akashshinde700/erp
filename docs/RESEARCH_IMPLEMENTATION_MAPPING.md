@@ -1,6 +1,6 @@
 # Research-to-Implementation Mapping
 
-**Updated:** 2026-11-07  
+**Updated:** 2026-11-08 — runtime status of every mapped workflow (verified/fixed/open) is in `docs/FULL_RUNTIME_AUDIT_2026-11-08.md` §9; that table supersedes the "pending" notes below.  
 **Sources consolidated:** `YOUTUBE_PLAYLIST_RESEARCH.md`, `YOUTUBE_ERP_COURSES_RESEARCH.md`, `GITHUB_REPOS_RESEARCH.md`, Mapsoft notes in `PROJECT_AUDIT_PROGRESS.md`, and the current ForgeERP source.
 
 ## Workflow boundary: Customer Jobwork vs Own Projects & Manufacturing

@@ -156,6 +156,69 @@ export async function inventoryPlanningReport(asOf = new Date()) {
   }
 }
 
+// ---------- Supplier purchase performance ----------
+
+/**
+ * Vendor analysis from posted/cancelled purchase documents. This deliberately
+ * does not invent on-time/QC scores: those require the future PO→GRN→QC chain.
+ * Current metrics remain fully auditable to purchase invoices and payments.
+ */
+export async function supplierPerformanceReport() {
+  const [suppliers, invoices] = await Promise.all([
+    db.party.findMany({ where: { types: { contains: 'SUPPLIER' } }, orderBy: { name: 'asc' } }),
+    db.purchaseInvoice.findMany({
+      include: { items: { include: { item: { select: { id: true, code: true, name: true, uom: true } } } } },
+      orderBy: [{ date: 'desc' }, { createdAt: 'desc' }],
+    }),
+  ])
+  const rows = suppliers.map((supplier) => {
+    const all = invoices.filter((invoice) => invoice.partyId === supplier.id)
+    const posted = all.filter((invoice) => invoice.status === 'POSTED')
+    const cancelled = all.filter((invoice) => invoice.status === 'CANCELLED')
+    const purchaseValue = r2(posted.reduce((sum, invoice) => sum + invoice.grandTotal, 0))
+    const paidValue = r2(posted.reduce((sum, invoice) => sum + invoice.paidAmount, 0))
+    const outstanding = r2(Math.max(0, purchaseValue - paidValue))
+    const itemMap = new Map<string, { item: { id: string; code: string; name: string; uom: string }; qty: number; taxableValue: number }>()
+    for (const invoice of posted) {
+      for (const line of invoice.items) {
+        const prev = itemMap.get(line.itemId) ?? { item: line.item, qty: 0, taxableValue: 0 }
+        prev.qty = r2(prev.qty + line.qty)
+        prev.taxableValue = r2(prev.taxableValue + line.taxable)
+        itemMap.set(line.itemId, prev)
+      }
+    }
+    const topItems = [...itemMap.values()]
+      .map((line) => ({ ...line, avgRate: line.qty > 0 ? r2(line.taxableValue / line.qty) : 0 }))
+      .sort((a, b) => b.taxableValue - a.taxableValue)
+      .slice(0, 5)
+    return {
+      supplier: { id: supplier.id, code: supplier.code, name: supplier.name, city: supplier.city, gstin: supplier.gstin, active: supplier.active },
+      invoiceCount: posted.length,
+      cancelledCount: cancelled.length,
+      purchaseValue,
+      paidValue,
+      outstanding,
+      paymentPct: purchaseValue > 0 ? r2((paidValue / purchaseValue) * 100) : 0,
+      avgInvoiceValue: posted.length > 0 ? r2(purchaseValue / posted.length) : 0,
+      lastPurchaseAt: posted[0]?.date ?? null,
+      topItems,
+    }
+  })
+  rows.sort((a, b) => (b.purchaseValue - a.purchaseValue) || a.supplier.name.localeCompare(b.supplier.name))
+  return {
+    rows,
+    summary: {
+      supplierCount: rows.length,
+      activeSuppliers: rows.filter((row) => row.supplier.active).length,
+      suppliersUsed: rows.filter((row) => row.invoiceCount > 0).length,
+      totalPurchases: r2(rows.reduce((sum, row) => sum + row.purchaseValue, 0)),
+      totalPaid: r2(rows.reduce((sum, row) => sum + row.paidValue, 0)),
+      totalOutstanding: r2(rows.reduce((sum, row) => sum + row.outstanding, 0)),
+    },
+    unavailableUntilProcurementWorkflow: ['onTimeDeliveryPct', 'acceptedQtyPct', 'rejectedQty', 'threeWayMatchStatus'],
+  }
+}
+
 // ---------- GSTR-1 summary (B2B / B2C, rate-wise) ----------
 
 export async function gstr1Report(month: string) {

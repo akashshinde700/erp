@@ -125,7 +125,7 @@ async function main() {
     '/api/manufacturing/stats', '/api/manufacturing/projects', '/api/manufacturing/boms',
     '/api/manufacturing/work-orders', '/api/manufacturing/tasks', '/api/manufacturing/employees',
     '/api/manufacturing/material-plan',
-    '/api/reports?type=trial-balance', '/api/reports?type=stock-summary', '/api/reports?type=inventory-planning', '/api/reports?type=outstanding',
+    '/api/reports?type=trial-balance', '/api/reports?type=stock-summary', '/api/reports?type=inventory-planning', '/api/reports?type=supplier-performance', '/api/reports?type=outstanding',
     '/api/reports?type=cash-bank-book&from=2026-01-01&to=2026-12-31', '/api/reports?type=gstr1', '/api/reports?type=pnl', '/api/reports?type=jobwork-pending',
     '/api/audit', '/api/search?q=shree',
   ]
@@ -142,6 +142,14 @@ async function main() {
     'inventory planning suggestions equal max(reorder level minus own closing stock, zero)',
     planningRows.length > 0 && planningRows.every((r) => Math.abs(r.suggestedOrderQty - Math.max(0, r.item.reorderLevel - r.closing)) < 0.005),
     `rows=${planningRows.length}`
+  )
+
+  const supplierPerformance = data(await req('GET', '/api/reports?type=supplier-performance'))
+  const supplierRows = supplierPerformance?.rows ?? []
+  check(
+    'supplier performance totals reconcile purchase, paid and outstanding values',
+    supplierRows.length > 0 && supplierRows.every((r) => Math.abs(r.outstanding - Math.max(0, r.purchaseValue - r.paidValue)) < 0.005),
+    `rows=${supplierRows.length}`
   )
 
   const cashBook = data(await req('GET', '/api/reports?type=cash-bank-book&from=2026-01-01&to=2026-12-31'))

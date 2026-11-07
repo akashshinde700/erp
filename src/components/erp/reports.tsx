@@ -23,6 +23,7 @@ import {
   type InventoryPlanningReport,
   type Outstanding,
   type Pnl,
+  type SupplierPerformanceReport,
   type TrialBalance,
 } from './api'
 import { EmptyState, Money, SectionHeading, TableSkeleton } from './bits'
@@ -41,6 +42,7 @@ export function ReportsView() {
           <TabsTrigger value="trial" className="h-11 sm:h-9">Trial Balance</TabsTrigger>
           <TabsTrigger value="outstanding" className="h-11 sm:h-9">Outstanding</TabsTrigger>
           <TabsTrigger value="cashbook" className="h-11 sm:h-9">Cash &amp; Bank</TabsTrigger>
+          <TabsTrigger value="suppliers" className="h-11 sm:h-9">Suppliers</TabsTrigger>
           <TabsTrigger value="inventory" className="h-11 sm:h-9">Inventory Planning</TabsTrigger>
           <TabsTrigger value="pnl" className="h-11 sm:h-9">P&amp;L</TabsTrigger>
         </TabsList>
@@ -55,6 +57,9 @@ export function ReportsView() {
         </TabsContent>
         <TabsContent value="cashbook" className="mt-4">
           <CashBankBookTab />
+        </TabsContent>
+        <TabsContent value="suppliers" className="mt-4">
+          <SupplierPerformanceTab />
         </TabsContent>
         <TabsContent value="inventory" className="mt-4">
           <InventoryPlanningTab />
@@ -409,6 +414,43 @@ function CashBankBookTab() {
           </CardContent></Card>
         </>
       )}
+    </div>
+  )
+}
+
+// ---------- supplier performance ----------
+
+function SupplierPerformanceTab() {
+  const { data, loading } = useApi<SupplierPerformanceReport>('/api/reports?type=supplier-performance')
+  if (loading) return <TableSkeleton rows={8} cols={7} />
+  if (!data) return <EmptyState title="No supplier data" hint="Create supplier masters and post purchases to build vendor analysis." icon={FileSpreadsheet} />
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Card className="p-4"><p className="text-xs text-muted-foreground">Active Suppliers</p><p className="mt-1 text-lg font-semibold">{data.summary.activeSuppliers}</p><p className="text-xs text-muted-foreground">{data.summary.suppliersUsed} with purchases</p></Card>
+        <Card className="p-4"><p className="text-xs text-muted-foreground">Total Purchases</p><p className="mt-1 text-lg font-semibold"><Money value={data.summary.totalPurchases} plain /></p></Card>
+        <Card className="p-4"><p className="text-xs text-muted-foreground">Paid</p><p className="mt-1 text-lg font-semibold text-primary"><Money value={data.summary.totalPaid} plain /></p></Card>
+        <Card className="p-4"><p className="text-xs text-muted-foreground">Outstanding</p><p className="mt-1 text-lg font-semibold text-destructive"><Money value={data.summary.totalOutstanding} plain /></p></Card>
+      </div>
+      <Card className="border-amber-500/30 bg-amber-500/5 p-4">
+        <p className="text-sm font-medium">Auditable metrics only</p>
+        <p className="mt-1 text-xs text-muted-foreground">On-time delivery, QC acceptance and three-way-match scores are not fabricated. They will become available after PO → GRN → QC is implemented.</p>
+      </Card>
+      <Card className="p-0"><CardContent className="p-0">
+        <div className="max-h-[62dvh] overflow-auto erp-scroll"><Table>
+          <TableHeader className="sticky top-0 z-10 bg-card"><TableRow><TableHead>Supplier</TableHead><TableHead className="text-right">Invoices</TableHead><TableHead className="text-right">Purchases</TableHead><TableHead className="text-right">Paid</TableHead><TableHead className="text-right">Outstanding</TableHead><TableHead>Last Purchase</TableHead><TableHead>Top Purchased Items</TableHead></TableRow></TableHeader>
+          <TableBody>{data.rows.map((row) => <TableRow key={row.supplier.id}>
+            <TableCell><span className="block font-medium">{row.supplier.name}</span><span className="text-xs text-muted-foreground">{row.supplier.code}{row.supplier.city ? ` · ${row.supplier.city}` : ''}</span>{!row.supplier.active ? <Badge variant="secondary" className="mt-1">Inactive</Badge> : null}</TableCell>
+            <TableCell className="text-right tabular-nums">{row.invoiceCount}{row.cancelledCount ? <span className="block text-xs text-muted-foreground">{row.cancelledCount} cancelled</span> : null}</TableCell>
+            <TableCell className="text-right tabular-nums"><Money value={row.purchaseValue} plain /><span className="block text-xs text-muted-foreground">avg ₹{money(row.avgInvoiceValue)}</span></TableCell>
+            <TableCell className="text-right tabular-nums"><Money value={row.paidValue} plain /><span className="block text-xs text-muted-foreground">{row.paymentPct}%</span></TableCell>
+            <TableCell className={`text-right font-semibold tabular-nums ${row.outstanding > 0 ? 'text-destructive' : ''}`}><Money value={row.outstanding} plain /></TableCell>
+            <TableCell className="whitespace-nowrap text-xs tabular-nums">{row.lastPurchaseAt ? row.lastPurchaseAt.slice(0, 10) : 'Never'}</TableCell>
+            <TableCell><div className="max-w-64 space-y-1">{row.topItems.length ? row.topItems.map((line) => <p key={line.item.id} className="truncate text-xs" title={`${line.item.name}: ${line.qty} ${line.item.uom}, avg ₹${line.avgRate}`}><span className="font-medium">{line.item.code}</span> · {line.qty} {line.item.uom} · ₹{money(line.taxableValue)}</p>) : <span className="text-xs text-muted-foreground">No posted purchases</span>}</div></TableCell>
+          </TableRow>)}</TableBody>
+        </Table></div>
+      </CardContent></Card>
     </div>
   )
 }

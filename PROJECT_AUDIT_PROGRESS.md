@@ -3,6 +3,8 @@
 **Branch:** `arena/c87300cc-erp` · **Base commit:** `cf7a911` · **Checkpoint:** 2026-11-07 (Asia/Kolkata)
 **Status:** ACTIVE WORK IN PROGRESS — this is a saved checkpoint, **not** a final production sign-off.
 
+> **2026-11-07 Supplier Analysis continuation (branch `arena/97112f28-erp`):** implemented Rootstock/Absolute-style vendor analysis using only auditable data currently available: supplier invoice/cancellation counts, gross purchases, paid/outstanding, payment %, average invoice value, last purchase and top purchased items with average rates. The UI explicitly refuses to fabricate on-time delivery, QC acceptance or three-way-match scores before PO→GRN→QC exists. Added API/UI and reconciliation assertions.
+
 > **2026-11-07 Cash & Bank continuation (branch `arena/3b38bfe6-erp`):** implemented the Mapsoft/Absolute/Vyapar-style Cash & Bank Book from ForgeERP's append-only GL. It calculates account-wise opening before the selected period, period receipts/payments, running balance and closing for CASH/BANK, retains voucher/party traceability, and respects cancellation reversals through `isCancelled=false`. Added API/UI and an accounting identity regression assertion.
 
 > **2026-11-07 inventory-planning continuation (branch `arena/74c35357-erp`):** implemented the Absolute ERP/Vyapar stores-planning gap without inventing transactional documents: a new Inventory Planning report calculates company-owned closing stock, reorder-level shortage suggestions, last stock movement, active/slow/dead/no-movement ageing and stock value. Customer `JOBWORK_IN` stock is excluded. Added the API/UI and regression assertions; purchase suggestions remain advisory until the real PR→PO→GRN→QC workflow exists.

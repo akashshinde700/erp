@@ -5,6 +5,7 @@ import {
   stockLedgerReport,
   stockSummaryReport,
   inventoryPlanningReport,
+  supplierPerformanceReport,
   gstr1Report,
   trialBalanceReport,
   outstandingReport,
@@ -36,6 +37,8 @@ export async function GET(req: Request) {
         return ok(await stockSummaryReport())
       case 'inventory-planning':
         return ok(await inventoryPlanningReport())
+      case 'supplier-performance':
+        return ok(await supplierPerformanceReport())
       case 'gstr1': {
         const d = new Date()
         const month = sp.get('month') ?? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
@@ -75,7 +78,7 @@ export async function GET(req: Request) {
       case 'jobwork-pending':
         return ok(await jobworkPendingReport())
       default:
-        return fail('Unknown report type. Use: stock-ledger, stock-summary, inventory-planning, gstr1, trial-balance, outstanding, cash-bank-book, pnl, party-ledger, jobwork-pending')
+        return fail('Unknown report type. Use: stock-ledger, stock-summary, inventory-planning, supplier-performance, gstr1, trial-balance, outstanding, cash-bank-book, pnl, party-ledger, jobwork-pending')
     }
   } catch (e) {
     return handleError(e)

@@ -52,7 +52,7 @@ import {
   type SalesInvoice,
 } from './api'
 import { EmptyState, Money, ProgressBar, SectionHeading, StatusBadge, TableSkeleton } from './bits'
-import { useErpUi } from './store'
+import { useErpUi, useOpenNewParam } from './store'
 import { dateStr, money, qty as qtyFmt } from '@/lib/erp'
 
 // ===========================================================================
@@ -91,7 +91,7 @@ export function JobworkView() {
 function InwardsTab() {
   const setView = useErpUi((s) => s.setView)
   const list = useApi<JobworkInward[]>('/api/jobwork/inwards')
-  const [createOpen, setCreateOpen] = useState(false)
+  const [createOpen, setCreateOpen] = useState(useOpenNewParam())
   const inwards = list.data ?? []
 
   const progressOf = (iw: JobworkInward) => {

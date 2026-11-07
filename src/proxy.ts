@@ -77,8 +77,7 @@ async function tokenValid(token: string | undefined): Promise<boolean> {
   }
 }
 
-export const runtime = 'nodejs'
-
+// Proxy always runs on the Node.js runtime in Next 16; a `runtime` export here is a build error.
 export async function proxy(req: NextRequest) {
   const path = req.nextUrl.pathname
   if (PUBLIC_API.some((p) => path === p || path.startsWith(`${p}/`))) {

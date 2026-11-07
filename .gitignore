@@ -59,3 +59,7 @@ db/*.key
 .env.*.local
 db/*.db
 db/*.db-*
+
+# deploy credentials (per-site SSH passwords) and python cache
+deploy_config*.json
+__pycache__/

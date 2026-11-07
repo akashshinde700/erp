@@ -34,7 +34,7 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useApi, type DashboardData } from './api'
 import { CardSkeleton, EmptyState, ErrorState, KpiCard, Money, SectionHeading, SourceBadge } from './bits'
-import { useErpUi } from './store'
+import { useErpUi, type ErpView } from './store'
 import { dateStr, money } from '@/lib/erp'
 
 const TREND_SALES = 'var(--chart-1)'
@@ -59,13 +59,15 @@ export function DashboardView() {
   const { data, loading, error, reload } = useApi<DashboardData>('/api/dashboard')
   const setView = useErpUi((s) => s.setView)
 
-  const quickActions = [
-    { label: 'New Sales Invoice', icon: ReceiptText, view: 'sales' as const, hint: 'GST tax invoice' },
-    { label: 'New Purchase', icon: ShoppingCart, view: 'purchase' as const, hint: 'Supplier bill' },
-    { label: 'Jobwork Inward', icon: Factory, view: 'jobwork' as const, hint: 'Customer material in' },
-    { label: 'Record Payment', icon: HandCoins, view: 'accounting' as const, hint: 'Receipt / payment' },
-    { label: 'Stock Snapshot', icon: PackageOpen, view: 'inventory' as const, hint: 'Balances & ledger' },
-    { label: 'Tally Export', icon: Truck, view: 'tally' as const, hint: 'Vouchers & masters' },
+  const quickActions: { label: string; icon: typeof ReceiptText; view: ErpView; hint: string; params: Record<string, string> }[] = [
+    // open: 'new' lands on the module with its create dialog already open —
+    // a "New …" card must not cost a second click (see useOpenNewParam).
+    { label: 'New Sales Invoice', icon: ReceiptText, view: 'sales' as const, hint: 'GST tax invoice', params: { open: 'new' } },
+    { label: 'New Purchase', icon: ShoppingCart, view: 'purchase' as const, hint: 'Supplier bill', params: { open: 'new' } },
+    { label: 'Jobwork Inward', icon: Factory, view: 'jobwork' as const, hint: 'Customer material in', params: { open: 'new' } },
+    { label: 'Record Payment', icon: HandCoins, view: 'accounting' as const, hint: 'Receipt / payment', params: { open: 'new' } },
+    { label: 'Stock Snapshot', icon: PackageOpen, view: 'inventory' as const, hint: 'Balances & ledger', params: {} },
+    { label: 'Tally Export', icon: Truck, view: 'tally' as const, hint: 'Vouchers & masters', params: {} },
   ]
 
   if (loading || !data) {
@@ -106,7 +108,7 @@ export function DashboardView() {
           <button
             key={qa.label}
             type="button"
-            onClick={() => setView(qa.view)}
+            onClick={() => setView(qa.view, qa.params)}
             className="group flex min-h-11 items-center gap-2 rounded-lg border bg-card px-3 py-2.5 text-left transition-colors hover:border-primary/50 hover:bg-accent"
             aria-label={qa.label}
           >

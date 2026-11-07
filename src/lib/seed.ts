@@ -19,20 +19,7 @@ import {
   generateJobworkInvoice,
   syncPartyOpeningBalance,
 } from './services'
-import {
-  createEmployee,
-  createProject,
-  startProject,
-  completeProject,
-  createBom,
-  approveBom,
-  createWorkOrder,
-  completeWorkOrder,
-  createTask,
-  assignTask,
-  startTask,
-  completeTask,
-} from './manufacturing'
+import { seedManufacturingDemo } from './seed-manufacturing'
 
 const daysAgo = (n: number): Date => {
   const d = new Date()
@@ -381,153 +368,9 @@ export async function seedDatabase(force = false) {
     ],
   })
 
-  // =========================================================================
-  // Manufacturing chain (Project → BOM → Work Order → Tasks → Completion)
-  // Everything below runs through the REAL manufacturing services, so
-  // numbering, guards, progress stats and the stock ledger are honest.
-  // =========================================================================
-
-  // ---------- Employees (fabrication floor) ----------
-  const ravi = await createEmployee({ code: 'EMP001', name: 'Ravi Kulkarni', role: 'SUPERVISOR', skill: 'Fitter', shift: 'GENERAL', hourlyRate: 180, phone: '+91 98220 11001' })
-  const sandeep = await createEmployee({ code: 'EMP002', name: 'Sandeep Patil', role: 'WORKER', skill: 'Welder', machineNo: 'WLD-02', shift: 'DAY', hourlyRate: 120 })
-  const imran = await createEmployee({ code: 'EMP003', name: 'Imran Shaikh', role: 'WORKER', skill: 'CNC Operator', machineNo: 'CNC-01', shift: 'DAY', hourlyRate: 150 })
-  const prakash = await createEmployee({ code: 'EMP004', name: 'Prakash Jadhav', role: 'WORKER', skill: 'Fitter', machineNo: 'GRD-01', shift: 'GENERAL', hourlyRate: 110 })
-  const anita = await createEmployee({ code: 'EMP005', name: 'Anita Deshmukh', role: 'WORKER', skill: 'Painter', machineNo: 'PNT-01', shift: 'GENERAL', hourlyRate: 100 })
-  const vilas = await createEmployee({ code: 'EMP006', name: 'Vilas Shinde', role: 'WORKER', skill: 'Helper', shift: 'NIGHT', hourlyRate: 80 })
-
-  // ---------- PRJ-0001 · RUNNING — canopy, tasks in every state ----------
-  const canopy = await createProject({
-    name: 'Steel Structure Fabrication — Canopy',
-    partyId: mahindra.id,
-    manager: 'Anil Deshpande',
-    location: 'Chakan Plant 2',
-    startDate: daysAgo(40),
-    endDate: daysAhead(10),
-    budget: 850000,
-    documents: 'DWG-2025-117 canopy frame\nGA-0042 general arrangement\nWPS-D1.1 welding procedure',
-    notes: 'Hot-dip galvanised canopy over the dispatch bay. 12 columns + trusses.',
-  })
-  const canopyBom = await createBom({
-    projectId: canopy.id,
-    productName: 'Canopy Frame — Level 1',
-    drawingRef: 'DWG-2025-117',
-    notes: 'Net quantities; wastage per shop practice.',
-    lines: [
-      { itemId: msPlate.id, grade: 'IS2062 E250', thickness: 12, qty: 500, uom: 'KG', wastagePct: 5, rate: 54 },
-      { itemId: msPipe.id, grade: 'IS2062', qty: 200, uom: 'KG', wastagePct: 8, rate: 56 },
-      { itemId: weldRod.id, qty: 25, uom: 'KG', wastagePct: 2, rate: 110 },
-      { itemId: paint.id, qty: 40, uom: 'LTR', wastagePct: 5, rate: 240 },
-      { itemId: bolts.id, qty: 100, uom: 'PCS', wastagePct: 3, rate: 30 },
-    ],
-  })
-  await approveBom(canopyBom.id)
-  // WO-1 pulls grossed lines from the approved BOM; project auto-starts (RUNNING)
-  const canopyWo = await createWorkOrder({
-    projectId: canopy.id,
-    bomId: canopyBom.id,
-    priority: 'HIGH',
-    startDate: daysAgo(38),
-    endDate: daysAhead(6),
-    notes: 'Single batch — full frame in one WO.',
-  })
-
-  // Operation tasks (job cards). Completed ones consume real stock.
-  const cut = await createTask({ workOrderId: canopyWo.id, operation: 'CUTTING', seq: 1, plannedQty: 525 })
-  await assignTask(cut.id, { employeeId: prakash.id, dueDate: daysAgo(30) })
-  await completeTask(cut.id, { actualQty: 515, rejectionQty: 10, hours: 16, materialItemId: msPlate.id, materialQty: 520, completedAt: daysAgo(31) })
-
-  const laser = await createTask({ workOrderId: canopyWo.id, operation: 'CNC_LASER', seq: 2, plannedQty: 100 })
-  await assignTask(laser.id, { employeeId: imran.id, dueDate: daysAgo(26) })
-  await completeTask(laser.id, { actualQty: 100, hours: 8, completedAt: daysAgo(26) })
-
-  const bend = await createTask({ workOrderId: canopyWo.id, operation: 'BENDING', seq: 3, plannedQty: 100 })
-  await assignTask(bend.id, { employeeId: prakash.id, dueDate: daysAgo(22) })
-  await completeTask(bend.id, { actualQty: 100, hours: 6, materialItemId: msPipe.id, materialQty: 216, completedAt: daysAgo(22) })
-
-  const weld = await createTask({ workOrderId: canopyWo.id, operation: 'WELDING', seq: 4, plannedQty: 100 })
-  await assignTask(weld.id, { employeeId: sandeep.id, dueDate: daysAgo(15) })
-  await completeTask(weld.id, { actualQty: 100, rejectionQty: 2, hours: 24, materialItemId: weldRod.id, materialQty: 25, completedAt: daysAgo(14) })
-
-  const asm = await createTask({ workOrderId: canopyWo.id, operation: 'ASSEMBLY', seq: 5, plannedQty: 100 })
-  await assignTask(asm.id, { employeeId: ravi.id, dueDate: daysAgo(8) })
-  await completeTask(asm.id, { actualQty: 98, hours: 12, materialItemId: bolts.id, materialQty: 100, completedAt: daysAgo(7) })
-
-  // Painting on the floor right now; finishing unassigned + OVERDUE (pending board demo)
-  const pnt = await createTask({ workOrderId: canopyWo.id, operation: 'PAINTING', seq: 6, plannedQty: 98 })
-  await assignTask(pnt.id, { employeeId: anita.id, dueDate: daysAhead(2) })
-  await startTask(pnt.id)
-
-  const fin = await createTask({ workOrderId: canopyWo.id, operation: 'FINISHING', seq: 7, plannedQty: 98 })
-  await assignTask(fin.id, { employeeId: vilas.id, dueDate: daysAgo(2) }) // overdue
-
-  const qcTask = await createTask({ workOrderId: canopyWo.id, operation: 'OTHER', seq: 8, plannedQty: 98, notes: 'Dimensional QC + dispatch docs' })
-
-  // ---------- PRJ-0002 · PENDING — gantry, draft BOM ----------
-  const gantry = await createProject({
-    name: 'Conveyor Gantry Line — Phase 2',
-    partyId: gujarat.id,
-    manager: 'Sunil Rao',
-    location: 'Vatva Site',
-    startDate: daysAgo(5),
-    endDate: daysAhead(55),
-    budget: 2400000,
-    documents: 'GA-GANTRY-2026-08',
-  })
-  await createBom({
-    projectId: gantry.id,
-    productName: 'Gantry Truss Assembly',
-    drawingRef: 'GA-GANTRY-2026-08',
-    lines: [
-      { itemId: msPlate.id, grade: 'IS2062 E350', thickness: 10, qty: 1200, uom: 'KG', wastagePct: 6, rate: 54 },
-      { itemId: msPipe.id, qty: 800, uom: 'KG', wastagePct: 8, rate: 56 },
-      { itemId: bolts.id, qty: 400, uom: 'PCS', wastagePct: 3, rate: 30 },
-    ],
-  })
-
-  // ---------- PRJ-0003 · COMPLETED — the full happy path ----------
-  const tank = await createProject({
-    name: 'Storage Tank 20KL — SS304',
-    partyId: bengal.id,
-    manager: 'Vikram Joshi',
-    location: 'Howrah Yard',
-    startDate: daysAgo(90),
-    endDate: daysAgo(10),
-    budget: 1250000,
-    documents: 'TK-20KL-DWG-01 shell\nTK-20KL-DWG-02 dome',
-  })
-  const tankBom = await createBom({
-    projectId: tank.id,
-    productName: 'Tank Shell + Dome Assembly',
-    drawingRef: 'TK-20KL-DWG-01',
-    lines: [
-      { itemId: msPlate.id, grade: 'IS2062', thickness: 8, qty: 2200, uom: 'KG', wastagePct: 4, rate: 54 },
-      { itemId: weldRod.id, qty: 45, uom: 'KG', wastagePct: 2, rate: 110 },
-      { itemId: paint.id, qty: 60, uom: 'LTR', wastagePct: 5, rate: 240 },
-      { itemId: bolts.id, qty: 250, uom: 'PCS', wastagePct: 3, rate: 30 },
-    ],
-  })
-  await approveBom(tankBom.id)
-  const tankWo = await createWorkOrder({
-    projectId: tank.id,
-    bomId: tankBom.id,
-    priority: 'NORMAL',
-    startDate: daysAgo(85),
-    endDate: daysAgo(12),
-  })
-  const tCut = await createTask({ workOrderId: tankWo.id, operation: 'CUTTING', seq: 1, plannedQty: 2288 })
-  await assignTask(tCut.id, { employeeId: prakash.id, dueDate: daysAgo(75) })
-  await completeTask(tCut.id, { actualQty: 2280, rejectionQty: 8, hours: 40, materialItemId: msPlate.id, materialQty: 2200, completedAt: daysAgo(74) })
-  const tWeld = await createTask({ workOrderId: tankWo.id, operation: 'WELDING', seq: 2, plannedQty: 100 })
-  await assignTask(tWeld.id, { employeeId: sandeep.id, dueDate: daysAgo(60) })
-  await completeTask(tWeld.id, { actualQty: 100, rejectionQty: 1, hours: 55, materialItemId: weldRod.id, materialQty: 45, completedAt: daysAgo(58) })
-  const tPaint = await createTask({ workOrderId: tankWo.id, operation: 'PAINTING', seq: 3, plannedQty: 100 })
-  await assignTask(tPaint.id, { employeeId: anita.id, dueDate: daysAgo(45) })
-  await completeTask(tPaint.id, { actualQty: 100, hours: 18, materialItemId: paint.id, materialQty: 55, completedAt: daysAgo(44) })
-  const tFin = await createTask({ workOrderId: tankWo.id, operation: 'FINISHING', seq: 4, plannedQty: 100 })
-  await assignTask(tFin.id, { employeeId: vilas.id, dueDate: daysAgo(20) })
-  await completeTask(tFin.id, { actualQty: 100, hours: 10, completedAt: daysAgo(19) })
-  await completeWorkOrder(tankWo.id)
-  await completeProject(tank.id)
+  // Manufacturing chain lives in seed-manufacturing.ts so it can also be added
+  // to an already-seeded demo org (POST /api/seed?manufacturing=1).
+  const mfg = await seedManufacturingDemo({ mahindra, gujarat, bengal, msPlate, msPipe, weldRod, paint, bolts })
 
   // Unallocated advance left on Gujarat shows in outstanding; verify trial balance
   const tb = await db.accountLedger.groupBy({ by: ['account'], _sum: { debit: true, credit: true } })
@@ -598,9 +441,9 @@ export async function seedDatabase(force = false) {
       jobworkInward: inward.inwardNo,
       jobworkInvoice: jwInv.invoiceNo,
       certificate: cert.certNo,
-      runningProject: canopy.projectNo,
-      pendingProject: gantry.projectNo,
-      completedProject: tank.projectNo,
+      runningProject: mfg.projects.running,
+      pendingProject: mfg.projects.pending,
+      completedProject: mfg.projects.completed,
     },
     trialBalanceDr: Math.round(dr * 100) / 100,
     trialBalanceCr: Math.round(cr * 100) / 100,

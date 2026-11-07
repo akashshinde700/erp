@@ -58,7 +58,7 @@ import {
 } from './api'
 import { useCompany } from './company'
 import { EmptyState, Money, SectionHeading, SourceBadge, StatusBadge, TableSkeleton } from './bits'
-import { useErpUi } from './store'
+import { useErpUi, useOpenNewParam } from './store'
 import { onPreset, setCreatePreset, takeCreatePreset } from './nav'
 import { computeInvoiceTotals, dateStr, INDIAN_STATES, money, r2, stateName } from '@/lib/erp'
 import { InvoicePrint } from './invoice-print'
@@ -93,7 +93,7 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
   const list = useApi<AnyInvoice[]>(path)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'POSTED' | 'CANCELLED'>('ALL')
-  const [createOpen, setCreateOpen] = useState(false)
+  const [createOpen, setCreateOpen] = useState(useOpenNewParam())
   const [presetPartyId, setPresetPartyId] = useState('')
   const [prefill, setPrefill] = useState<AnyInvoice | null>(null)
   const [reloadTick, setReloadTick] = useState(0)

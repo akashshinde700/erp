@@ -251,9 +251,9 @@ export function LoginView({
                   </Button>
                   {status?.demoHint ? (
                     <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                      <span className="flex items-center gap-1.5">
+                      <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
                         <KeyRound className="size-3.5 shrink-0" aria-hidden />
-                        Demo org: <span className="font-mono text-foreground">owner@shreeforge.example.com</span> ·{' '}
+                        Demo org: <span className="break-all font-mono text-foreground">owner@shreeforge.example.com</span> ·{' '}
                         <span className="font-mono text-foreground">forge123</span>
                       </span>
                       <Button type="button" variant="outline" size="sm" className="h-9 px-3 md:h-7 md:px-2.5" onClick={fillDemo}>

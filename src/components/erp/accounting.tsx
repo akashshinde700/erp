@@ -7,6 +7,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
+import { useOpenNewParam } from './store'
 import { toast } from 'sonner'
 import {
   ArrowDownCircle,
@@ -123,7 +124,7 @@ export interface PaymentPreset {
 
 function PaymentsTab({ preset, onPresetConsumed }: { preset: PaymentPreset | null; onPresetConsumed: () => void }) {
   const list = useApi<Payment[]>('/api/payments')
-  const [manualOpen, setManualOpen] = useState(false)
+  const [manualOpen, setManualOpen] = useState(useOpenNewParam())
   const payments = list.data ?? []
   // A cross-module preset forces the dialog open (derived, not synced).
   const open = manualOpen || !!preset

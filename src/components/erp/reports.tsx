@@ -18,6 +18,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   currentMonth,
   useApi,
+  type CashBankBook,
   type Gstr1Report,
   type InventoryPlanningReport,
   type Outstanding,
@@ -39,6 +40,7 @@ export function ReportsView() {
           <TabsTrigger value="gstr1" className="h-11 sm:h-9">GSTR-1</TabsTrigger>
           <TabsTrigger value="trial" className="h-11 sm:h-9">Trial Balance</TabsTrigger>
           <TabsTrigger value="outstanding" className="h-11 sm:h-9">Outstanding</TabsTrigger>
+          <TabsTrigger value="cashbook" className="h-11 sm:h-9">Cash &amp; Bank</TabsTrigger>
           <TabsTrigger value="inventory" className="h-11 sm:h-9">Inventory Planning</TabsTrigger>
           <TabsTrigger value="pnl" className="h-11 sm:h-9">P&amp;L</TabsTrigger>
         </TabsList>
@@ -50,6 +52,9 @@ export function ReportsView() {
         </TabsContent>
         <TabsContent value="outstanding" className="mt-4">
           <OutstandingTab />
+        </TabsContent>
+        <TabsContent value="cashbook" className="mt-4">
+          <CashBankBookTab />
         </TabsContent>
         <TabsContent value="inventory" className="mt-4">
           <InventoryPlanningTab />
@@ -348,6 +353,62 @@ function OutstandingTab() {
     <div className="grid gap-4 lg:grid-cols-2">
       {table('Receivables (customers)', data.customers, data.totalReceivable, 'in')}
       {table('Payables (suppliers)', data.suppliers, data.totalPayable, 'out')}
+    </div>
+  )
+}
+
+// ---------- cash & bank book ----------
+
+function CashBankBookTab() {
+  const now = new Date()
+  const first = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
+  const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  const [from, setFrom] = useState(first)
+  const [to, setTo] = useState(today)
+  const [applied, setApplied] = useState({ from: first, to: today })
+  const { data, loading } = useApi<CashBankBook>(`/api/reports?type=cash-bank-book&from=${applied.from}&to=${applied.to}`)
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-2 sm:grid-cols-3 sm:items-end">
+        <div className="space-y-1"><Label className="text-xs">From</Label><Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="h-11" /></div>
+        <div className="space-y-1"><Label className="text-xs">To</Label><Input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="h-11" /></div>
+        <Button onClick={() => setApplied({ from, to })} disabled={!from || !to || from > to} className="h-11">Run book</Button>
+      </div>
+      {loading ? <TableSkeleton rows={8} cols={7} /> : !data ? (
+        <EmptyState title="No cash/bank data" hint="Post receipts or payments to build the book." icon={FileSpreadsheet} />
+      ) : (
+        <>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {data.accounts.map((account) => (
+              <Card key={account.account} className="p-4">
+                <div className="flex items-center justify-between"><p className="font-medium">{account.accountName}</p><Badge variant="outline">{account.account}</Badge></div>
+                <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+                  <div><p className="text-xs text-muted-foreground">Opening</p><Money value={account.opening} plain /></div>
+                  <div className="text-right"><p className="text-xs text-muted-foreground">Closing</p><span className="font-semibold"><Money value={account.closing} plain /></span></div>
+                  <div><p className="text-xs text-muted-foreground">Receipts</p><span className="text-primary"><Money value={account.receipts} plain /></span></div>
+                  <div className="text-right"><p className="text-xs text-muted-foreground">Payments</p><span className="text-destructive"><Money value={account.payments} plain /></span></div>
+                </div>
+              </Card>
+            ))}
+          </div>
+          <Card className="p-0"><CardContent className="p-0">
+            {data.rows.length === 0 ? <p className="p-6 text-center text-sm text-muted-foreground">No cash or bank movements in this period.</p> : (
+              <div className="max-h-[58dvh] overflow-auto erp-scroll"><Table>
+                <TableHeader className="sticky top-0 z-10 bg-card"><TableRow><TableHead>Date / Voucher</TableHead><TableHead>Account</TableHead><TableHead>Party / Remarks</TableHead><TableHead className="text-right">Receipt</TableHead><TableHead className="text-right">Payment</TableHead><TableHead className="text-right">Balance</TableHead></TableRow></TableHeader>
+                <TableBody>{data.rows.map((row) => <TableRow key={row.id}>
+                  <TableCell><span className="block text-xs tabular-nums">{row.date.slice(0, 10)}</span><span className="font-medium tabular-nums">{row.voucherType} · {row.voucherNo}</span></TableCell>
+                  <TableCell><Badge variant="outline">{row.account}</Badge></TableCell>
+                  <TableCell><span className="block">{row.party?.name ?? '—'}</span><span className="block max-w-64 truncate text-xs text-muted-foreground">{row.remarks ?? ''}</span></TableCell>
+                  <TableCell className="text-right tabular-nums">{row.debit > 0 ? <Money value={row.debit} plain /> : '—'}</TableCell>
+                  <TableCell className="text-right tabular-nums">{row.credit > 0 ? <Money value={row.credit} plain /> : '—'}</TableCell>
+                  <TableCell className="text-right font-semibold tabular-nums"><Money value={row.balance} plain /></TableCell>
+                </TableRow>)}</TableBody>
+              </Table></div>
+            )}
+          </CardContent></Card>
+        </>
+      )}
     </div>
   )
 }

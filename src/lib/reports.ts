@@ -337,6 +337,61 @@ export async function outstandingReport() {
   }
 }
 
+// ---------- Cash & bank book ----------
+
+/**
+ * Ledger-backed cash/bank book. Opening is every live entry before `from`;
+ * period movements and closing are derived from the same append-only GL, so
+ * the report cannot drift from payments or cancellation reversals.
+ */
+export async function cashBankBookReport(from: string, to: string) {
+  const fromDate = utcDayStart(from)
+  const toDate = utcDayEnd(to)
+  const accounts = ['CASH', 'BANK']
+  const [openingRows, periodRows] = await Promise.all([
+    db.accountLedger.findMany({
+      where: { isCancelled: false, account: { in: accounts }, date: { lt: fromDate } },
+      select: { account: true, debit: true, credit: true },
+    }),
+    db.accountLedger.findMany({
+      where: { isCancelled: false, account: { in: accounts }, date: { gte: fromDate, lte: toDate } },
+      orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
+      include: { party: { select: { id: true, code: true, name: true } } },
+    }),
+  ])
+  const opening = { CASH: 0, BANK: 0 }
+  for (const row of openingRows) opening[row.account as 'CASH' | 'BANK'] = r2(opening[row.account as 'CASH' | 'BANK'] + row.debit - row.credit)
+  const running = { ...opening }
+  const rows = periodRows.map((row) => {
+    const account = row.account as 'CASH' | 'BANK'
+    running[account] = r2(running[account] + row.debit - row.credit)
+    return { ...row, movement: r2(row.debit - row.credit), balance: running[account] }
+  })
+  const accountSummary = accounts.map((account) => {
+    const entries = periodRows.filter((row) => row.account === account)
+    const receipts = r2(entries.reduce((sum, row) => sum + row.debit, 0))
+    const payments = r2(entries.reduce((sum, row) => sum + row.credit, 0))
+    return {
+      account,
+      accountName: account === 'CASH' ? 'Cash Account' : 'Bank Account',
+      opening: opening[account as 'CASH' | 'BANK'],
+      receipts,
+      payments,
+      closing: running[account as 'CASH' | 'BANK'],
+    }
+  })
+  return {
+    from,
+    to,
+    rows,
+    accounts: accountSummary,
+    totalOpening: r2(accountSummary.reduce((sum, row) => sum + row.opening, 0)),
+    totalReceipts: r2(accountSummary.reduce((sum, row) => sum + row.receipts, 0)),
+    totalPayments: r2(accountSummary.reduce((sum, row) => sum + row.payments, 0)),
+    totalClosing: r2(accountSummary.reduce((sum, row) => sum + row.closing, 0)),
+  }
+}
+
 // ---------- P&L (period) ----------
 
 export async function pnlReport(from: string, to: string) {

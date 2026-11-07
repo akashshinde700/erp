@@ -126,7 +126,7 @@ async function main() {
     '/api/manufacturing/work-orders', '/api/manufacturing/tasks', '/api/manufacturing/employees',
     '/api/manufacturing/material-plan',
     '/api/reports?type=trial-balance', '/api/reports?type=stock-summary', '/api/reports?type=inventory-planning', '/api/reports?type=outstanding',
-    '/api/reports?type=gstr1', '/api/reports?type=pnl', '/api/reports?type=jobwork-pending',
+    '/api/reports?type=cash-bank-book&from=2026-01-01&to=2026-12-31', '/api/reports?type=gstr1', '/api/reports?type=pnl', '/api/reports?type=jobwork-pending',
     '/api/audit', '/api/search?q=shree',
   ]
   let bad = []
@@ -142,6 +142,13 @@ async function main() {
     'inventory planning suggestions equal max(reorder level minus own closing stock, zero)',
     planningRows.length > 0 && planningRows.every((r) => Math.abs(r.suggestedOrderQty - Math.max(0, r.item.reorderLevel - r.closing)) < 0.005),
     `rows=${planningRows.length}`
+  )
+
+  const cashBook = data(await req('GET', '/api/reports?type=cash-bank-book&from=2026-01-01&to=2026-12-31'))
+  check(
+    'cash/bank closing equals opening plus receipts minus payments',
+    (cashBook?.accounts ?? []).length === 2 && (cashBook?.accounts ?? []).every((a) => Math.abs(a.closing - (a.opening + a.receipts - a.payments)) < 0.005),
+    JSON.stringify(cashBook?.accounts)?.slice(0, 240)
   )
 
   const tb0 = await trialBalance()

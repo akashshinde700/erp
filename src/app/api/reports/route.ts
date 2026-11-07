@@ -8,6 +8,7 @@ import {
   gstr1Report,
   trialBalanceReport,
   outstandingReport,
+  cashBankBookReport,
   pnlReport,
   partyLedgerReport,
   jobworkPendingReport,
@@ -48,6 +49,14 @@ export async function GET(req: Request) {
       }
       case 'outstanding':
         return ok(await outstandingReport())
+      case 'cash-bank-book': {
+        const d = new Date()
+        const from = sp.get('from') ?? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`
+        const to = sp.get('to') ?? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()).padStart(2, '0')}`
+        const rangeErr = dateRangeError(from, to)
+        if (rangeErr) return fail(rangeErr)
+        return ok(await cashBankBookReport(from, to))
+      }
       case 'pnl': {
         const d = new Date()
         const from = sp.get('from') ?? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`
@@ -66,7 +75,7 @@ export async function GET(req: Request) {
       case 'jobwork-pending':
         return ok(await jobworkPendingReport())
       default:
-        return fail('Unknown report type. Use: stock-ledger, stock-summary, inventory-planning, gstr1, trial-balance, outstanding, pnl, party-ledger, jobwork-pending')
+        return fail('Unknown report type. Use: stock-ledger, stock-summary, inventory-planning, gstr1, trial-balance, outstanding, cash-bank-book, pnl, party-ledger, jobwork-pending')
     }
   } catch (e) {
     return handleError(e)

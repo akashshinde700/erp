@@ -16,14 +16,12 @@ import {
   Factory,
   FolderKanban,
   LayoutDashboard,
-  Loader2,
   LogOut,
   Menu,
   ReceiptText,
   ScrollText,
   ShieldAlert,
   ShoppingCart,
-  Sparkles,
   Truck,
 } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -37,9 +35,9 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
-import { api, apiPost, toastError, useApi, useMounted, type AuthStatus, type Company, type SessionInfo } from './api'
+import { api, apiPost, useApi, useMounted, type AuthStatus, type Company, type SessionInfo } from './api'
 import { CompanyProvider } from './company'
-import { LoginView, ManualSetupView } from './login'
+import { LoginView } from './login'
 import { OrgPortal } from './portal'
 import { useErpUi, type ErpView } from './store'
 import { GOTO_KEYS, isTypingTarget, pushRecent, setCreatePreset } from './nav'
@@ -248,47 +246,6 @@ function UserMenu({ session, onLogout }: { session: SessionInfo; onLogout: () =>
   )
 }
 
-// ---------- first-boot setup screen ----------
-
-function SetupScreen({ onDone, onManual }: { onDone: () => void; onManual: () => void }) {
-  const [seeding, setSeeding] = useState(false)
-  const seed = async () => {
-    setSeeding(true)
-    try {
-      // Plain POST: seeds only when no company exists yet (honest no-op
-      // otherwise). The destructive ?force=1 wipe is platform-admin-only.
-      await apiPost<{ company: string }>('/api/seed', {})
-      onDone()
-    } catch (e) {
-      toastError(e)
-      setSeeding(false)
-    }
-  }
-  return (
-    <div className="flex min-h-dvh flex-col items-center justify-center gap-6 bg-background p-6 text-center">
-      <div className="flex size-16 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
-        <Factory className="size-8" aria-hidden />
-      </div>
-      <div className="space-y-2">
-        <h1 className="text-2xl font-semibold">Welcome to ForgeERP</h1>
-        <p className="max-w-md text-sm text-muted-foreground">
-          No company is configured yet. Load the seeded demo data (company &ldquo;Shree Forge Industries&rdquo;
-          with parties, items, processes, invoices and a full jobwork chain), or start with a blank company.
-        </p>
-      </div>
-      <div className="flex flex-col gap-2 sm:flex-row">
-        <Button onClick={seed} disabled={seeding} size="lg" className="min-w-48">
-          {seeding ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Sparkles className="size-4" aria-hidden />}
-          {seeding ? 'Seeding demo data…' : 'Load demo data'}
-        </Button>
-        <Button onClick={onManual} disabled={seeding} variant="outline" size="lg" className="min-w-48">
-          Set up company manually
-        </Button>
-      </div>
-    </div>
-  )
-}
-
 // ---------- app ----------
 
 export function ErpApp() {
@@ -307,7 +264,6 @@ export function ErpApp() {
   // for a signed-in operating-org session — never anonymously.
   const status = useApi<AuthStatus | null>('/api/auth/status')
   const company = useApi<Company | null>(session === undefined ? null : session ? '/api/masters/company' : null)
-  const [manualSetup, setManualSetup] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const mounted = useMounted()
 
@@ -430,30 +386,6 @@ export function ErpApp() {
         <h1 className="text-lg font-semibold">Cannot reach the server</h1>
         <p className="max-w-md text-sm text-muted-foreground">{status.error}</p>
       </div>
-    )
-  }
-
-  // First boot, no company yet → demo seed or manual setup wizard.
-  if (status.data && !status.data.companyExists) {
-    if (manualSetup) {
-      return (
-        <ManualSetupView
-          onDone={() => {
-            setManualSetup(false)
-            status.reload()
-          }}
-          onBack={() => setManualSetup(false)}
-        />
-      )
-    }
-    return (
-      <SetupScreen
-        onDone={() => {
-          setManualSetup(false)
-          status.reload()
-        }}
-        onManual={() => setManualSetup(true)}
-      />
     )
   }
 

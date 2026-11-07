@@ -3,14 +3,14 @@
 //  - ERPNext: docstatus lifecycle, append-only ledgers + reversal-not-delete, naming series
 //  - Laserp:  transactional posting choke-point, FY numbering, module registry UI
 //  - GST Billing: pure tax engine rules, GSTIN checksum, print compliance
-// SQLite constraints: statuses are String constants, money is Float (r2 discipline).
+// MySQL: statuses are String constants, money is Float (r2 discipline); long free text is @db.Text.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "mysql"
   url      = env("DATABASE_URL")
 }
 
@@ -27,7 +27,7 @@ model Company {
   legalName String?
   gstin     String?
   stateCode String   @default("27")
-  address   String?
+  address   String? @db.Text
   city      String?
   pincode   String?
   phone     String?
@@ -92,7 +92,7 @@ model Plan {
   maxParties    Int      @default(0)
   active        Boolean  @default(true)
   // CSV of enabled feature keys (see PLAN_FEATURES in src/lib/platform.ts)
-  features      String   @default("exportData,advancedReports")
+  features      String @default("exportData,advancedReports") @db.VarChar(500)
   createdAt     DateTime @default(now())
 
   companies Company[]
@@ -107,7 +107,7 @@ model PlatformInquiry {
   email       String?
   phone       String?
   city        String?
-  message     String?
+  message     String? @db.Text
   status      String   @default("new") // new | contacted | converted | closed
   createdAt   DateTime @default(now())
 
@@ -120,7 +120,7 @@ model PlatformInquiryFollowUp {
   id        String   @id @default(cuid())
   inquiryId String
   inquiry   PlatformInquiry @relation(fields: [inquiryId], references: [id], onDelete: Cascade)
-  note      String
+  note      String @db.Text
   createdAt DateTime @default(now())
 }
 
@@ -130,8 +130,8 @@ model PlatformBlogPost {
   id          String   @id @default(cuid())
   title       String
   slug        String   @unique
-  excerpt     String?
-  body        String?
+  excerpt     String? @db.Text
+  body        String? @db.Text
   status      String   @default("draft") // draft | published
   publishedAt DateTime?
   createdAt   DateTime @default(now())
@@ -145,7 +145,7 @@ model AuditLog {
   action    String // CREATE | UPDATE | DELETE | CANCEL | POST | EXPORT | PLATFORM | BACKUP | SEED
   entity    String // SalesInvoice | Party | Plan | …
   entityId  String?
-  details   String? // short human summary
+  details   String? @db.Text // short human summary
   actor     String? // acting user's email (or 'platform-admin' / 'setup') — who did it
   createdAt DateTime @default(now())
 
@@ -163,7 +163,7 @@ model Party {
   types      String   @default("CUSTOMER") // CSV: CUSTOMER,SUPPLIER,JOBWORKER
   gstin      String?
   stateCode  String   @default("27")
-  address    String?
+  address    String? @db.Text
   city       String?
   pincode    String? // required for e-Invoice BuyerDtls.Pin (IRP v1.1)
   phone      String?
@@ -258,7 +258,7 @@ model StockLedger {
   qtyIn       Float     @default(0)
   qtyOut      Float     @default(0)
   rate        Float     @default(0)
-  remarks     String?
+  remarks     String? @db.Text
   isCancelled Boolean   @default(false)
   createdAt   DateTime  @default(now())
 
@@ -277,7 +277,7 @@ model AccountLedger {
   credit      Float    @default(0)
   voucherType String // SALES_INVOICE | PURCHASE_INVOICE | PAYMENT | RECEIPT | OPENING
   voucherNo   String
-  remarks     String?
+  remarks     String? @db.Text
   isCancelled Boolean  @default(false)
   createdAt   DateTime @default(now())
 
@@ -309,7 +309,7 @@ model SalesInvoice {
   paidAmount   Float    @default(0)
   status       String   @default("POSTED") // POSTED | CANCELLED
   source       String   @default("MANUAL") // MANUAL | JOBWORK
-  remarks      String?
+  remarks      String? @db.Text
   createdAt    DateTime @default(now())
 
   // Tally export stamps (records only — never blocks re-export)
@@ -328,7 +328,7 @@ model SalesInvoiceItem {
   invoice SalesInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   itemId  String
   item    Item    @relation(fields: [itemId], references: [id])
-  detail  String?
+  detail  String? @db.Text
   hsn     String?
   uom     String
   qty     Float
@@ -363,7 +363,7 @@ model PurchaseInvoice {
   grandTotal   Float    @default(0)
   paidAmount   Float    @default(0)
   status       String   @default("POSTED") // POSTED | CANCELLED
-  remarks      String?
+  remarks      String? @db.Text
   createdAt    DateTime @default(now())
 
   // Tally export stamps (records only — never blocks re-export)
@@ -382,7 +382,7 @@ model PurchaseInvoiceItem {
   invoice PurchaseInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   itemId  String
   item    Item    @relation(fields: [itemId], references: [id])
-  detail  String?
+  detail  String? @db.Text
   hsn     String?
   uom     String
   qty     Float
@@ -407,7 +407,7 @@ model JobworkInward {
   party       Party    @relation(fields: [partyId], references: [id])
   challanNo   String?
   warehouseId String?
-  notes       String?
+  notes       String? @db.Text
   status      String   @default("OPEN") // OPEN | IN_PROGRESS | COMPLETED | INVOICED | CANCELLED
   createdAt   DateTime @default(now())
 
@@ -429,7 +429,7 @@ model JobworkInwardItem {
   weight          Float // KG
   processedQty    Float   @default(0)
   processedWeight Float   @default(0)
-  remarks         String?
+  remarks         String? @db.Text
 
   cardRows JobCardProcess[]
 }
@@ -442,7 +442,7 @@ model JobCard {
   date        DateTime
   status      String   @default("COMPLETED") // COMPLETED | CANCELLED
   totalAmount Float    @default(0)
-  notes       String?
+  notes       String? @db.Text
   createdAt   DateTime @default(now())
 
   processes JobCardProcess[]
@@ -474,7 +474,7 @@ model JobworkCertificate {
   totalWeight Float    @default(0)
   totalAmount Float    @default(0)
   status      String   @default("ISSUED") // ISSUED | CANCELLED
-  details     String? // process-wise summary (JSON string)
+  details     String? @db.Text // process-wise summary (JSON string)
   createdAt   DateTime @default(now())
 }
 
@@ -514,10 +514,10 @@ model Project {
   endDate     DateTime? // planned delivery
   budget      Float     @default(0) // customer contract / order value
   estCost     Float     @default(0) // estimated cost (from approved BOMs)
-  documents   String? // drawing / technical document references
+  documents   String? @db.Text // drawing / technical document references
   status      String    @default("PENDING") // PENDING | RUNNING | COMPLETED | CANCELLED
   completedAt DateTime?
-  notes       String?
+  notes       String? @db.Text
   createdAt   DateTime  @default(now())
 
   boms       Bom[]
@@ -536,7 +536,7 @@ model Bom {
   drawingRef  String?
   status      String    @default("DRAFT") // DRAFT | APPROVED | CANCELLED
   approvedAt  DateTime?
-  notes       String?
+  notes       String? @db.Text
   createdAt   DateTime  @default(now())
 
   items      BomItem[]
@@ -561,7 +561,7 @@ model BomItem {
   rate       Float   @default(0) // estimated rate
   estCost    Float   @default(0) // qty × (1 + wastage%) × rate
   drawingRef String?
-  remarks    String?
+  remarks    String? @db.Text
 
   woLines WorkOrderLine[]
 }
@@ -579,7 +579,7 @@ model WorkOrder {
   priority    String    @default("NORMAL") // LOW | NORMAL | HIGH | URGENT
   status      String    @default("OPEN") // OPEN | IN_PROGRESS | COMPLETED | CANCELLED
   completedAt DateTime?
-  notes       String?
+  notes       String? @db.Text
   createdAt   DateTime  @default(now())
 
   lines WorkOrderLine[]
@@ -597,7 +597,7 @@ model WorkOrderLine {
   bomItem     BomItem?   @relation(fields: [bomItemId], references: [id])
   itemId      String
   item        Item       @relation(fields: [itemId], references: [id])
-  description String? // product / assembly being made
+  description String? @db.Text // product / assembly being made
   plannedQty  Float
   uom         String
 }
@@ -626,7 +626,7 @@ model ProductionTask {
   dueDate         DateTime?
   startedAt       DateTime?
   completedAt     DateTime?
-  notes           String?
+  notes           String? @db.Text
   createdAt       DateTime  @default(now())
 
   @@index([workOrderId])
@@ -646,7 +646,7 @@ model Payment {
   amount     Float
   mode       String   @default("CASH") // CASH | BANK | UPI | CHEQUE
   refNo      String?
-  notes      String?
+  notes      String? @db.Text
   status     String   @default("POSTED") // POSTED | CANCELLED
   createdAt  DateTime @default(now())
 

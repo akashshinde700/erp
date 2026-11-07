@@ -40,6 +40,8 @@ These modules are **not duplicates**, but the old labels/navigation made them lo
 | Operator/machine/operation efficiency | Improved/partial | Throughput, yield, attainment, hours, output/hour and posted cost now reported; true OEE awaits calendars/downtime reasons |
 | Work centers, calendars, OEE and maintenance | Missing (P1) | Add only after routing and production posting are correct |
 | MPS/ATP and forecast demand | Missing (P1) | Build on SO + MRP supply/demand foundation |
+| Cross-module action center / role dashboard | Improved | Live task, stock reorder, jobwork certification/billing and financial exposure actions derived from source states |
+| GST compliance reporting | Improved/partial | GSTR-1, books-based GSTR-3B and outward/inward HSN/SAC summaries; portal filing, RCM/exempt/blocked-ITC and cross-utilisation remain |
 | Customer sales history / analysis | Improved | Auditable sales, collections, invoice outstanding, jobwork share, average invoice, last sale and top items/services |
 | Supplier/vendor analysis | Improved/partial | Auditable invoice count, spend, paid/outstanding, average invoice, last purchase and top items; on-time/QC scores await PO→GRN→QC |
 | Cash & Bank / day book | Implemented | Ledger-backed period opening, receipts, payments, running account balance and closing for CASH/BANK |

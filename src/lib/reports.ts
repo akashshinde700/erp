@@ -463,17 +463,120 @@ export async function productionEfficiencyReport() {
   }
 }
 
+// ---------- Cross-module workflow action center ----------
+
+/**
+ * Read-only operational action queue. Every item links to an existing source
+ * document/state; it does not create fake notifications or duplicate status.
+ */
+export async function workflowActionCenterReport() {
+  const nowDay = new Date().toISOString().slice(0, 10)
+  const [inventory, outstanding, tasks, jobwork] = await Promise.all([
+    inventoryPlanningReport(),
+    outstandingReport(),
+    db.productionTask.findMany({
+      where: { status: { in: ['PENDING', 'ASSIGNED', 'IN_PROGRESS'] } },
+      include: {
+        employee: { select: { id: true, code: true, name: true } },
+        workOrder: { select: { woNo: true, project: { select: { projectNo: true, name: true } } } },
+      },
+      orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
+    }),
+    db.jobworkInward.findMany({
+      where: { status: { in: ['OPEN', 'IN_PROGRESS', 'COMPLETED'] } },
+      include: {
+        party: { select: { name: true } },
+        items: { select: { qty: true, processedQty: true } },
+        jobCards: { where: { status: 'COMPLETED' }, select: { totalAmount: true } },
+        certificates: { where: { status: 'ISSUED' }, select: { certNo: true } },
+      },
+      orderBy: { date: 'asc' },
+    }),
+  ])
+  const taskActions = tasks.map((task) => {
+    const dueDay = task.dueDate?.toISOString().slice(0, 10) ?? null
+    const overdue = dueDay !== null && dueDay < nowDay
+    return {
+      id: task.id,
+      taskNo: task.taskNo,
+      operation: task.operation,
+      status: task.status,
+      priority: overdue ? 'CRITICAL' : !task.employee ? 'HIGH' : 'NORMAL',
+      reason: overdue ? `Overdue since ${dueDay}` : !task.employee ? 'Worker not assigned' : 'Production task pending',
+      dueDate: task.dueDate,
+      employee: task.employee,
+      woNo: task.workOrder.woNo,
+      projectNo: task.workOrder.project.projectNo,
+      projectName: task.workOrder.project.name,
+    }
+  })
+  const jobworkActions = jobwork.map((inward) => {
+    const received = r2(inward.items.reduce((sum, item) => sum + item.qty, 0))
+    const processed = r2(inward.items.reduce((sum, item) => sum + item.processedQty, 0))
+    const hasCertificate = inward.certificates.length > 0
+    const cardValue = r2(inward.jobCards.reduce((sum, card) => sum + card.totalAmount, 0))
+    const action = inward.status === 'COMPLETED' && !hasCertificate
+      ? 'ISSUE_CERTIFICATE'
+      : inward.status === 'COMPLETED' && hasCertificate
+        ? 'GENERATE_INVOICE'
+        : 'COMPLETE_PROCESSING'
+    return {
+      id: inward.id,
+      inwardNo: inward.inwardNo,
+      party: inward.party.name,
+      status: inward.status,
+      action,
+      priority: action === 'GENERATE_INVOICE' ? 'HIGH' : action === 'ISSUE_CERTIFICATE' ? 'HIGH' : 'NORMAL',
+      receivedQty: received,
+      processedQty: processed,
+      remainingQty: r2(Math.max(0, received - processed)),
+      cardValue,
+      certificateNo: inward.certificates[0]?.certNo ?? null,
+    }
+  })
+  const stockActions = inventory.rows.filter((row) => row.suggestedOrderQty > 0).map((row) => ({
+    item: row.item,
+    closing: row.closing,
+    suggestedOrderQty: row.suggestedOrderQty,
+    priority: row.closing <= 0 ? 'CRITICAL' : 'HIGH',
+  }))
+  return {
+    generatedAt: new Date(),
+    summary: {
+      critical: taskActions.filter((row) => row.priority === 'CRITICAL').length + stockActions.filter((row) => row.priority === 'CRITICAL').length,
+      high: taskActions.filter((row) => row.priority === 'HIGH').length + stockActions.filter((row) => row.priority === 'HIGH').length + jobworkActions.filter((row) => row.priority === 'HIGH').length,
+      overdueTasks: taskActions.filter((row) => row.priority === 'CRITICAL').length,
+      unassignedTasks: taskActions.filter((row) => !row.employee).length,
+      reorderItems: stockActions.length,
+      jobworkActions: jobworkActions.length,
+      receivables: outstanding.totalReceivable,
+      payables: outstanding.totalPayable,
+    },
+    tasks: taskActions,
+    stock: stockActions,
+    jobwork: jobworkActions,
+    receivables: outstanding.customers.slice().sort((a, b) => b.amount - a.amount).slice(0, 10),
+    payables: outstanding.suppliers.slice().sort((a, b) => b.amount - a.amount).slice(0, 10),
+  }
+}
+
+// ---------- GST monthly period helper ----------
+
+function utcMonthRange(month: string) {
+  const from = new Date(`${month}-01T00:00:00.000Z`)
+  const nextMonth = month.endsWith('-12')
+    ? `${Number(month.slice(0, 4)) + 1}-01`
+    : `${month.slice(0, 5)}${String(Number(month.slice(5)) + 1).padStart(2, '0')}`
+  return { from, to: new Date(new Date(`${nextMonth}T00:00:00.000Z`).getTime() - 1) }
+}
+
 // ---------- GSTR-1 summary (B2B / B2C, rate-wise) ----------
 
 export async function gstr1Report(month: string) {
   // month = 'YYYY-MM' — invoice dates are stored at UTC midnight, so the
   // month window must be UTC-bounded (local bounds drop day-1 / pick up
   // next-month rows on non-UTC servers).
-  const from = new Date(`${month}-01T00:00:00.000Z`)
-  const nextMonth = month.endsWith('-12')
-    ? `${Number(month.slice(0, 4)) + 1}-01`
-    : `${month.slice(0, 5)}${String(Number(month.slice(5)) + 1).padStart(2, '0')}`
-  const to = new Date(new Date(`${nextMonth}T00:00:00.000Z`).getTime() - 1)
+  const { from, to } = utcMonthRange(month)
   const invoices = await db.salesInvoice.findMany({
     where: { date: { gte: from, lte: to }, status: 'POSTED' },
     include: { items: true, party: true },
@@ -529,6 +632,91 @@ export async function gstr1Report(month: string) {
     b2c: [...b2c.entries()].map(([rate, b]) => ({ rate, ...b })).sort((a, b) => a.rate - b.rate),
     b2bTotal: total(b2b),
     b2cTotal: total(b2c),
+  }
+}
+
+// ---------- GSTR-3B internal liability / ITC summary ----------
+
+/**
+ * Books-based GSTR-3B working summary. It is intentionally not labelled a
+ * portal-ready return: reverse charge, exempt/nil/non-GST supplies and blocked
+ * ITC are not represented by the current invoice schema.
+ */
+export async function gstr3bReport(month: string) {
+  const { from, to } = utcMonthRange(month)
+  const [sales, purchases] = await Promise.all([
+    db.salesInvoice.findMany({ where: { status: 'POSTED', date: { gte: from, lte: to } }, select: { taxable: true, cgst: true, sgst: true, igst: true, grandTotal: true } }),
+    db.purchaseInvoice.findMany({ where: { status: 'POSTED', date: { gte: from, lte: to } }, select: { taxable: true, cgst: true, sgst: true, igst: true, grandTotal: true } }),
+  ])
+  const total = (rows: { taxable: number; cgst: number; sgst: number; igst: number; grandTotal: number }[]) => ({
+    taxable: r2(rows.reduce((sum, row) => sum + row.taxable, 0)),
+    cgst: r2(rows.reduce((sum, row) => sum + row.cgst, 0)),
+    sgst: r2(rows.reduce((sum, row) => sum + row.sgst, 0)),
+    igst: r2(rows.reduce((sum, row) => sum + row.igst, 0)),
+    grandTotal: r2(rows.reduce((sum, row) => sum + row.grandTotal, 0)),
+  })
+  const outward = total(sales)
+  const inward = total(purchases)
+  const net = {
+    cgst: r2(Math.max(0, outward.cgst - inward.cgst)),
+    sgst: r2(Math.max(0, outward.sgst - inward.sgst)),
+    igst: r2(Math.max(0, outward.igst - inward.igst)),
+  }
+  const excessItc = {
+    cgst: r2(Math.max(0, inward.cgst - outward.cgst)),
+    sgst: r2(Math.max(0, inward.sgst - outward.sgst)),
+    igst: r2(Math.max(0, inward.igst - outward.igst)),
+  }
+  return {
+    month,
+    salesInvoiceCount: sales.length,
+    purchaseInvoiceCount: purchases.length,
+    outward,
+    eligibleItcFromBooks: inward,
+    netTaxBeforeCrossUtilisation: { ...net, total: r2(net.cgst + net.sgst + net.igst) },
+    excessItcBeforeCrossUtilisation: { ...excessItc, total: r2(excessItc.cgst + excessItc.sgst + excessItc.igst) },
+    limitations: [
+      'Books summary only — not a filed GSTR-3B or portal acknowledgement',
+      'No reverse-charge, exempt/nil/non-GST or blocked-ITC classification in the current schema',
+      'Cross-utilisation of CGST/SGST/IGST credit is not applied',
+    ],
+  }
+}
+
+// ---------- GST HSN/SAC outward and inward summary ----------
+
+export async function hsnSummaryReport(month: string) {
+  const { from, to } = utcMonthRange(month)
+  const [sales, purchases] = await Promise.all([
+    db.salesInvoiceItem.findMany({ where: { invoice: { status: 'POSTED', date: { gte: from, lte: to } } }, include: { item: { select: { name: true, hsn: true } } } }),
+    db.purchaseInvoiceItem.findMany({ where: { invoice: { status: 'POSTED', date: { gte: from, lte: to } } }, include: { item: { select: { name: true, hsn: true } } } }),
+  ])
+  type Line = typeof sales[number]
+  const aggregate = (lines: Line[]) => {
+    const map = new Map<string, { hsn: string; description: string; uom: string; gstRate: number; qty: number; taxable: number; cgst: number; sgst: number; igst: number; total: number }>()
+    for (const line of lines) {
+      const hsn = (line.hsn || line.item.hsn || 'MISSING').trim()
+      const key = `${hsn}|${line.uom}|${line.gstRate}`
+      const row = map.get(key) ?? { hsn, description: line.item.name, uom: line.uom, gstRate: line.gstRate, qty: 0, taxable: 0, cgst: 0, sgst: 0, igst: 0, total: 0 }
+      row.qty = r2(row.qty + line.qty)
+      row.taxable = r2(row.taxable + line.taxable)
+      row.cgst = r2(row.cgst + line.cgst)
+      row.sgst = r2(row.sgst + line.sgst)
+      row.igst = r2(row.igst + line.igst)
+      row.total = r2(row.total + line.total)
+      map.set(key, row)
+    }
+    return [...map.values()].sort((a, b) => a.hsn.localeCompare(b.hsn) || a.gstRate - b.gstRate)
+  }
+  const outward = aggregate(sales)
+  const inward = aggregate(purchases as unknown as Line[])
+  return {
+    month,
+    outward,
+    inward,
+    missingHsnLines: outward.filter((row) => row.hsn === 'MISSING').length + inward.filter((row) => row.hsn === 'MISSING').length,
+    outwardTaxable: r2(outward.reduce((sum, row) => sum + row.taxable, 0)),
+    inwardTaxable: r2(inward.reduce((sum, row) => sum + row.taxable, 0)),
   }
 }
 

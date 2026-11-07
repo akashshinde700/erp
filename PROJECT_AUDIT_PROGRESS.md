@@ -3,6 +3,12 @@
 **Branch:** `arena/c87300cc-erp` · **Base commit:** `cf7a911` · **Checkpoint:** 2026-11-07 (Asia/Kolkata)
 **Status:** ACTIVE WORK IN PROGRESS — this is a saved checkpoint, **not** a final production sign-off.
 
+> **2026-11-07 HSN/SAC continuation (branch `arena/81f22c2f-erp`):** added monthly outward and inward HSN/SAC summaries grouped by HSN, UOM and GST rate, including quantity, taxable value and component taxes, with explicit missing-HSN detection. This complements GSTR-1/GSTR-3B books working without claiming portal filing.
+
+> **2026-11-07 GSTR-3B continuation (branch `arena/81f22c2f-erp`):** added a monthly books-based GSTR-3B working from posted sales/purchase GST: outward taxable/liability, input ITC, per-head net before cross-utilisation and excess ITC. It is explicitly not presented as a filed/portal-ready return because RCM, exempt/nil/non-GST, blocked ITC and statutory cross-utilisation are not represented. Added API/UI, shared UTC month boundaries and reconciliation assertions.
+
+> **2026-11-07 Action Center continuation (branch `arena/81f22c2f-erp`):** implemented a cross-module operational action center derived from source states rather than duplicate notification records: overdue/unassigned production tasks, stock-out/reorder suggestions, jobwork processing→certificate→invoice next actions, and receivable/payable exposure. Reports now opens on Action Center with direct module navigation. Added API/UI and priority-total reconciliation assertions.
+
 > **2026-11-07 Production Efficiency continuation (branch `arena/93e00504-erp`):** implemented operation-, machine- and operator-level throughput from posted production tasks: planned/good/rejected quantity, yield, attainment, hours, output/hour, labour/material/total cost and completion counts. It is honestly labelled efficiency rather than OEE because calendars, availability and downtime loss reasons are not captured. Added API/UI and yield/cost reconciliation assertions.
 
 > **2026-11-07 Production Cost continuation (branch `arena/fbc19138-erp`):** implemented the Business Central/Odoo/SAP/Rootstock expected-vs-actual visibility layer across projects: approved-BOM expected cost, task-frozen material/labour actuals, cost variance, projected margin, production hours, task completion and rejection rate, with work-order drilldown data in the API. No synthetic overhead/WIP values are invented; WIP and overhead GL settlement remain open. Added report UI/API and reconciliation assertions.
@@ -169,7 +175,7 @@ Evidence: `tests/audit-results.json` (gitignored), console logs in `/tmp/erp-aud
 
 ### Critical (open)
 - **C1 Production runtime unproven.** `prisma/schema.prisma` is MySQL; `.env` points to an absent SQLite file; native Prisma engine downloads are TLS-blocked here; the local client is generated from `tests/schema.sqlite.prisma` (test-only). Before any deploy: provision MySQL, regenerate the client from the production schema, create a migration from the 33-model schema, verify a backup, and run the 59-check suite against MySQL. **No production DB was touched.**
-- **C2 No migration strategy.** `db:push --accept-data-loss` in `package.json` and `.zscripts/dev.sh`; no `prisma/migrations/`. A schema change today would need a reviewed migration + verified backup, not a push.
+- **C2 No checked-in migration baseline.** Destructive `db:push --accept-data-loss` and automatic dev-start push were removed on 2026-11-07; `db:deploy` now points to `prisma migrate deploy`. However, there is still no `prisma/migrations/` baseline because the required Prisma schema engine download is blocked in this environment. A schema change still requires a reviewed baseline/incremental migration + verified backup before deployment.
 - **C3 Full tenant isolation absent.** Business tables have no `companyId`; `src/lib/platform.ts` documents single-workspace operation. Multi-org SaaS claims in the platform console are not backed by row-level scoping. Architectural change — deliberately not attempted without approval.
 
 ### High (open)

@@ -1,0 +1,670 @@
+// ForgeERP — Manufacturing + Jobwork + GST + Accounting
+// Patterns adopted from reference analysis (see docs/):
+//  - ERPNext: docstatus lifecycle, append-only ledgers + reversal-not-delete, naming series
+//  - Laserp:  transactional posting choke-point, FY numbering, module registry UI
+//  - GST Billing: pure tax engine rules, GSTIN checksum, print compliance
+// MySQL: statuses are String constants, money is Float (r2 discipline); long free text is.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- System ----------
+
+model Counter {
+  key   String @id // e.g. "INV-2526"
+  value Int    @default(0)
+}
+
+model Company {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  legalName String?
+  gstin     String?
+  stateCode String   @default("27")
+  address   String?
+  city      String?
+  pincode   String?
+  phone     String?
+  email     String?
+  bankName  String?
+  bankAcct  String?
+  bankIfsc  String?
+  upiId     String?
+  createdAt DateTime @default(now())
+
+  // ---- Tally export settings (blank = engine defaults, see src/lib/tally.ts) ----
+  tallyCompanyName    String? // SVCURRENTCOMPANY; blank = omit (Tally uses open company)
+  tallySalesLedger    String?
+  tallyPurchaseLedger String?
+  tallyCgstLedger     String?
+  tallySgstLedger     String?
+  tallyIgstLedger     String?
+  tallyRoundOffLedger String?
+
+  // ---- SaaS subscription (managed via /api/platform/*; no plan = unlimited) ----
+  isPlatform   Boolean  @default(false) // operator's own company — never blocked
+  planId       String?
+  plan         Plan?    @relation(fields: [planId], references: [id])
+  saasStatus   String   @default("ACTIVE") // ACTIVE | SUSPENDED
+  billingCycle String   @default("MONTHLY") // MONTHLY | YEARLY
+  paidUntil    DateTime?
+  trialEndsAt  DateTime?
+  maxItems      Int? // per-org overrides; null = plan's limit; 0 = unlimited
+  maxWarehouses Int?
+  maxParties    Int?
+
+  users OrgUser[]
+}
+
+// ---------- Organization logins (SaaS) ----------
+// One login per org user; the ERP workspace serves the FIRST company
+// (operating org) — see src/lib/platform.ts. Passwords are scrypt-hashed
+// (salt:hash hex), sessions are HMAC-signed httpOnly cookies (src/lib/auth.ts).
+
+model OrgUser {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  name         String
+  role         String    @default("OWNER") // OWNER | ACCOUNTANT | VIEWER | SUPER_ADMIN (platform admin)
+  companyId    String
+  company      Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  tokenVersion Int       @default(0) // bump = revoke every live session for this user
+  createdAt    DateTime  @default(now())
+  lastLoginAt  DateTime?
+}
+
+// ---------- SaaS plans ----------
+
+model Plan {
+  id            String   @id @default(cuid())
+  name          String   @unique
+  priceMonthly  Float    @default(0) // INR; 0 = free
+  priceYearly   Float    @default(0)
+  maxItems      Int      @default(0) // 0 = unlimited
+  maxWarehouses Int      @default(0)
+  maxParties    Int      @default(0)
+  active        Boolean  @default(true)
+  // CSV of enabled feature keys (see PLAN_FEATURES in src/lib/platform.ts)
+  features      String @default("exportData,advancedReports")
+  createdAt     DateTime @default(now())
+
+  companies Company[]
+}
+
+// ---------- Platform inquiries (sales leads, managed in Platform Admin) ----------
+
+model PlatformInquiry {
+  id          String   @id @default(cuid())
+  name        String // prospect organization name
+  contactName String?
+  email       String?
+  phone       String?
+  city        String?
+  message     String?
+  status      String   @default("new") // new | contacted | converted | closed
+  createdAt   DateTime @default(now())
+
+  followUps PlatformInquiryFollowUp[]
+
+  @@index([status])
+}
+
+model PlatformInquiryFollowUp {
+  id        String   @id @default(cuid())
+  inquiryId String
+  inquiry   PlatformInquiry @relation(fields: [inquiryId], references: [id], onDelete: Cascade)
+  note      String
+  createdAt DateTime @default(now())
+}
+
+// ---------- Platform blog posts ----------
+
+model PlatformBlogPost {
+  id          String   @id @default(cuid())
+  title       String
+  slug        String   @unique
+  excerpt     String?
+  body        String?
+  status      String   @default("draft") // draft | published
+  publishedAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// ---------- Audit trail (every mutation; see src/lib/audit.ts) ----------
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  action    String // CREATE | UPDATE | DELETE | CANCEL | POST | EXPORT | PLATFORM | BACKUP | SEED
+  entity    String // SalesInvoice | Party | Plan | …
+  entityId  String?
+  details   String? // short human summary
+  actor     String? // acting user's email (or 'platform-admin' / 'setup') — who did it
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([entity])
+  @@index([actor])
+}
+
+// ---------- Masters ----------
+
+model Party {
+  id         String   @id @default(cuid())
+  code       String   @unique
+  name       String
+  types      String   @default("CUSTOMER") // CSV: CUSTOMER,SUPPLIER,JOBWORKER
+  gstin      String?
+  stateCode  String   @default("27")
+  address    String?
+  city       String?
+  pincode    String? // required for e-Invoice BuyerDtls.Pin (IRP v1.1)
+  phone      String?
+  email      String?
+  openingBal Float    @default(0) // + = receivable / - = payable
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  salesInvoices    SalesInvoice[]
+  purchaseInvoices PurchaseInvoice[]
+  jobworkInwards   JobworkInward[]
+  payments         Payment[]
+  processRates     PartyProcessRate[]
+  projects         Project[]
+
+  @@index([types])
+}
+
+model Item {
+  id           String   @id @default(cuid())
+  code         String   @unique
+  name         String
+  groupName    String   @default("General")
+  hsn          String?
+  isService    Boolean  @default(false)
+  isStockItem  Boolean  @default(true)
+  uom          String   @default("PCS") // KG | PCS | MTR | LTR | BOX
+  gstRate      Float    @default(18)
+  saleRate     Float    @default(0)
+  costRate     Float    @default(0)
+  reorderLevel Float    @default(0)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  stockRows    StockLedger[]
+  salesLines   SalesInvoiceItem[]
+  purchaseLines PurchaseInvoiceItem[]
+  inwardLines  JobworkInwardItem[]
+  bomLines     BomItem[]
+  woLines      WorkOrderLine[]
+  taskMaterial ProductionTask[] @relation("TaskMaterial")
+}
+
+model Warehouse {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  location  String?
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  stockRows StockLedger[]
+}
+
+model Process {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  seq       Int      @default(0) // routing order
+  basis     String   @default("WEIGHT") // WEIGHT (per KG) | QTY (per piece)
+  rate      Float    @default(0) // default rate
+  lotCharge Float    @default(0)
+  active    Boolean  @default(true)
+
+  partyRates PartyProcessRate[]
+  cardRows   JobCardProcess[]
+}
+
+model PartyProcessRate {
+  id        String  @id @default(cuid())
+  partyId   String
+  party     Party   @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  processId String
+  process   Process @relation(fields: [processId], references: [id], onDelete: Cascade)
+  rate      Float   @default(0)
+  lotCharge Float   @default(0)
+
+  @@unique([partyId, processId])
+}
+
+// ---------- Ledgers (append-only; cancel writes reversal rows) ----------
+
+model StockLedger {
+  id          String    @id @default(cuid())
+  postingDate DateTime
+  voucherType String // OPENING | PURCHASE | SALES | JOBWORK_IN | ADJUST
+  voucherNo   String
+  itemId      String
+  item        Item      @relation(fields: [itemId], references: [id])
+  warehouseId String
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+  qtyIn       Float     @default(0)
+  qtyOut      Float     @default(0)
+  rate        Float     @default(0)
+  remarks     String?
+  isCancelled Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+
+  @@index([itemId, warehouseId, postingDate])
+  @@index([voucherNo])
+  @@index([postingDate])
+}
+
+model AccountLedger {
+  id          String   @id @default(cuid())
+  date        DateTime
+  account     String // chart code, see src/lib/accounting.ts
+  accountName String
+  partyId     String?
+  debit       Float    @default(0)
+  credit      Float    @default(0)
+  voucherType String // SALES_INVOICE | PURCHASE_INVOICE | PAYMENT | RECEIPT | OPENING
+  voucherNo   String
+  remarks     String?
+  isCancelled Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([account, date])
+  @@index([voucherNo])
+  @@index([partyId, isCancelled])
+  @@index([voucherType, partyId])
+}
+
+// ---------- Sales ----------
+
+model SalesInvoice {
+  id           String   @id @default(cuid())
+  invoiceNo    String   @unique
+  date         DateTime
+  partyId      String
+  party        Party    @relation(fields: [partyId], references: [id])
+  poNo         String?
+  pos          String   @default("27") // place of supply (state code)
+  interState   Boolean  @default(false)
+  taxInclusive Boolean  @default(false)
+  taxable      Float    @default(0)
+  discount     Float    @default(0)
+  cgst         Float    @default(0)
+  sgst         Float    @default(0)
+  igst         Float    @default(0)
+  roundOff     Float    @default(0)
+  grandTotal   Float    @default(0)
+  paidAmount   Float    @default(0)
+  status       String   @default("POSTED") // POSTED | CANCELLED
+  source       String   @default("MANUAL") // MANUAL | JOBWORK
+  remarks      String?
+  createdAt    DateTime @default(now())
+
+  // Tally export stamps (records only — never blocks re-export)
+  tallyExportedAt DateTime?
+  tallySentAt     DateTime?
+
+  items       SalesInvoiceItem[]
+
+  @@index([partyId])
+  @@index([date])
+}
+
+model SalesInvoiceItem {
+  id      String  @id @default(cuid())
+  invoiceId String
+  invoice SalesInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  itemId  String
+  item    Item    @relation(fields: [itemId], references: [id])
+  detail  String?
+  hsn     String?
+  uom     String
+  qty     Float
+  rate    Float
+  discPct Float   @default(0)
+  discAmt Float   @default(0)
+  taxable Float
+  gstRate Float
+  cgst    Float   @default(0)
+  sgst    Float   @default(0)
+  igst    Float   @default(0)
+  total   Float
+}
+
+// ---------- Purchase ----------
+
+model PurchaseInvoice {
+  id           String   @id @default(cuid())
+  invoiceNo    String   @unique
+  date         DateTime
+  partyId      String
+  party        Party    @relation(fields: [partyId], references: [id])
+  poNo         String?
+  interState   Boolean  @default(false)
+  taxInclusive Boolean  @default(false)
+  taxable      Float    @default(0)
+  discount     Float    @default(0)
+  cgst         Float    @default(0)
+  sgst         Float    @default(0)
+  igst         Float    @default(0)
+  roundOff     Float    @default(0)
+  grandTotal   Float    @default(0)
+  paidAmount   Float    @default(0)
+  status       String   @default("POSTED") // POSTED | CANCELLED
+  remarks      String?
+  createdAt    DateTime @default(now())
+
+  // Tally export stamps (records only — never blocks re-export)
+  tallyExportedAt DateTime?
+  tallySentAt     DateTime?
+
+  items       PurchaseInvoiceItem[]
+
+  @@index([partyId])
+  @@index([date])
+}
+
+model PurchaseInvoiceItem {
+  id      String  @id @default(cuid())
+  invoiceId String
+  invoice PurchaseInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  itemId  String
+  item    Item    @relation(fields: [itemId], references: [id])
+  detail  String?
+  hsn     String?
+  uom     String
+  qty     Float
+  rate    Float
+  discPct Float   @default(0)
+  discAmt Float   @default(0)
+  taxable Float
+  gstRate Float
+  cgst    Float   @default(0)
+  sgst    Float   @default(0)
+  igst    Float   @default(0)
+  total   Float
+}
+
+// ---------- Jobwork (Inward → Job Card → Certificate → Invoice) ----------
+
+model JobworkInward {
+  id          String   @id @default(cuid())
+  inwardNo    String   @unique
+  date        DateTime
+  partyId     String
+  party       Party    @relation(fields: [partyId], references: [id])
+  challanNo   String?
+  warehouseId String?
+  notes       String?
+  status      String   @default("OPEN") // OPEN | IN_PROGRESS | COMPLETED | INVOICED | CANCELLED
+  createdAt   DateTime @default(now())
+
+  items       JobworkInwardItem[]
+  jobCards    JobCard[]
+  certificates JobworkCertificate[]
+
+  @@index([partyId])
+}
+
+model JobworkInwardItem {
+  id              String  @id @default(cuid())
+  inwardId        String
+  inward          JobworkInward @relation(fields: [inwardId], references: [id], onDelete: Cascade)
+  itemId          String
+  item            Item    @relation(fields: [itemId], references: [id])
+  batchNo         String?
+  qty             Float
+  weight          Float // KG
+  processedQty    Float   @default(0)
+  processedWeight Float   @default(0)
+  remarks         String?
+
+  cardRows JobCardProcess[]
+}
+
+model JobCard {
+  id          String   @id @default(cuid())
+  cardNo      String   @unique
+  inwardId    String
+  inward      JobworkInward @relation(fields: [inwardId], references: [id])
+  date        DateTime
+  status      String   @default("COMPLETED") // COMPLETED | CANCELLED
+  totalAmount Float    @default(0)
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  processes JobCardProcess[]
+}
+
+model JobCardProcess {
+  id            String  @id @default(cuid())
+  jobCardId     String
+  jobCard       JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  processId     String
+  process       Process @relation(fields: [processId], references: [id])
+  inwardItemId  String
+  inwardItem    JobworkInwardItem @relation(fields: [inwardItemId], references: [id])
+  qty           Float
+  weight        Float
+  basis         String // WEIGHT | QTY
+  rate          Float
+  amount        Float
+  lotCharge     Float   @default(0)
+}
+
+model JobworkCertificate {
+  id          String   @id @default(cuid())
+  certNo      String   @unique
+  inwardId    String
+  inward      JobworkInward @relation(fields: [inwardId], references: [id])
+  date        DateTime
+  totalQty    Float    @default(0)
+  totalWeight Float    @default(0)
+  totalAmount Float    @default(0)
+  status      String   @default("ISSUED") // ISSUED | CANCELLED
+  details     String? // process-wise summary (JSON string)
+  createdAt   DateTime @default(now())
+}
+
+// ---------- Manufacturing (Project → BOM → Work Order → Production Tasks) ----------
+// Absolute-ERP-style fabrication flow. Projects belong to a customer Party;
+// BOM lines reference stock Items (grossed up by wastage %); Work Orders pull
+// lines from an approved BOM; Production Tasks are per-operation job cards
+// (Cutting → … → Finishing) assigned to Employees. Completion state machines
+// are guarded SERVER-side: a WO completes only when every task is done, and a
+// Project only when every WO is done (see src/lib/manufacturing.ts).
+
+model Employee {
+  id         String   @id @default(cuid())
+  code       String   @unique
+  name       String
+  role       String   @default("WORKER") // WORKER | SUPERVISOR | MANAGER
+  skill      String? // e.g. Welder, CNC Operator, Fitter, Painter
+  machineNo  String? // default machine allocation
+  shift      String   @default("GENERAL") // GENERAL | DAY | NIGHT
+  hourlyRate Float    @default(0) // labour cost per hour (INR)
+  phone      String?
+  active     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+
+  tasks ProductionTask[]
+}
+
+model Project {
+  id          String    @id @default(cuid())
+  projectNo   String    @unique // PRJ-0001 (global counter, not FY-based)
+  name        String
+  partyId     String
+  party       Party     @relation(fields: [partyId], references: [id])
+  manager     String? // project manager name
+  location    String?
+  startDate   DateTime
+  endDate     DateTime? // planned delivery
+  budget      Float     @default(0) // customer contract / order value
+  estCost     Float     @default(0) // estimated cost (from approved BOMs)
+  documents   String? // drawing / technical document references
+  status      String    @default("PENDING") // PENDING | RUNNING | COMPLETED | CANCELLED
+  completedAt DateTime?
+  notes       String?
+  createdAt   DateTime  @default(now())
+
+  boms       Bom[]
+  workOrders WorkOrder[]
+
+  @@index([partyId])
+  @@index([status])
+}
+
+model Bom {
+  id          String    @id @default(cuid())
+  bomNo       String    @unique // BOM-2526-001 (FY-aware)
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  productName String // product / assembly name
+  drawingRef  String?
+  status      String    @default("DRAFT") // DRAFT | APPROVED | CANCELLED
+  approvedAt  DateTime?
+  notes       String?
+  createdAt   DateTime  @default(now())
+
+  items      BomItem[]
+  workOrders WorkOrder[]
+
+  @@index([projectId])
+}
+
+model BomItem {
+  id         String  @id @default(cuid())
+  bomId      String
+  bom        Bom     @relation(fields: [bomId], references: [id], onDelete: Cascade)
+  itemId     String
+  item       Item    @relation(fields: [itemId], references: [id])
+  grade      String? // material grade (IS2062, SS304…)
+  thickness  Float   @default(0) // mm
+  length     Float   @default(0) // mm
+  width      Float   @default(0) // mm
+  qty        Float // required quantity (net)
+  uom        String // KG | PCS | MTR | LTR
+  wastagePct Float   @default(0)
+  rate       Float   @default(0) // estimated rate
+  estCost    Float   @default(0) // qty × (1 + wastage%) × rate
+  drawingRef String?
+  remarks    String?
+
+  woLines WorkOrderLine[]
+}
+
+model WorkOrder {
+  id          String    @id @default(cuid())
+  woNo        String    @unique // WO-2526-001 (FY-aware)
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id])
+  bomId       String?
+  bom         Bom?      @relation(fields: [bomId], references: [id])
+  date        DateTime
+  startDate   DateTime?
+  endDate     DateTime?
+  priority    String    @default("NORMAL") // LOW | NORMAL | HIGH | URGENT
+  status      String    @default("OPEN") // OPEN | IN_PROGRESS | COMPLETED | CANCELLED
+  completedAt DateTime?
+  notes       String?
+  createdAt   DateTime  @default(now())
+
+  lines WorkOrderLine[]
+  tasks ProductionTask[]
+
+  @@index([projectId])
+  @@index([status])
+}
+
+model WorkOrderLine {
+  id          String     @id @default(cuid())
+  workOrderId String
+  workOrder   WorkOrder  @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  bomItemId   String?
+  bomItem     BomItem?   @relation(fields: [bomItemId], references: [id])
+  itemId      String
+  item        Item       @relation(fields: [itemId], references: [id])
+  description String? // product / assembly being made
+  plannedQty  Float
+  uom         String
+}
+
+model ProductionTask {
+  id              String    @id @default(cuid())
+  taskNo          String    @unique // TASK-2526-001 (FY-aware)
+  workOrderId     String
+  workOrder       WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  seq             Int       @default(0) // operation order
+  operation       String // CUTTING | CNC_LASER | BENDING | DRILLING | WELDING | GRINDING | ASSEMBLY | PAINTING | FINISHING | OTHER
+  employeeId      String? // assigned worker (task assigning)
+  employee        Employee? @relation(fields: [employeeId], references: [id])
+  machineNo       String?
+  plannedQty      Float
+  actualQty       Float     @default(0)
+  rejectionQty    Float     @default(0)
+  hours           Float     @default(0) // production time
+  labourRate      Float     @default(0) // INR/hour (snapshotted from employee)
+  labourCost      Float     @default(0) // hours × rate
+  materialItemId  String? // material consumed → StockLedger MFG_ISSUE
+  materialItem    Item?     @relation("TaskMaterial", fields: [materialItemId], references: [id])
+  materialQty     Float     @default(0)
+  materialCost    Float     @default(0) // at avg cost on issue date
+  status          String    @default("PENDING") // PENDING | ASSIGNED | IN_PROGRESS | COMPLETED | CANCELLED
+  dueDate         DateTime?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  notes           String?
+  createdAt       DateTime  @default(now())
+
+  @@index([workOrderId])
+  @@index([status])
+  @@index([employeeId])
+}
+
+// ---------- Payments ----------
+
+model Payment {
+  id         String   @id @default(cuid())
+  paymentNo  String   @unique
+  date       DateTime
+  type       String // RECEIPT | PAYMENT
+  partyId    String
+  party      Party    @relation(fields: [partyId], references: [id])
+  amount     Float
+  mode       String   @default("CASH") // CASH | BANK | UPI | CHEQUE
+  refNo      String?
+  notes      String?
+  status     String   @default("POSTED") // POSTED | CANCELLED
+  createdAt  DateTime @default(now())
+
+  allocations PaymentAllocation[]
+
+  @@index([partyId])
+  @@index([date])
+}
+
+model PaymentAllocation {
+  id          String @id @default(cuid())
+  paymentId   String
+  payment     Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  invoiceType String // SALES | PURCHASE
+  invoiceId   String?
+  invoiceNo   String
+  amount      Float
+
+  @@index([paymentId])
+  @@index([invoiceNo])
+}

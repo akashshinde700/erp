@@ -1,17 +1,25 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
 import { PwaRegister } from "@/components/pwa-register";
 
-const geistSans = Geist({
+// Self-hosted Geist variable fonts. next/font/google fetches from
+// fonts.googleapis.com AT BUILD TIME, which makes `next build` fail on any
+// offline / firewalled CI or deploy host. Shipping the two woff2 files keeps
+// the exact same typography with zero external build-time dependency.
+const geistSans = localFont({
+  src: "../../public/fonts/Geist-Variable.woff2",
   variable: "--font-geist-sans",
-  subsets: ["latin"],
+  weight: "100 900",
+  display: "swap",
 });
 
-const geistMono = Geist_Mono({
+const geistMono = localFont({
+  src: "../../public/fonts/GeistMono-Variable.woff2",
   variable: "--font-geist-mono",
-  subsets: ["latin"],
+  weight: "100 900",
+  display: "swap",
 });
 
 export const metadata: Metadata = {

@@ -1,11 +1,12 @@
 import { ok, handleError } from '@/lib/api'
 import { z } from 'zod'
+import { optionalDate } from '@/lib/validation'
 import { postOpeningStock } from '@/lib/services'
 import { assertMutationAccess } from '@/lib/platform'
 import { logAudit } from '@/lib/audit'
 
 const postSchema = z.object({
-  date: z.string().optional(),
+  date: optionalDate,
   warehouseId: z.string().optional().nullable(),
   rows: z
     .array(

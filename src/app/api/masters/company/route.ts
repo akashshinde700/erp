@@ -2,6 +2,7 @@ import { ok, fail, handleError } from '@/lib/api'
 import { db } from '@/lib/db'
 import { z } from 'zod'
 import { gstinChecksumValid } from '@/lib/erp'
+import { gstStateCode } from '@/lib/validation'
 import { accessState, assertCompanyAccess, assertMutationAccess, operatingCompany, orgLoginCount } from '@/lib/platform'
 import { logAudit } from '@/lib/audit'
 
@@ -33,7 +34,7 @@ const companySchema = z.object({
   name: z.string().min(1, 'Company name is required').max(120),
   legalName: z.string().max(160).optional().nullable(),
   gstin: z.string().max(20).optional().nullable(),
-  stateCode: z.string().length(2).default('27'),
+  stateCode: gstStateCode.default('27'),
   address: z.string().max(240).optional().nullable(),
   city: z.string().max(80).optional().nullable(),
   pincode: z.string().max(12).optional().nullable(),

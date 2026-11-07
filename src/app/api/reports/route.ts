@@ -1,5 +1,6 @@
 import { ok, fail, handleError } from '@/lib/api'
 import { assertCompanyAccess, assertFeature } from '@/lib/platform'
+import { dateRangeError, monthString } from '@/lib/validation'
 import {
   stockLedgerReport,
   stockSummaryReport,
@@ -19,29 +20,37 @@ export async function GET(req: Request) {
     const sp = url.searchParams
     const type = sp.get('type')
     switch (type) {
-      case 'stock-ledger':
+      case 'stock-ledger': {
+        const rangeErr = dateRangeError(sp.get('from'), sp.get('to'))
+        if (rangeErr) return fail(rangeErr)
         return ok(await stockLedgerReport({
           itemId: sp.get('itemId') ?? undefined,
           warehouseId: sp.get('warehouseId') ?? undefined,
           from: sp.get('from') ?? undefined,
           to: sp.get('to') ?? undefined,
         }))
+      }
       case 'stock-summary':
         return ok(await stockSummaryReport())
       case 'gstr1': {
         const d = new Date()
         const month = sp.get('month') ?? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
-        if (!/^\d{4}-\d{2}$/.test(month)) return fail('month must be YYYY-MM')
+        if (!monthString.safeParse(month).success) return fail('month must be YYYY-MM (01–12)')
         return ok(await gstr1Report(month))
       }
-      case 'trial-balance':
+      case 'trial-balance': {
+        const rangeErr = dateRangeError(sp.get('from'), sp.get('to'))
+        if (rangeErr) return fail(rangeErr)
         return ok(await trialBalanceReport(sp.get('from') ?? undefined, sp.get('to') ?? undefined))
+      }
       case 'outstanding':
         return ok(await outstandingReport())
       case 'pnl': {
         const d = new Date()
         const from = sp.get('from') ?? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`
         const to = sp.get('to') ?? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()).padStart(2, '0')}`
+        const rangeErr = dateRangeError(from, to)
+        if (rangeErr) return fail(rangeErr)
         return ok(await pnlReport(from, to))
       }
       case 'party-ledger': {

@@ -1,5 +1,6 @@
 import { ok, handleError } from '@/lib/api'
 import { z } from 'zod'
+import { optionalDate, nullableDate } from '@/lib/validation'
 import { assertCompanyAccess, assertMutationAccess } from '@/lib/platform'
 import { logAudit } from '@/lib/audit'
 import { getProjectDetail, updateProject } from '@/lib/manufacturing'
@@ -18,8 +19,8 @@ const projectUpdateSchema = z.object({
   name: z.string().min(1).max(160).optional(),
   manager: z.string().max(120).optional().nullable(),
   location: z.string().max(160).optional().nullable(),
-  startDate: z.string().optional(),
-  endDate: z.string().optional().nullable(),
+  startDate: optionalDate,
+  endDate: nullableDate,
   budget: z.number().min(0).finite().max(1_000_000_000).optional(),
   documents: z.string().max(2000).optional().nullable(),
   notes: z.string().max(2000).optional().nullable(),

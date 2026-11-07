@@ -1,6 +1,7 @@
-import { ok, handleError } from '@/lib/api'
+import { ok, fail, handleError } from '@/lib/api'
 import { db } from '@/lib/db'
 import { z } from 'zod'
+import { optionalDate, dateRangeError } from '@/lib/validation'
 import { postPurchaseInvoice } from '@/lib/services'
 import { assertCompanyAccess, assertMutationAccess } from '@/lib/platform'
 import { logAudit } from '@/lib/audit'
@@ -16,10 +17,14 @@ export async function GET(req: Request) {
     if (status) where.status = status
     const from = sp.get('from')
     const to = sp.get('to')
+    const rangeErr = dateRangeError(from, to)
+    if (rangeErr) return fail(rangeErr)
     if (from || to) {
       where.date = {}
-      if (from) where.date.gte = new Date(from)
-      if (to) where.date.lte = new Date(`${to}T23:59:59`)
+      // Voucher dates are stored at UTC midnight; use UTC day boundaries so
+      // a non-UTC host never drops day-1 rows or includes the next day.
+      if (from) where.date.gte = new Date(`${from}T00:00:00.000Z`)
+      if (to) where.date.lte = new Date(`${to}T23:59:59.999Z`)
     }
     return ok(
       await db.purchaseInvoice.findMany({
@@ -43,7 +48,7 @@ const lineSchema = z.object({
 
 const postSchema = z.object({
   partyId: z.string().min(1, 'Party is required'),
-  date: z.string().optional(),
+  date: optionalDate,
   poNo: z.string().max(40).optional().nullable(),
   taxInclusive: z.boolean().optional(),
   warehouseId: z.string().optional().nullable(),

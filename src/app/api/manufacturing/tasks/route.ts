@@ -1,5 +1,6 @@
 import { ok, handleError } from '@/lib/api'
 import { z } from 'zod'
+import { nullableDate } from '@/lib/validation'
 import { assertCompanyAccess, assertMutationAccess } from '@/lib/platform'
 import { logAudit } from '@/lib/audit'
 import { OPERATIONS, listTasks, createTask } from '@/lib/manufacturing'
@@ -27,7 +28,7 @@ const taskSchema = z.object({
   employeeId: z.string().optional().nullable(),
   machineNo: z.string().max(30).optional().nullable(),
   plannedQty: z.number().positive('Planned quantity must be > 0').finite().max(10_000_000),
-  dueDate: z.string().optional().nullable(),
+  dueDate: nullableDate,
   notes: z.string().max(1000).optional().nullable(),
 })
 

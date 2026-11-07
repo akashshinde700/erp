@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client'
 import { db } from './db'
 import { BusinessError, postGl, AccountCode } from './accounting'
 import { computeInvoiceTotals, fyCode, r2, EPS } from './erp'
+import { cancelLotMovementsTx, receiveLotTx } from './traceability'
 
 export type ProcurementLineInput = { itemId: string; qty: number; rate?: number; remarks?: string }
 type Tx = Prisma.TransactionClient
@@ -166,6 +167,7 @@ export async function inspectGoodsReceipt(input: { goodsReceiptId: string; actor
       await tx.purchaseOrderLine.update({ where: { id: line.purchaseOrderLineId }, data: { acceptedQty: { increment: decision.acceptedQty }, rejectedQty: { increment: decision.rejectedQty } } })
       if (decision.acceptedQty > EPS && line.item.isStockItem && !line.item.isService) {
         await tx.stockLedger.create({ data: { postingDate: new Date(), voucherType: 'GRN', voucherNo: grn.grnNo, itemId: line.itemId, warehouseId: grn.warehouseId, qtyIn: decision.acceptedQty, rate: line.purchaseOrderLine.rate, remarks: `QC-accepted receipt ${grn.grnNo}${line.batchNo ? ` batch ${line.batchNo}` : ''}` } })
+        if (line.batchNo?.trim()) await receiveLotTx(tx, { itemId: line.itemId, warehouseId: grn.warehouseId, lotNo: line.batchNo, qty: decision.acceptedQty, manufactureDate: line.manufactureDate, expiryDate: line.expiryDate, sourceType: 'GOODS_RECEIPT_LINE', sourceId: line.id, voucherType: 'GRN', voucherNo: grn.grnNo, status: 'AVAILABLE' })
       }
       await tx.qualityInspection.create({ data: { companyId: company.id, inspectionNo: await nextNumber(tx, company.id, 'QC'), inspectionType: 'INWARD', referenceType: 'GOODS_RECEIPT_LINE', referenceId: line.id, goodsReceiptId: grn.id, goodsReceiptLineId: line.id, status, inspectedBy: input.actor, inspectedAt: new Date(), disposition: decision.rejectedQty > EPS ? 'QUARANTINE' : 'ACCEPT', resultsJson: decision.results ? JSON.stringify(decision.results) : null, notes: decision.rejectionReason } })
     }
@@ -255,6 +257,7 @@ export async function cancelGoodsReceipt(id: string) {
     const originals = await tx.stockLedger.findMany({ where: { voucherType: 'GRN', voucherNo: grn.grnNo, isCancelled: false } })
     for (const row of originals) await tx.stockLedger.create({ data: { postingDate: new Date(), voucherType: 'GRN', voucherNo: grn.grnNo, itemId: row.itemId, warehouseId: row.warehouseId, qtyIn: 0, qtyOut: row.qtyIn, rate: row.rate, remarks: `Reversal of ${grn.grnNo}`, isCancelled: true } })
     await tx.stockLedger.updateMany({ where: { voucherType: 'GRN', voucherNo: grn.grnNo, isCancelled: false }, data: { isCancelled: true } })
+    await cancelLotMovementsTx(tx, 'GRN', grn.grnNo)
     for (const line of grn.lines) await tx.purchaseOrderLine.update({ where: { id: line.purchaseOrderLineId }, data: { receivedQty: { decrement: line.receivedQty }, acceptedQty: { decrement: line.acceptedQty }, rejectedQty: { decrement: line.rejectedQty } } })
     await tx.qualityInspection.updateMany({ where: { goodsReceiptId: grn.id }, data: { status: 'CANCELLED' } })
     await tx.purchaseOrder.update({ where: { id: grn.purchaseOrderId }, data: { status: 'PART_RECEIVED' } })

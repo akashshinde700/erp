@@ -66,6 +66,9 @@ model Company {
   goodsReceipts        GoodsReceipt[]
   qualityInspections   QualityInspection[]
   qualityTemplates     QualityTemplate[]
+  inventoryLots        InventoryLot[]
+  serialNumbers        SerialNumber[]
+  lotMovements         LotMovement[]
   itemVendors          ItemVendor[]
   returnDocuments      ReturnDocument[]
   quotations           SalesQuotation[]
@@ -234,6 +237,9 @@ model Item {
   productionReceipts ProductionReceipt[]
   qualityTemplates QualityTemplate[]
   qualityInspections QualityInspection[]
+  inventoryLots InventoryLot[]
+  serialNumbers SerialNumber[]
+  lotMovements LotMovement[]
 }
 
 model Warehouse {
@@ -249,6 +255,9 @@ model Warehouse {
   returnDocuments ReturnDocument[]
   deliveryChallans DeliveryChallan[]
   productionReceipts ProductionReceipt[]
+  inventoryLots InventoryLot[]
+  serialNumbers SerialNumber[]
+  lotMovements LotMovement[]
 }
 
 model Process {
@@ -672,6 +681,96 @@ model ProductionTask {
   @@index([workOrderId])
   @@index([status])
   @@index([employeeId])
+}
+
+// ---------- Batch / lot / serial traceability ----------
+
+model InventoryLot {
+  id             String @id @default(cuid())
+  companyId      String
+  company        Company @relation(fields: [companyId], references: [id])
+  itemId         String
+  item           Item @relation(fields: [itemId], references: [id])
+  warehouseId    String
+  warehouse      Warehouse @relation(fields: [warehouseId], references: [id])
+  lotNo          String
+  manufactureDate DateTime?
+  expiryDate     DateTime?
+  supplierLotNo  String?
+  status         String @default("AVAILABLE") // AVAILABLE | QUARANTINE | BLOCKED | EXPIRED | CONSUMED | RECALLED
+  sourceType     String
+  sourceId       String
+  createdAt      DateTime @default(now())
+  movements      LotMovement[]
+  serials        SerialNumber[]
+  parentLinks    LotGenealogy[] @relation("ChildLot")
+  childLinks     LotGenealogy[] @relation("ParentLot")
+
+  @@unique([companyId, itemId, warehouseId, lotNo])
+  @@index([companyId, status, expiryDate])
+  @@index([sourceType, sourceId])
+}
+
+model SerialNumber {
+  id          String @id @default(cuid())
+  companyId   String
+  company     Company @relation(fields: [companyId], references: [id])
+  itemId      String
+  item        Item @relation(fields: [itemId], references: [id])
+  warehouseId String?
+  warehouse   Warehouse? @relation(fields: [warehouseId], references: [id])
+  lotId       String?
+  lot         InventoryLot? @relation(fields: [lotId], references: [id])
+  serialNo    String
+  status      String @default("AVAILABLE") // AVAILABLE | RESERVED | ISSUED | SCRAPPED | RECALLED
+  sourceType  String
+  sourceId    String
+  issuedToType String?
+  issuedToId   String?
+  createdAt   DateTime @default(now())
+
+  @@unique([companyId, itemId, serialNo])
+  @@index([companyId, status])
+  @@index([sourceType, sourceId])
+}
+
+model LotMovement {
+  id          String @id @default(cuid())
+  companyId   String
+  company     Company @relation(fields: [companyId], references: [id])
+  lotId       String
+  lot         InventoryLot @relation(fields: [lotId], references: [id])
+  itemId      String
+  item        Item @relation(fields: [itemId], references: [id])
+  warehouseId String
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id])
+  postingDate DateTime
+  movementType String // RECEIPT | ISSUE | TRANSFER_IN | TRANSFER_OUT | ADJUSTMENT | REVERSAL
+  qtyIn       Float @default(0)
+  qtyOut      Float @default(0)
+  voucherType String
+  voucherNo   String
+  referenceId String?
+  remarks     String? @db.Text
+  isCancelled Boolean @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([lotId, postingDate])
+  @@index([companyId, itemId, warehouseId])
+  @@index([voucherType, voucherNo])
+}
+
+model LotGenealogy {
+  id          String @id @default(cuid())
+  parentLotId String
+  parentLot   InventoryLot @relation("ParentLot", fields: [parentLotId], references: [id])
+  childLotId  String
+  childLot    InventoryLot @relation("ChildLot", fields: [childLotId], references: [id])
+  consumedQty Float
+  createdAt   DateTime @default(now())
+
+  @@unique([parentLotId, childLotId])
+  @@index([childLotId])
 }
 
 // ---------- Production output, QC and WIP settlement ----------

@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client'
 import { db } from './db'
 import { BusinessError, postGl, AccountCode } from './accounting'
 import { computeInvoiceTotals, EPS, fyCode, r2 } from './erp'
+import { cancelLotMovementsTx, issueLotTx } from './traceability'
 
 type Tx = Prisma.TransactionClient
 type Line = { itemId: string; qty: number; rate: number; discountPct?: number; remarks?: string }
@@ -132,7 +133,14 @@ export async function inspectAndDispatch(input: { deliveryChallanId: string; act
       await tx.deliveryChallanLine.update({ where: { id: line.id }, data: { acceptedQty: result.acceptedQty, rejectedQty: result.rejectedQty, qcStatus, qcNotes: result.qcNotes } })
       if (result.acceptedQty > EPS) {
         await tx.salesOrderLine.update({ where: { id: line.salesOrderLineId }, data: { dispatchedQty: { increment: result.acceptedQty } } })
-        if (!line.item.isService && line.item.isStockItem) await tx.stockLedger.create({ data: { postingDate: new Date(), voucherType: 'DELIVERY_CHALLAN', voucherNo: dc.challanNo, itemId: line.itemId, warehouseId: dc.warehouseId, qtyOut: result.acceptedQty, rate: line.item.costRate, remarks: `Dispatch against ${dc.salesOrder.orderNo}` } })
+        if (!line.item.isService && line.item.isStockItem) {
+          await tx.stockLedger.create({ data: { postingDate: new Date(), voucherType: 'DELIVERY_CHALLAN', voucherNo: dc.challanNo, itemId: line.itemId, warehouseId: dc.warehouseId, qtyOut: result.acceptedQty, rate: line.item.costRate, remarks: `Dispatch against ${dc.salesOrder.orderNo}` } })
+          if (line.batchNo?.trim()) {
+            const lot = await tx.inventoryLot.findFirst({ where: { companyId: company.id, itemId: line.itemId, warehouseId: dc.warehouseId, lotNo: line.batchNo } })
+            if (!lot) throw new BusinessError(`Batch ${line.batchNo} not found for ${line.item.name}`)
+            await issueLotTx(tx, { lotId: lot.id, qty: result.acceptedQty, voucherType: 'DELIVERY_CHALLAN', voucherNo: dc.challanNo, referenceId: line.id })
+          }
+        }
       }
     }
     if (acceptedTotal <= EPS) return tx.deliveryChallan.update({ where: { id: dc.id }, data: { status: 'CANCELLED', cancelledAt: new Date() } })
@@ -196,6 +204,7 @@ export async function cancelDeliveryChallan(id: string) {
     const rows = await tx.stockLedger.findMany({ where: { voucherType: 'DELIVERY_CHALLAN', voucherNo: dc.challanNo, isCancelled: false } })
     for (const row of rows) await tx.stockLedger.create({ data: { postingDate: new Date(), voucherType: 'DELIVERY_CHALLAN', voucherNo: dc.challanNo, itemId: row.itemId, warehouseId: row.warehouseId, qtyIn: row.qtyOut, qtyOut: 0, rate: row.rate, remarks: `Reversal of ${dc.challanNo}`, isCancelled: true } })
     await tx.stockLedger.updateMany({ where: { voucherType: 'DELIVERY_CHALLAN', voucherNo: dc.challanNo, isCancelled: false }, data: { isCancelled: true } })
+    await cancelLotMovementsTx(tx, 'DELIVERY_CHALLAN', dc.challanNo)
     for (const line of dc.lines) if (line.acceptedQty > EPS) await tx.salesOrderLine.update({ where: { id: line.salesOrderLineId }, data: { dispatchedQty: { decrement: line.acceptedQty } } })
     await tx.salesOrder.update({ where: { id: dc.salesOrderId }, data: { status: 'PART_DISPATCHED' } })
     return tx.deliveryChallan.update({ where: { id: dc.id }, data: { status: 'CANCELLED', cancelledAt: new Date() } })

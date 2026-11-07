@@ -2,12 +2,13 @@ import { Prisma } from '@prisma/client'
 import { db } from './db'
 import { BusinessError, cancelGlForVoucher, postGl, AccountCode } from './accounting'
 import { EPS, fyCode, r2 } from './erp'
+import { cancelLotMovementsTx, linkLotGenealogyTx, receiveLotTx } from './traceability'
 
 type Tx = Prisma.TransactionClient
 async function org(tx: Tx) { const row = await tx.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } }); if (!row) throw new BusinessError('Operating company is not configured', 409); return row }
 async function nextNo(tx: Tx, companyId: string, date: Date) { const key = `MRC-${fyCode(date)}`; const row = await tx.counter.upsert({ where: { key: `${companyId}:${key}` }, create: { key: `${companyId}:${key}`, value: 1 }, update: { value: { increment: 1 } } }); return `${key}-${String(row.value).padStart(3, '0')}` }
 
-export async function postProductionReceipt(input: { workOrderId: string; outputItemId: string; warehouseId: string; date?: Date; batchNo?: string; manufacturedAt?: Date; expiryDate?: Date; producedQty: number; acceptedQty: number; rejectedQty?: number; reworkQty?: number; scrapQty?: number; qcNotes?: string; createdBy?: string }) {
+export async function postProductionReceipt(input: { workOrderId: string; outputItemId: string; warehouseId: string; date?: Date; batchNo?: string; manufacturedAt?: Date; expiryDate?: Date; producedQty: number; acceptedQty: number; rejectedQty?: number; reworkQty?: number; scrapQty?: number; qcNotes?: string; serialNumbers?: string[]; parentLots?: { parentLotId: string; consumedQty: number }[]; createdBy?: string }) {
   return db.$transaction(async (tx) => {
     const company = await org(tx)
     const wo = await tx.workOrder.findUnique({ where: { id: input.workOrderId }, include: { tasks: true, bom: { include: { items: true } }, productionReceipts: { where: { status: 'POSTED' } } } })
@@ -38,6 +39,10 @@ export async function postProductionReceipt(input: { workOrderId: string; output
     const qcStatus = rejectedQty > EPS || reworkQty > EPS || scrapQty > EPS ? 'PARTIAL' : 'PASSED'
     const receipt = await tx.productionReceipt.create({ data: { companyId: company.id, receiptNo, date, workOrderId: wo.id, outputItemId: item.id, warehouseId: warehouse.id, batchNo: input.batchNo, manufacturedAt: input.manufacturedAt, expiryDate: input.expiryDate, producedQty: input.producedQty, acceptedQty: input.acceptedQty, rejectedQty, reworkQty, scrapQty, qcStatus, qcNotes: input.qcNotes, expectedCost, actualCost, variance, createdBy: input.createdBy } })
     await tx.stockLedger.create({ data: { postingDate: date, voucherType: 'MFG_RECEIPT', voucherNo: receiptNo, itemId: item.id, warehouseId: warehouse.id, qtyIn: input.acceptedQty, rate: input.acceptedQty > EPS ? r2(expectedCost / input.acceptedQty) : 0, remarks: `Finished goods from ${wo.woNo}${input.batchNo ? ` batch ${input.batchNo}` : ''}` } })
+    if (input.batchNo?.trim()) {
+      const lot = await receiveLotTx(tx, { itemId: item.id, warehouseId: warehouse.id, lotNo: input.batchNo, qty: input.acceptedQty, manufactureDate: input.manufacturedAt, expiryDate: input.expiryDate, sourceType: 'PRODUCTION_RECEIPT', sourceId: receipt.id, voucherType: 'MFG_RECEIPT', voucherNo: receiptNo, serialNumbers: input.serialNumbers })
+      if (input.parentLots?.length) await linkLotGenealogyTx(tx, lot.id, input.parentLots)
+    } else if (input.serialNumbers?.length) throw new BusinessError('A batch/lot number is required when receiving serialised finished goods')
     const gl: Parameters<typeof postGl>[2] = [{ account: 'STKV' as AccountCode, debit: expectedCost }, { account: 'WIP' as AccountCode, credit: actualCost }]
     if (variance > EPS) gl.push({ account: 'MFGV' as AccountCode, debit: variance })
     else if (variance < -EPS) gl.push({ account: 'MFGV' as AccountCode, credit: -variance })
@@ -55,6 +60,7 @@ export async function cancelProductionReceipt(id: string) {
     const rows = await tx.stockLedger.findMany({ where: { voucherType: 'MFG_RECEIPT', voucherNo: receipt.receiptNo, isCancelled: false } })
     for (const row of rows) await tx.stockLedger.create({ data: { postingDate: new Date(), voucherType: 'MFG_RECEIPT', voucherNo: receipt.receiptNo, itemId: row.itemId, warehouseId: row.warehouseId, qtyOut: row.qtyIn, rate: row.rate, remarks: `Reversal of ${receipt.receiptNo}`, isCancelled: true } })
     await tx.stockLedger.updateMany({ where: { voucherType: 'MFG_RECEIPT', voucherNo: receipt.receiptNo, isCancelled: false }, data: { isCancelled: true } })
+    await cancelLotMovementsTx(tx, 'MFG_RECEIPT', receipt.receiptNo)
     await cancelGlForVoucher(tx, 'MFG_RECEIPT', receipt.receiptNo, new Date())
     return tx.productionReceipt.update({ where: { id }, data: { status: 'CANCELLED', cancelledAt: new Date() } })
   })

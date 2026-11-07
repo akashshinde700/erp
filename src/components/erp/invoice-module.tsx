@@ -62,7 +62,7 @@ import { useErpUi, useOpenNewParam } from './store'
 import { onPreset, setCreatePreset, takeCreatePreset } from './nav'
 import { computeInvoiceTotals, dateStr, INDIAN_STATES, money, r2, stateName } from '@/lib/erp'
 import { InvoicePrint } from './invoice-print'
-import { exportEInvoiceJson, exportTallyVoucher, markTallySent, queueForConnector } from './tally'
+import { exportEInvoiceJson, exportEWayBillJson, exportTallyVoucher, markTallySent, queueForConnector } from './tally'
 
 export type InvoiceKind = 'SALES' | 'PURCHASE'
 
@@ -355,6 +355,9 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
                                   <DropdownMenuSeparator />
                                   <DropdownMenuItem onClick={() => void exportEInvoiceJson(inv.id)}>
                                     <ScrollText className="size-4" aria-hidden /> e-Invoice JSON (GST portal)
+                                  </DropdownMenuItem>
+                                  <DropdownMenuItem onClick={() => void exportEWayBillJson(inv.id)}>
+                                    <FileDown className="size-4" aria-hidden /> e-Way Bill JSON (GST portal)
                                   </DropdownMenuItem>
                                 </>
                               ) : null}
@@ -1115,6 +1118,9 @@ export function InvoiceDetail({ kind, id }: { kind: InvoiceKind; id: string }) {
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={() => void exportEInvoiceJson(id)}>
                     <ScrollText className="size-4" aria-hidden /> e-Invoice JSON (GST portal)
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => void exportEWayBillJson(id)}>
+                    <FileDown className="size-4" aria-hidden /> e-Way Bill JSON (GST portal)
                   </DropdownMenuItem>
                 </>
               ) : null}

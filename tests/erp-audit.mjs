@@ -482,6 +482,8 @@ async function main() {
   check('purchase list garbage date rejected (400)', badPurchRange.status === 400, `status=${badPurchRange.status}`)
   const badEinvoice = await req('GET', '/api/e-invoice?from=garbage')
   check('e-invoice export garbage date rejected (400)', badEinvoice.status === 400, `status=${badEinvoice.status}`)
+  const missingEwayId = await req('GET', '/api/e-way-bill?distance=100&vehicleNo=MH10AB1234')
+  check('e-Way Bill export requires an invoice id (400)', missingEwayId.status === 400, `status=${missingEwayId.status}`)
   const badTally = await req('GET', '/api/tally/bulk?from=garbage')
   check('Tally bulk export garbage date rejected (400)', badTally.status === 400, `status=${badTally.status}`)
   const badStockLedger = await req('GET', '/api/reports?type=stock-ledger&from=garbage')

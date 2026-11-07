@@ -3,6 +3,8 @@
 **Branch:** `arena/c87300cc-erp` · **Base commit:** `cf7a911` · **Checkpoint:** 2026-11-07 (Asia/Kolkata)
 **Status:** ACTIVE WORK IN PROGRESS — this is a saved checkpoint, **not** a final production sign-off.
 
+> **2026-11-07 e-Way Bill continuation (branch `arena/d855eb24-erp`):** added pre-validated outward e-Way Bill portal JSON from posted sales invoices, including GST parties/addresses, tax and HSN item details, transport distance, road vehicle or transporter GSTIN, audit logging, and sales invoice list/detail actions. It intentionally generates an upload file only and does not claim NIC authentication or portal acknowledgement.
+
 > **2026-11-07 HSN/SAC continuation (branch `arena/81f22c2f-erp`):** added monthly outward and inward HSN/SAC summaries grouped by HSN, UOM and GST rate, including quantity, taxable value and component taxes, with explicit missing-HSN detection. This complements GSTR-1/GSTR-3B books working without claiming portal filing.
 
 > **2026-11-07 GSTR-3B continuation (branch `arena/81f22c2f-erp`):** added a monthly books-based GSTR-3B working from posted sales/purchase GST: outward taxable/liability, input ITC, per-head net before cross-utilisation and excess ITC. It is explicitly not presented as a filed/portal-ready return because RCM, exempt/nil/non-GST, blocked ITC and statutory cross-utilisation are not represented. Added API/UI, shared UTC month boundaries and reconciliation assertions.

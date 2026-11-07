@@ -632,7 +632,23 @@ export async function gstr1Report(month: string) {
     b2c: [...b2c.entries()].map(([rate, b]) => ({ rate, ...b })).sort((a, b) => a.rate - b.rate),
     b2bTotal: total(b2b),
     b2cTotal: total(b2c),
+    // Credit notes issued against outward supplies in the month (GSTR-1 table 9B:
+    // CDNR = registered recipient, CDNUR = unregistered). They reduce liability.
+    ...(await outwardCreditNotes(from, to)),
   }
+}
+
+async function outwardCreditNotes(from: Date, to: Date) {
+  const notes = await db.returnDocument.findMany({
+    where: { returnType: 'SALES_RETURN', status: 'POSTED', date: { gte: from, lte: to } },
+    include: { party: { select: { name: true, gstin: true } } },
+    orderBy: { date: 'asc' },
+  })
+  const row = (n: (typeof notes)[number]) => ({ noteNo: n.adjustmentNo, date: n.date, originalInvoiceNo: n.sourceInvoiceNo, party: n.party.name, gstin: n.party.gstin, taxable: n.taxable, cgst: n.cgst, sgst: n.sgst, igst: n.igst, total: n.grandTotal })
+  const sum = (rows: ReturnType<typeof row>[]) => ({ count: rows.length, taxable: r2(rows.reduce((a, b) => a + b.taxable, 0)), cgst: r2(rows.reduce((a, b) => a + b.cgst, 0)), sgst: r2(rows.reduce((a, b) => a + b.sgst, 0)), igst: r2(rows.reduce((a, b) => a + b.igst, 0)) })
+  const cdnr = notes.filter((n) => !!n.party.gstin).map(row)
+  const cdnur = notes.filter((n) => !n.party.gstin).map(row)
+  return { cdnr, cdnur, cdnrTotal: sum(cdnr), cdnurTotal: sum(cdnur) }
 }
 
 // ---------- GSTR-3B internal liability / ITC summary ----------
@@ -655,8 +671,19 @@ export async function gstr3bReport(month: string) {
     igst: r2(rows.reduce((sum, row) => sum + row.igst, 0)),
     grandTotal: r2(rows.reduce((sum, row) => sum + row.grandTotal, 0)),
   })
-  const outward = total(sales)
-  const inward = total(purchases)
+  const [creditNotes, debitNotes] = await Promise.all([
+    db.returnDocument.findMany({ where: { returnType: 'SALES_RETURN', status: 'POSTED', date: { gte: from, lte: to } }, select: { taxable: true, cgst: true, sgst: true, igst: true, grandTotal: true } }),
+    db.returnDocument.findMany({ where: { returnType: 'PURCHASE_RETURN', status: 'POSTED', date: { gte: from, lte: to } }, select: { taxable: true, cgst: true, sgst: true, igst: true, grandTotal: true } }),
+  ])
+  const minus = (a: ReturnType<typeof total>, b: ReturnType<typeof total>) => ({ taxable: r2(a.taxable - b.taxable), cgst: r2(a.cgst - b.cgst), sgst: r2(a.sgst - b.sgst), igst: r2(a.igst - b.igst), grandTotal: r2(a.grandTotal - b.grandTotal) })
+  const outwardInvoices = total(sales)
+  const creditNoteTotals = total(creditNotes)
+  const inwardInvoices = total(purchases)
+  const debitNoteTotals = total(debitNotes)
+  // Liability is reduced by credit notes issued; ITC is reduced (reversed) by
+  // debit notes raised on suppliers for purchase returns.
+  const outward = minus(outwardInvoices, creditNoteTotals)
+  const inward = minus(inwardInvoices, debitNoteTotals)
   const net = {
     cgst: r2(Math.max(0, outward.cgst - inward.cgst)),
     sgst: r2(Math.max(0, outward.sgst - inward.sgst)),
@@ -671,7 +698,13 @@ export async function gstr3bReport(month: string) {
     month,
     salesInvoiceCount: sales.length,
     purchaseInvoiceCount: purchases.length,
+    creditNoteCount: creditNotes.length,
+    debitNoteCount: debitNotes.length,
+    outwardInvoices,
+    creditNotes: creditNoteTotals,
     outward,
+    inwardInvoices,
+    debitNotes: debitNoteTotals,
     eligibleItcFromBooks: inward,
     netTaxBeforeCrossUtilisation: { ...net, total: r2(net.cgst + net.sgst + net.igst) },
     excessItcBeforeCrossUtilisation: { ...excessItc, total: r2(excessItc.cgst + excessItc.sgst + excessItc.igst) },

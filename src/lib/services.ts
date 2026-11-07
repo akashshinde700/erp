@@ -291,6 +291,21 @@ export async function cancelSalesInvoice(id: string) {
     const now = new Date()
     await cancelStockForVoucher(tx, 'SALES', inv.invoiceNo, now)
     await cancelGlForVoucher(tx, 'SALES_INVOICE', inv.invoiceNo, now)
+    // Dispatch-backed invoices do not issue stock again: the delivery challan
+    // already did. Release billed quantities so a correction can be posted or
+    // the challan can be cancelled after this invoice reversal.
+    for (const line of inv.items) {
+      if (!line.deliveryChallanLineId) continue
+      const challanLine = await tx.deliveryChallanLine.findUnique({ where: { id: line.deliveryChallanLineId } })
+      if (!challanLine || challanLine.invoicedQty + EPS < line.qty) throw new BusinessError('Linked challan billing state is inconsistent; cancellation stopped', 409)
+      await tx.deliveryChallanLine.update({ where: { id: challanLine.id }, data: { invoicedQty: { decrement: line.qty } } })
+      await tx.salesOrderLine.update({ where: { id: challanLine.salesOrderLineId }, data: { invoicedQty: { decrement: line.qty } } })
+      if (inv.deliveryChallanId) await tx.deliveryChallan.update({ where: { id: inv.deliveryChallanId }, data: { status: 'DISPATCHED' } })
+    }
+    if (inv.deliveryChallanId) {
+      const challan = await tx.deliveryChallan.findUnique({ where: { id: inv.deliveryChallanId }, select: { salesOrderId: true } })
+      if (challan) await tx.salesOrder.update({ where: { id: challan.salesOrderId }, data: { status: 'DISPATCHED' } })
+    }
     return tx.salesInvoice.update({ where: { id }, data: { status: 'CANCELLED' }, include: { items: true } })
   })
 }
@@ -429,7 +444,7 @@ export async function postPurchaseInvoice(input: PostPurchaseInput) {
 
 export async function cancelPurchaseInvoice(id: string) {
   return db.$transaction(async (tx) => {
-    const inv = await tx.purchaseInvoice.findUnique({ where: { id } })
+    const inv = await tx.purchaseInvoice.findUnique({ where: { id }, include: { items: true } })
     if (!inv) throw new BusinessError('Invoice not found', 404)
     if (inv.status === 'CANCELLED') throw new BusinessError('Invoice is already cancelled')
     if (inv.paidAmount > 0.004) {
@@ -438,6 +453,16 @@ export async function cancelPurchaseInvoice(id: string) {
     const now = new Date()
     await cancelStockForVoucher(tx, 'PURCHASE', inv.invoiceNo, now)
     await cancelGlForVoucher(tx, 'PURCHASE_INVOICE', inv.invoiceNo, now)
+    // Controlled procurement invoices do not post stock (the QC-accepted GRN
+    // does). Release their billed quantities so the same accepted receipt can
+    // be corrected/re-invoiced; direct legacy invoices have no source ids.
+    for (const line of inv.items) {
+      if (!line.goodsReceiptLineId) continue
+      const receiptLine = await tx.goodsReceiptLine.findUnique({ where: { id: line.goodsReceiptLineId } })
+      if (!receiptLine || receiptLine.billedQty + EPS < line.qty) throw new BusinessError('Linked GRN billing state is inconsistent; cancellation stopped', 409)
+      await tx.goodsReceiptLine.update({ where: { id: receiptLine.id }, data: { billedQty: { decrement: line.qty } } })
+      await tx.purchaseOrderLine.update({ where: { id: receiptLine.purchaseOrderLineId }, data: { billedQty: { decrement: line.qty } } })
+    }
     return tx.purchaseInvoice.update({ where: { id }, data: { status: 'CANCELLED' } })
   })
 }
@@ -457,7 +482,7 @@ export interface PostPaymentInput {
 
 export async function postPayment(input: PostPaymentInput) {
   return db.$transaction(async (tx) => {
-    await getCompany(tx) // company must exist
+    const company = await getCompany(tx) // company must exist
     const party = await tx.party.findUnique({ where: { id: input.partyId } })
     if (!party) throw new BusinessError('Party not found', 404)
     if (!(input.amount > 0)) throw new BusinessError('Payment amount must be positive')
@@ -556,15 +581,22 @@ export async function postPayment(input: PostPaymentInput) {
           ]
     await postGl(tx, { date, voucherType: 'PAYMENT', voucherNo: paymentNo }, gl)
 
+    const unallocated = r2(payment.amount - allocSum)
+    if (unallocated > EPS) {
+      await tx.partyAdvance.create({ data: { companyId: company.id, partyId: party.id, paymentId: payment.id, advanceType: input.type === 'RECEIPT' ? 'CUSTOMER' : 'SUPPLIER', originalAmount: unallocated } })
+    }
+
     return payment
   })
 }
 
 export async function cancelPayment(id: string) {
   return db.$transaction(async (tx) => {
-    const pay = await tx.payment.findUnique({ where: { id }, include: { allocations: true } })
+    const pay = await tx.payment.findUnique({ where: { id }, include: { allocations: true, advances: true, refunds: true } })
     if (!pay) throw new BusinessError('Payment not found', 404)
     if (pay.status === 'CANCELLED') throw new BusinessError('Payment is already cancelled')
+    if (pay.advances.some((advance) => advance.appliedAmount > EPS)) throw new BusinessError('Advance was already applied to invoices — reverse those applications first')
+    await tx.partyAdvance.updateMany({ where: { paymentId: pay.id }, data: { status: 'CANCELLED' } })
     for (const a of pay.allocations) {
       if (a.invoiceType === 'SALES') {
         await tx.salesInvoice.updateMany({

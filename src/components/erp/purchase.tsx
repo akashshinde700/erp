@@ -7,9 +7,15 @@
  */
 
 import { InvoiceDetail, InvoiceModule } from './invoice-module'
+import { ProcurementWorkspace } from './procurement'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 export function PurchaseView() {
-  return <InvoiceModule kind="PURCHASE" />
+  return <Tabs defaultValue="invoices" className="space-y-4">
+    <TabsList><TabsTrigger value="invoices">Purchase Invoices</TabsTrigger><TabsTrigger value="procurement">Procurement & Returns</TabsTrigger></TabsList>
+    <TabsContent value="invoices"><InvoiceModule kind="PURCHASE" /></TabsContent>
+    <TabsContent value="procurement"><ProcurementWorkspace /></TabsContent>
+  </Tabs>
 }
 
 export function PurchaseDetailView({ id }: { id: string }) {

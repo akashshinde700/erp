@@ -15,7 +15,7 @@ import { db } from './db'
 import { Prisma } from '@prisma/client'
 import { r2, fyCode, EPS } from './erp'
 import { isValidDateString } from './validation'
-import { BusinessError } from './accounting'
+import { BusinessError, postGl } from './accounting'
 
 type Tx = Prisma.TransactionClient
 
@@ -798,7 +798,7 @@ export async function updateWorkOrder(id: string, input: Partial<WorkOrderInput>
 /** WO completes only when every non-cancelled task is COMPLETED. */
 export async function completeWorkOrder(id: string) {
   return db.$transaction(async (tx) => {
-    const wo = await tx.workOrder.findUnique({ where: { id }, include: { tasks: { select: { status: true } } } })
+    const wo = await tx.workOrder.findUnique({ where: { id }, include: { tasks: { select: { status: true, materialCost: true, labourCost: true } }, productionReceipts: { where: { status: 'POSTED' }, select: { acceptedQty: true, actualCost: true } } } })
     if (!wo) throw new BusinessError('Work order not found', 404)
     if (wo.status !== 'OPEN' && wo.status !== 'IN_PROGRESS') {
       throw new BusinessError(`Work order is ${wo.status}`)
@@ -810,6 +810,14 @@ export async function completeWorkOrder(id: string) {
     const open = active.filter((t) => t.status !== 'COMPLETED')
     if (open.length > 0) {
       throw new BusinessError(`${open.length} task(s) still pending on this work order — complete them first`)
+    }
+    if (wo.productionReceipts.length === 0 || wo.productionReceipts.reduce((sum, receipt) => sum + receipt.acceptedQty, 0) <= EPS) {
+      throw new BusinessError('Receive QC-accepted finished goods before closing this work order')
+    }
+    const actualCost = r2(active.reduce((sum, task) => sum + task.materialCost + task.labourCost, 0))
+    const settledCost = r2(wo.productionReceipts.reduce((sum, receipt) => sum + receipt.actualCost, 0))
+    if (Math.abs(actualCost - settledCost) > 0.01) {
+      throw new BusinessError(`WIP is not fully settled: actual cost ${actualCost}, settled ${settledCost}`)
     }
     return tx.workOrder.update({ where: { id }, data: { status: 'COMPLETED', completedAt: new Date() } })
   })
@@ -1066,6 +1074,15 @@ export async function completeTask(id: string, input: CompleteTaskInput) {
           remarks: `Consumed on ${task.taskNo} (${OPERATION_LABEL[task.operation] ?? task.operation})`,
         },
       })
+    }
+
+    const wipCost = r2(materialCost + labourCost)
+    if (wipCost > EPS) {
+      await postGl(tx, { date: completedAt, voucherType: 'MFG_TASK', voucherNo: task.taskNo }, [
+        { account: 'WIP', debit: wipCost, remarks: `Material/labour absorbed on ${task.taskNo}` },
+        { account: 'STKV', credit: materialCost, remarks: materialCost > EPS ? `Material issued on ${task.taskNo}` : null },
+        { account: 'LABP', credit: labourCost, remarks: labourCost > EPS ? `Labour absorbed on ${task.taskNo}` : null },
+      ])
     }
 
     return tx.productionTask.update({

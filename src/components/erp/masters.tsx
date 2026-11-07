@@ -540,6 +540,7 @@ function PartyDialog({
   const [phone, setPhone] = useState('')
   const [email, setEmail] = useState('')
   const [openingBal, setOpeningBal] = useState('')
+  const [creditLimit, setCreditLimit] = useState('')
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -557,6 +558,7 @@ function PartyDialog({
     setPhone(party?.phone ?? '')
     setEmail(party?.email ?? '')
     setOpeningBal(party ? String(party.openingBal) : '')
+    setCreditLimit(party ? String(party.creditLimit ?? 0) : '')
   }, [open, party])
 
   const chosenTypes = PARTY_TYPES.filter((t) => types[t])
@@ -592,6 +594,7 @@ function PartyDialog({
         phone: phone.trim() || null,
         email: email.trim() || null,
         openingBal: num(openingBal),
+        creditLimit: Math.max(0, num(creditLimit)),
       }
       const res = party
         ? await apiPut<Party>(`/api/masters/parties/${party.id}`, body)
@@ -710,6 +713,11 @@ function PartyDialog({
               className="h-11 text-right tabular-nums"
             />
             <p className="text-xs text-muted-foreground">+ = receivable (customer), − = payable (supplier)</p>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="p-credit-limit">Customer Credit Limit ₹</Label>
+            <Input id="p-credit-limit" type="number" min="0" inputMode="decimal" step="any" value={creditLimit} onChange={(e) => setCreditLimit(e.target.value)} placeholder="0" className="h-11 text-right tabular-nums" />
+            <p className="text-xs text-muted-foreground">0 = unlimited; checked when approving sales orders.</p>
           </div>
           </div>
         </div>

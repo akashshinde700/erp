@@ -69,12 +69,13 @@ import { EmptyState, ErrorState, KpiCard, Money, ProgressBar, SectionHeading, St
 import { useErpUi } from './store'
 import { dateStr, money, qty as qtyFmt, r2 } from '@/lib/erp'
 import { cn } from '@/lib/utils'
+import { QualityWorkspace } from './quality-workspace'
 
 // ===========================================================================
 // Module shell
 // ===========================================================================
 
-type MfgTab = 'projects' | 'boms' | 'work-orders' | 'material-plan' | 'tasks' | 'pending' | 'employees'
+type MfgTab = 'projects' | 'boms' | 'work-orders' | 'material-plan' | 'tasks' | 'pending' | 'employees' | 'quality'
 
 export function ManufacturingView() {
   const [tab, setTab] = useState<MfgTab>('projects')
@@ -158,6 +159,9 @@ export function ManufacturingView() {
           <TabsTrigger value="employees" className="h-11 gap-1.5 sm:h-9">
             <Users className="size-4" aria-hidden /> Employees
           </TabsTrigger>
+          <TabsTrigger value="quality" className="h-11 gap-1.5 sm:h-9">
+            <CheckCircle2 className="size-4" aria-hidden /> Quality
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="projects" className="mt-4">
@@ -180,6 +184,9 @@ export function ManufacturingView() {
         </TabsContent>
         <TabsContent value="employees" className="mt-4">
           <EmployeesTab onChanged={() => stats.reload()} />
+        </TabsContent>
+        <TabsContent value="quality" className="mt-4">
+          <QualityWorkspace />
         </TabsContent>
       </Tabs>
     </div>

@@ -30,7 +30,7 @@ These modules are **not duplicates**, but the old labels/navigation made them lo
 | Duplicate-safe production demand | Improved | One live WO per fixed-quantity BOM until batch/output quantity is modelled |
 | Project → BOM → WO → operations | Partial | Existing; needs routing master, dependencies, capacity calendar and task time logs |
 | Finish production → independent FG receipt | Missing (P0) | Add output item/qty, QC gate, atomic FG receipt + material variance posting |
-| Planned vs actual production cost/variance + WIP settlement | Partial | Labour/material actual cost exists; expected-vs-actual and WIP GL remain |
+| Planned vs actual production cost/variance + WIP settlement | Improved/partial | Consolidated BOM expected vs task material/labour actual, variance, rejection and projected margin implemented; WIP/overhead GL settlement remains |
 | MRP demand/supply netting and purchase suggestions | Improved/partial | Active-WO plan nets demand against own stock; Inventory Planning adds reorder suggestions and ageing. Open PO/PO supply remains absent |
 | PO → partial GRN → QC → bill / three-way match | Missing (P0) | Implement as linked documents with accepted/rejected quantity and stock gate |
 | Quotation → SO → production → dispatch → invoice | Missing (P0) | Implement SO reservation and physical dispatch separate from invoice |

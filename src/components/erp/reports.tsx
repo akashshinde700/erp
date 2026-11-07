@@ -24,6 +24,7 @@ import {
   type InventoryPlanningReport,
   type Outstanding,
   type Pnl,
+  type ProductionCostVarianceReport,
   type SupplierPerformanceReport,
   type TrialBalance,
 } from './api'
@@ -45,6 +46,7 @@ export function ReportsView() {
           <TabsTrigger value="cashbook" className="h-11 sm:h-9">Cash &amp; Bank</TabsTrigger>
           <TabsTrigger value="customers" className="h-11 sm:h-9">Customers</TabsTrigger>
           <TabsTrigger value="suppliers" className="h-11 sm:h-9">Suppliers</TabsTrigger>
+          <TabsTrigger value="production-cost" className="h-11 sm:h-9">Production Cost</TabsTrigger>
           <TabsTrigger value="inventory" className="h-11 sm:h-9">Inventory Planning</TabsTrigger>
           <TabsTrigger value="pnl" className="h-11 sm:h-9">P&amp;L</TabsTrigger>
         </TabsList>
@@ -65,6 +67,9 @@ export function ReportsView() {
         </TabsContent>
         <TabsContent value="suppliers" className="mt-4">
           <SupplierPerformanceTab />
+        </TabsContent>
+        <TabsContent value="production-cost" className="mt-4">
+          <ProductionCostTab />
         </TabsContent>
         <TabsContent value="inventory" className="mt-4">
           <InventoryPlanningTab />
@@ -487,6 +492,42 @@ function SupplierPerformanceTab() {
             <TableCell className={`text-right font-semibold tabular-nums ${row.outstanding > 0 ? 'text-destructive' : ''}`}><Money value={row.outstanding} plain /></TableCell>
             <TableCell className="whitespace-nowrap text-xs tabular-nums">{row.lastPurchaseAt ? row.lastPurchaseAt.slice(0, 10) : 'Never'}</TableCell>
             <TableCell><div className="max-w-64 space-y-1">{row.topItems.length ? row.topItems.map((line) => <p key={line.item.id} className="truncate text-xs" title={`${line.item.name}: ${line.qty} ${line.item.uom}, avg ₹${line.avgRate}`}><span className="font-medium">{line.item.code}</span> · {line.qty} {line.item.uom} · ₹{money(line.taxableValue)}</p>) : <span className="text-xs text-muted-foreground">No posted purchases</span>}</div></TableCell>
+          </TableRow>)}</TableBody>
+        </Table></div>
+      </CardContent></Card>
+    </div>
+  )
+}
+
+// ---------- production cost and variance ----------
+
+function ProductionCostTab() {
+  const { data, loading } = useApi<ProductionCostVarianceReport>('/api/reports?type=production-cost-variance')
+  if (loading) return <TableSkeleton rows={8} cols={8} />
+  if (!data) return <EmptyState title="No production cost data" hint="Create projects, approve BOMs and complete production tasks." icon={BarChart3} />
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Card className="p-4"><p className="text-xs text-muted-foreground">Project Budget</p><p className="mt-1 text-lg font-semibold"><Money value={data.summary.totalBudget} plain /></p><p className="text-xs text-muted-foreground">{data.summary.runningProjects} running</p></Card>
+        <Card className="p-4"><p className="text-xs text-muted-foreground">Expected BOM Cost</p><p className="mt-1 text-lg font-semibold"><Money value={data.summary.expectedCost} plain /></p></Card>
+        <Card className="p-4"><p className="text-xs text-muted-foreground">Actual Cost So Far</p><p className="mt-1 text-lg font-semibold"><Money value={data.summary.actualCost} plain /></p><p className="text-xs text-muted-foreground">Material ₹{money(data.summary.materialCost)} · Labour ₹{money(data.summary.labourCost)}</p></Card>
+        <Card className="p-4"><p className="text-xs text-muted-foreground">Projected Margin</p><p className={`mt-1 text-lg font-semibold ${data.summary.projectedMargin >= 0 ? 'text-primary' : 'text-destructive'}`}><Money value={data.summary.projectedMargin} plain /></p><p className={`text-xs ${data.summary.costVariance > 0 ? 'text-destructive' : 'text-muted-foreground'}`}>Cost variance ₹{money(data.summary.costVariance)}</p></Card>
+      </div>
+      <p className="text-xs text-muted-foreground">{data.note}</p>
+      <Card className="p-0"><CardContent className="p-0">
+        <div className="max-h-[62dvh] overflow-auto erp-scroll"><Table>
+          <TableHeader className="sticky top-0 z-10 bg-card"><TableRow><TableHead>Project</TableHead><TableHead className="text-right">Budget</TableHead><TableHead className="text-right">Expected</TableHead><TableHead className="text-right">Material</TableHead><TableHead className="text-right">Labour</TableHead><TableHead className="text-right">Actual</TableHead><TableHead className="text-right">Variance</TableHead><TableHead className="text-right">Margin</TableHead><TableHead>Production</TableHead></TableRow></TableHeader>
+          <TableBody>{data.rows.map((row) => <TableRow key={row.project.id}>
+            <TableCell><span className="block font-medium tabular-nums">{row.project.projectNo}</span><span className="block max-w-44 truncate text-xs">{row.project.name}</span><span className="text-xs text-muted-foreground">{row.project.party.name} · {row.project.status}</span></TableCell>
+            <TableCell className="text-right tabular-nums"><Money value={row.budget} plain /></TableCell>
+            <TableCell className="text-right tabular-nums"><Money value={row.expectedCost} plain /></TableCell>
+            <TableCell className="text-right tabular-nums"><Money value={row.materialCost} plain /></TableCell>
+            <TableCell className="text-right tabular-nums"><Money value={row.labourCost} plain /></TableCell>
+            <TableCell className="text-right font-semibold tabular-nums"><Money value={row.actualCost} plain /></TableCell>
+            <TableCell className={`text-right font-semibold tabular-nums ${row.costVariance > 0 ? 'text-destructive' : row.costVariance < 0 ? 'text-primary' : ''}`}><Money value={row.costVariance} plain />{row.variancePct !== null ? <span className="block text-xs">{row.variancePct}%</span> : null}</TableCell>
+            <TableCell className={`text-right font-semibold tabular-nums ${row.projectedMargin >= 0 ? 'text-primary' : 'text-destructive'}`}><Money value={row.projectedMargin} plain />{row.projectedMarginPct !== null ? <span className="block text-xs">{row.projectedMarginPct}%</span> : null}</TableCell>
+            <TableCell><span className="block text-xs">{row.taskDone}/{row.taskTotal} tasks · {row.productionHours} h</span><span className={`text-xs ${row.rejectionPct > 0 ? 'text-destructive' : 'text-muted-foreground'}`}>Rejection {row.rejectionQty} ({row.rejectionPct}%)</span><span className="block text-xs text-muted-foreground">{row.workOrders.length} work order(s)</span></TableCell>
           </TableRow>)}</TableBody>
         </Table></div>
       </CardContent></Card>

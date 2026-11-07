@@ -286,6 +286,97 @@ export async function customerPerformanceReport() {
   }
 }
 
+// ---------- Production cost, variance and project profitability ----------
+
+/**
+ * Expected-vs-actual manufacturing analysis from approved BOM estimates and
+ * completed/active production-task postings. No synthetic overhead is added:
+ * actual cost is the labour + material cost already frozen on each task.
+ */
+export async function productionCostVarianceReport() {
+  const projects = await db.project.findMany({
+    where: { status: { not: 'CANCELLED' } },
+    orderBy: [{ createdAt: 'desc' }],
+    include: {
+      party: { select: { id: true, code: true, name: true } },
+      boms: { where: { status: 'APPROVED' }, include: { items: { select: { estCost: true } } } },
+      workOrders: {
+        where: { status: { not: 'CANCELLED' } },
+        include: {
+          bom: { select: { id: true, bomNo: true, productName: true, items: { select: { estCost: true } } } },
+          tasks: { where: { status: { not: 'CANCELLED' } }, select: { status: true, plannedQty: true, actualQty: true, rejectionQty: true, labourCost: true, materialCost: true, hours: true } },
+        },
+      },
+    },
+  })
+  const rows = projects.map((project) => {
+    const tasks = project.workOrders.flatMap((wo) => wo.tasks)
+    const labourCost = r2(tasks.reduce((sum, task) => sum + task.labourCost, 0))
+    const materialCost = r2(tasks.reduce((sum, task) => sum + task.materialCost, 0))
+    const actualCost = r2(labourCost + materialCost)
+    const expectedCost = r2(project.boms.reduce((sum, bom) => sum + bom.items.reduce((lineSum, item) => lineSum + item.estCost, 0), 0))
+    const costVariance = r2(actualCost - expectedCost)
+    const actualQty = r2(tasks.reduce((sum, task) => sum + task.actualQty, 0))
+    const rejectionQty = r2(tasks.reduce((sum, task) => sum + task.rejectionQty, 0))
+    const processedQty = r2(actualQty + rejectionQty)
+    const workOrders = project.workOrders.map((wo) => {
+      const woLabour = r2(wo.tasks.reduce((sum, task) => sum + task.labourCost, 0))
+      const woMaterial = r2(wo.tasks.reduce((sum, task) => sum + task.materialCost, 0))
+      const woExpected = r2(wo.bom?.items.reduce((sum, item) => sum + item.estCost, 0) ?? 0)
+      return {
+        id: wo.id,
+        woNo: wo.woNo,
+        status: wo.status,
+        bomNo: wo.bom?.bomNo ?? null,
+        productName: wo.bom?.productName ?? null,
+        expectedCost: woExpected,
+        labourCost: woLabour,
+        materialCost: woMaterial,
+        actualCost: r2(woLabour + woMaterial),
+        variance: r2(woLabour + woMaterial - woExpected),
+        taskTotal: wo.tasks.length,
+        taskDone: wo.tasks.filter((task) => task.status === 'COMPLETED').length,
+      }
+    })
+    return {
+      project: { id: project.id, projectNo: project.projectNo, name: project.name, status: project.status, party: project.party },
+      budget: project.budget,
+      expectedCost,
+      labourCost,
+      materialCost,
+      actualCost,
+      costVariance,
+      variancePct: expectedCost > 0 ? r2((costVariance / expectedCost) * 100) : null,
+      projectedMargin: r2(project.budget - actualCost),
+      projectedMarginPct: project.budget > 0 ? r2(((project.budget - actualCost) / project.budget) * 100) : null,
+      productionHours: r2(tasks.reduce((sum, task) => sum + task.hours, 0)),
+      rejectionQty,
+      rejectionPct: processedQty > 0 ? r2((rejectionQty / processedQty) * 100) : 0,
+      taskTotal: tasks.length,
+      taskDone: tasks.filter((task) => task.status === 'COMPLETED').length,
+      workOrders,
+    }
+  })
+  const expectedCost = r2(rows.reduce((sum, row) => sum + row.expectedCost, 0))
+  const actualCost = r2(rows.reduce((sum, row) => sum + row.actualCost, 0))
+  const totalBudget = r2(rows.reduce((sum, row) => sum + row.budget, 0))
+  return {
+    rows,
+    summary: {
+      projectCount: rows.length,
+      runningProjects: rows.filter((row) => row.project.status === 'RUNNING').length,
+      totalBudget,
+      expectedCost,
+      labourCost: r2(rows.reduce((sum, row) => sum + row.labourCost, 0)),
+      materialCost: r2(rows.reduce((sum, row) => sum + row.materialCost, 0)),
+      actualCost,
+      costVariance: r2(actualCost - expectedCost),
+      projectedMargin: r2(totalBudget - actualCost),
+    },
+    note: 'Actual cost includes task material and labour only; WIP/overhead settlement remains a documented gap.',
+  }
+}
+
 // ---------- GSTR-1 summary (B2B / B2C, rate-wise) ----------
 
 export async function gstr1Report(month: string) {

@@ -593,6 +593,29 @@ export interface InventoryPlanningReport {
   summary: { itemCount: number; reorderItems: number; deadItems: number; slowItems: number; stockValue: number }
 }
 
+export interface ProductionCostVarianceReport {
+  rows: {
+    project: { id: string; projectNo: string; name: string; status: string; party: { id: string; code: string; name: string } }
+    budget: number
+    expectedCost: number
+    labourCost: number
+    materialCost: number
+    actualCost: number
+    costVariance: number
+    variancePct: number | null
+    projectedMargin: number
+    projectedMarginPct: number | null
+    productionHours: number
+    rejectionQty: number
+    rejectionPct: number
+    taskTotal: number
+    taskDone: number
+    workOrders: { id: string; woNo: string; status: string; bomNo: string | null; productName: string | null; expectedCost: number; labourCost: number; materialCost: number; actualCost: number; variance: number; taskTotal: number; taskDone: number }[]
+  }[]
+  summary: { projectCount: number; runningProjects: number; totalBudget: number; expectedCost: number; labourCost: number; materialCost: number; actualCost: number; costVariance: number; projectedMargin: number }
+  note: string
+}
+
 export interface CustomerPerformanceReport {
   rows: {
     customer: { id: string; code: string; name: string; city: string | null; gstin: string | null; active: boolean }

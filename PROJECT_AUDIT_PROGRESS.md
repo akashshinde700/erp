@@ -3,6 +3,8 @@
 **Branch:** `arena/c87300cc-erp` · **Base commit:** `cf7a911` · **Checkpoint:** 2026-11-07 (Asia/Kolkata)
 **Status:** ACTIVE WORK IN PROGRESS — this is a saved checkpoint, **not** a final production sign-off.
 
+> **2026-11-07 Action Center continuation (branch `arena/81f22c2f-erp`):** implemented a cross-module operational action center derived from source states rather than duplicate notification records: overdue/unassigned production tasks, stock-out/reorder suggestions, jobwork processing→certificate→invoice next actions, and receivable/payable exposure. Reports now opens on Action Center with direct module navigation. Added API/UI and priority-total reconciliation assertions.
+
 > **2026-11-07 Production Efficiency continuation (branch `arena/93e00504-erp`):** implemented operation-, machine- and operator-level throughput from posted production tasks: planned/good/rejected quantity, yield, attainment, hours, output/hour, labour/material/total cost and completion counts. It is honestly labelled efficiency rather than OEE because calendars, availability and downtime loss reasons are not captured. Added API/UI and yield/cost reconciliation assertions.
 
 > **2026-11-07 Production Cost continuation (branch `arena/fbc19138-erp`):** implemented the Business Central/Odoo/SAP/Rootstock expected-vs-actual visibility layer across projects: approved-BOM expected cost, task-frozen material/labour actuals, cost variance, projected margin, production hours, task completion and rejection rate, with work-order drilldown data in the API. No synthetic overhead/WIP values are invented; WIP and overhead GL settlement remain open. Added report UI/API and reconciliation assertions.

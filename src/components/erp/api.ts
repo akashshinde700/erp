@@ -593,6 +593,16 @@ export interface InventoryPlanningReport {
   summary: { itemCount: number; reorderItems: number; deadItems: number; slowItems: number; stockValue: number }
 }
 
+export interface WorkflowActionCenterReport {
+  generatedAt: string
+  summary: { critical: number; high: number; overdueTasks: number; unassignedTasks: number; reorderItems: number; jobworkActions: number; receivables: number; payables: number }
+  tasks: { id: string; taskNo: string; operation: string; status: string; priority: string; reason: string; dueDate: string | null; employee: { id: string; code: string; name: string } | null; woNo: string; projectNo: string; projectName: string }[]
+  stock: { item: { id: string; code: string; name: string; uom: string; reorderLevel: number; hsn: string | null }; closing: number; suggestedOrderQty: number; priority: string }[]
+  jobwork: { id: string; inwardNo: string; party: string; status: string; action: string; priority: string; receivedQty: number; processedQty: number; remainingQty: number; cardValue: number; certificateNo: string | null }[]
+  receivables: OutstandingRow[]
+  payables: OutstandingRow[]
+}
+
 export interface ProductionEfficiencyMetric {
   taskTotal: number
   taskDone: number

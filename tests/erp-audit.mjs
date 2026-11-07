@@ -125,7 +125,7 @@ async function main() {
     '/api/manufacturing/stats', '/api/manufacturing/projects', '/api/manufacturing/boms',
     '/api/manufacturing/work-orders', '/api/manufacturing/tasks', '/api/manufacturing/employees',
     '/api/manufacturing/material-plan',
-    '/api/reports?type=trial-balance', '/api/reports?type=stock-summary', '/api/reports?type=inventory-planning', '/api/reports?type=customer-performance', '/api/reports?type=supplier-performance', '/api/reports?type=production-cost-variance', '/api/reports?type=production-efficiency', '/api/reports?type=outstanding',
+    '/api/reports?type=trial-balance', '/api/reports?type=stock-summary', '/api/reports?type=inventory-planning', '/api/reports?type=customer-performance', '/api/reports?type=supplier-performance', '/api/reports?type=production-cost-variance', '/api/reports?type=production-efficiency', '/api/reports?type=action-center', '/api/reports?type=outstanding',
     '/api/reports?type=cash-bank-book&from=2026-01-01&to=2026-12-31', '/api/reports?type=gstr1', '/api/reports?type=pnl', '/api/reports?type=jobwork-pending',
     '/api/audit', '/api/search?q=shree',
   ]
@@ -142,6 +142,14 @@ async function main() {
     'inventory planning suggestions equal max(reorder level minus own closing stock, zero)',
     planningRows.length > 0 && planningRows.every((r) => Math.abs(r.suggestedOrderQty - Math.max(0, r.item.reorderLevel - r.closing)) < 0.005),
     `rows=${planningRows.length}`
+  )
+
+  const actionCenter = data(await req('GET', '/api/reports?type=action-center'))
+  check(
+    'action center summary reconciles critical/high source actions',
+    actionCenter && actionCenter.summary.critical === [...actionCenter.tasks, ...actionCenter.stock].filter((r) => r.priority === 'CRITICAL').length &&
+      actionCenter.summary.high === [...actionCenter.tasks, ...actionCenter.stock, ...actionCenter.jobwork].filter((r) => r.priority === 'HIGH').length,
+    JSON.stringify(actionCenter?.summary)
   )
 
   const efficiency = data(await req('GET', '/api/reports?type=production-efficiency'))

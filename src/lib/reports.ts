@@ -463,6 +463,103 @@ export async function productionEfficiencyReport() {
   }
 }
 
+// ---------- Cross-module workflow action center ----------
+
+/**
+ * Read-only operational action queue. Every item links to an existing source
+ * document/state; it does not create fake notifications or duplicate status.
+ */
+export async function workflowActionCenterReport() {
+  const nowDay = new Date().toISOString().slice(0, 10)
+  const [inventory, outstanding, tasks, jobwork] = await Promise.all([
+    inventoryPlanningReport(),
+    outstandingReport(),
+    db.productionTask.findMany({
+      where: { status: { in: ['PENDING', 'ASSIGNED', 'IN_PROGRESS'] } },
+      include: {
+        employee: { select: { id: true, code: true, name: true } },
+        workOrder: { select: { woNo: true, project: { select: { projectNo: true, name: true } } } },
+      },
+      orderBy: [{ dueDate: 'asc' }, { createdAt: 'asc' }],
+    }),
+    db.jobworkInward.findMany({
+      where: { status: { in: ['OPEN', 'IN_PROGRESS', 'COMPLETED'] } },
+      include: {
+        party: { select: { name: true } },
+        items: { select: { qty: true, processedQty: true } },
+        jobCards: { where: { status: 'COMPLETED' }, select: { totalAmount: true } },
+        certificates: { where: { status: 'ISSUED' }, select: { certNo: true } },
+      },
+      orderBy: { date: 'asc' },
+    }),
+  ])
+  const taskActions = tasks.map((task) => {
+    const dueDay = task.dueDate?.toISOString().slice(0, 10) ?? null
+    const overdue = dueDay !== null && dueDay < nowDay
+    return {
+      id: task.id,
+      taskNo: task.taskNo,
+      operation: task.operation,
+      status: task.status,
+      priority: overdue ? 'CRITICAL' : !task.employee ? 'HIGH' : 'NORMAL',
+      reason: overdue ? `Overdue since ${dueDay}` : !task.employee ? 'Worker not assigned' : 'Production task pending',
+      dueDate: task.dueDate,
+      employee: task.employee,
+      woNo: task.workOrder.woNo,
+      projectNo: task.workOrder.project.projectNo,
+      projectName: task.workOrder.project.name,
+    }
+  })
+  const jobworkActions = jobwork.map((inward) => {
+    const received = r2(inward.items.reduce((sum, item) => sum + item.qty, 0))
+    const processed = r2(inward.items.reduce((sum, item) => sum + item.processedQty, 0))
+    const hasCertificate = inward.certificates.length > 0
+    const cardValue = r2(inward.jobCards.reduce((sum, card) => sum + card.totalAmount, 0))
+    const action = inward.status === 'COMPLETED' && !hasCertificate
+      ? 'ISSUE_CERTIFICATE'
+      : inward.status === 'COMPLETED' && hasCertificate
+        ? 'GENERATE_INVOICE'
+        : 'COMPLETE_PROCESSING'
+    return {
+      id: inward.id,
+      inwardNo: inward.inwardNo,
+      party: inward.party.name,
+      status: inward.status,
+      action,
+      priority: action === 'GENERATE_INVOICE' ? 'HIGH' : action === 'ISSUE_CERTIFICATE' ? 'HIGH' : 'NORMAL',
+      receivedQty: received,
+      processedQty: processed,
+      remainingQty: r2(Math.max(0, received - processed)),
+      cardValue,
+      certificateNo: inward.certificates[0]?.certNo ?? null,
+    }
+  })
+  const stockActions = inventory.rows.filter((row) => row.suggestedOrderQty > 0).map((row) => ({
+    item: row.item,
+    closing: row.closing,
+    suggestedOrderQty: row.suggestedOrderQty,
+    priority: row.closing <= 0 ? 'CRITICAL' : 'HIGH',
+  }))
+  return {
+    generatedAt: new Date(),
+    summary: {
+      critical: taskActions.filter((row) => row.priority === 'CRITICAL').length + stockActions.filter((row) => row.priority === 'CRITICAL').length,
+      high: taskActions.filter((row) => row.priority === 'HIGH').length + stockActions.filter((row) => row.priority === 'HIGH').length + jobworkActions.filter((row) => row.priority === 'HIGH').length,
+      overdueTasks: taskActions.filter((row) => row.priority === 'CRITICAL').length,
+      unassignedTasks: taskActions.filter((row) => !row.employee).length,
+      reorderItems: stockActions.length,
+      jobworkActions: jobworkActions.length,
+      receivables: outstanding.totalReceivable,
+      payables: outstanding.totalPayable,
+    },
+    tasks: taskActions,
+    stock: stockActions,
+    jobwork: jobworkActions,
+    receivables: outstanding.customers.slice().sort((a, b) => b.amount - a.amount).slice(0, 10),
+    payables: outstanding.suppliers.slice().sort((a, b) => b.amount - a.amount).slice(0, 10),
+  }
+}
+
 // ---------- GSTR-1 summary (B2B / B2C, rate-wise) ----------
 
 export async function gstr1Report(month: string) {

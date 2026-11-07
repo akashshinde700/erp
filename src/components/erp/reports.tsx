@@ -7,7 +7,7 @@
  */
 
 import { useState, type ReactNode } from 'react'
-import { BarChart3, CheckCircle2, FileSpreadsheet, PackageSearch, Scale, TrendingDown, TrendingUp, XCircle } from 'lucide-react'
+import { BarChart3, CheckCircle2, FileSpreadsheet, PackageSearch, Scale, TrendingDown, TrendingUp, TriangleAlert, XCircle } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -29,9 +29,11 @@ import {
   type ProductionEfficiencyReport,
   type SupplierPerformanceReport,
   type TrialBalance,
+  type WorkflowActionCenterReport,
 } from './api'
 import { EmptyState, Money, SectionHeading, TableSkeleton } from './bits'
 import { money } from '@/lib/erp'
+import { useErpUi } from './store'
 
 export function ReportsView() {
   return (
@@ -40,8 +42,9 @@ export function ReportsView() {
         title="Reports"
         description="GST, financial and integrity reports — all derived from the append-only ledgers."
       />
-      <Tabs defaultValue="gstr1">
+      <Tabs defaultValue="action-center">
         <TabsList className="h-11 w-full justify-start overflow-x-auto sm:w-auto">
+          <TabsTrigger value="action-center" className="h-11 sm:h-9">Action Center</TabsTrigger>
           <TabsTrigger value="gstr1" className="h-11 sm:h-9">GSTR-1</TabsTrigger>
           <TabsTrigger value="trial" className="h-11 sm:h-9">Trial Balance</TabsTrigger>
           <TabsTrigger value="outstanding" className="h-11 sm:h-9">Outstanding</TabsTrigger>
@@ -53,6 +56,9 @@ export function ReportsView() {
           <TabsTrigger value="inventory" className="h-11 sm:h-9">Inventory Planning</TabsTrigger>
           <TabsTrigger value="pnl" className="h-11 sm:h-9">P&amp;L</TabsTrigger>
         </TabsList>
+        <TabsContent value="action-center" className="mt-4">
+          <ActionCenterTab />
+        </TabsContent>
         <TabsContent value="gstr1" className="mt-4">
           <Gstr1Tab />
         </TabsContent>
@@ -84,6 +90,42 @@ export function ReportsView() {
           <PnlTab />
         </TabsContent>
       </Tabs>
+    </div>
+  )
+}
+
+// ---------- cross-module action center ----------
+
+function ActionCenterTab() {
+  const { data, loading } = useApi<WorkflowActionCenterReport>('/api/reports?type=action-center')
+  const setView = useErpUi((state) => state.setView)
+  if (loading) return <TableSkeleton rows={8} cols={6} />
+  if (!data) return <EmptyState title="No action data" hint="Operational actions will appear from live module states." icon={TriangleAlert} />
+  const actionLabel: Record<string, string> = {
+    COMPLETE_PROCESSING: 'Complete processing',
+    ISSUE_CERTIFICATE: 'Issue certificate',
+    GENERATE_INVOICE: 'Generate invoice',
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Card className="p-4"><p className="text-xs text-muted-foreground">Critical Actions</p><p className="mt-1 text-xl font-semibold text-destructive">{data.summary.critical}</p><p className="text-xs text-muted-foreground">overdue / stock-out</p></Card>
+        <Card className="p-4"><p className="text-xs text-muted-foreground">High Priority</p><p className="mt-1 text-xl font-semibold text-amber-600">{data.summary.high}</p><p className="text-xs text-muted-foreground">assignment / billing</p></Card>
+        <Card className="p-4"><p className="text-xs text-muted-foreground">Receivables</p><p className="mt-1 text-lg font-semibold text-primary"><Money value={data.summary.receivables} plain /></p></Card>
+        <Card className="p-4"><p className="text-xs text-muted-foreground">Payables</p><p className="mt-1 text-lg font-semibold text-destructive"><Money value={data.summary.payables} plain /></p></Card>
+      </div>
+      <div className="grid gap-4 xl:grid-cols-2">
+        <Card className="p-0"><CardHeader className="flex flex-row items-center justify-between border-b py-3"><CardTitle className="text-sm">Production Tasks</CardTitle><Button variant="ghost" size="sm" onClick={() => setView('manufacturing')}>Open Manufacturing</Button></CardHeader><CardContent className="p-0">
+          {data.tasks.length === 0 ? <p className="p-6 text-center text-sm text-muted-foreground">No pending production tasks.</p> : <div className="max-h-80 overflow-auto"><Table><TableHeader><TableRow><TableHead>Task / Project</TableHead><TableHead>Reason</TableHead><TableHead>Worker</TableHead></TableRow></TableHeader><TableBody>{data.tasks.map((task) => <TableRow key={task.id}><TableCell><span className="font-medium tabular-nums">{task.taskNo}</span><span className="block text-xs text-muted-foreground">{task.projectNo} · {task.woNo} · {task.operation.replaceAll('_', ' ')}</span></TableCell><TableCell><Badge variant={task.priority === 'CRITICAL' ? 'destructive' : task.priority === 'HIGH' ? 'secondary' : 'outline'}>{task.reason}</Badge></TableCell><TableCell className="text-xs">{task.employee?.name ?? 'Unassigned'}</TableCell></TableRow>)}</TableBody></Table></div>}
+        </CardContent></Card>
+        <Card className="p-0"><CardHeader className="flex flex-row items-center justify-between border-b py-3"><CardTitle className="text-sm">Stock Reorder</CardTitle><Button variant="ghost" size="sm" onClick={() => setView('inventory')}>Open Inventory</Button></CardHeader><CardContent className="p-0">
+          {data.stock.length === 0 ? <p className="p-6 text-center text-sm text-muted-foreground">No reorder actions.</p> : <div className="max-h-80 overflow-auto"><Table><TableHeader><TableRow><TableHead>Item</TableHead><TableHead className="text-right">Closing</TableHead><TableHead className="text-right">Suggested</TableHead></TableRow></TableHeader><TableBody>{data.stock.map((row) => <TableRow key={row.item.id}><TableCell><span className="font-medium">{row.item.name}</span><span className="block text-xs text-muted-foreground">{row.item.code}</span></TableCell><TableCell className="text-right tabular-nums">{row.closing} {row.item.uom}</TableCell><TableCell className="text-right font-semibold text-destructive tabular-nums">{row.suggestedOrderQty} {row.item.uom}</TableCell></TableRow>)}</TableBody></Table></div>}
+        </CardContent></Card>
+      </div>
+      <Card className="p-0"><CardHeader className="flex flex-row items-center justify-between border-b py-3"><CardTitle className="text-sm">Customer Jobwork Actions</CardTitle><Button variant="ghost" size="sm" onClick={() => setView('jobwork')}>Open Jobwork</Button></CardHeader><CardContent className="p-0">
+        {data.jobwork.length === 0 ? <p className="p-6 text-center text-sm text-muted-foreground">No open jobwork actions.</p> : <div className="overflow-auto"><Table><TableHeader><TableRow><TableHead>Inward / Customer</TableHead><TableHead>Next Action</TableHead><TableHead className="text-right">Processed</TableHead><TableHead className="text-right">Unbilled Card Value</TableHead></TableRow></TableHeader><TableBody>{data.jobwork.map((row) => <TableRow key={row.id}><TableCell><span className="font-medium tabular-nums">{row.inwardNo}</span><span className="block text-xs text-muted-foreground">{row.party}</span></TableCell><TableCell><Badge variant={row.priority === 'HIGH' ? 'secondary' : 'outline'}>{actionLabel[row.action] ?? row.action}</Badge></TableCell><TableCell className="text-right tabular-nums">{row.processedQty}/{row.receivedQty}</TableCell><TableCell className="text-right tabular-nums"><Money value={row.cardValue} plain /></TableCell></TableRow>)}</TableBody></Table></div>}
+      </CardContent></Card>
     </div>
   )
 }

@@ -1,12 +1,13 @@
 import { ok, handleError } from '@/lib/api'
 import { z } from 'zod'
+import { nullableDate } from '@/lib/validation'
 import { assertMutationAccess } from '@/lib/platform'
 import { logAudit } from '@/lib/audit'
 import { updateWorkOrder } from '@/lib/manufacturing'
 
 const woUpdateSchema = z.object({
-  startDate: z.string().optional().nullable(),
-  endDate: z.string().optional().nullable(),
+  startDate: nullableDate,
+  endDate: nullableDate,
   priority: z.enum(['LOW', 'NORMAL', 'HIGH', 'URGENT']).optional(),
   notes: z.string().max(1000).optional().nullable(),
 })

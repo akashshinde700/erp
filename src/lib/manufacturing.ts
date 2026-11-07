@@ -14,6 +14,7 @@
 import { db } from './db'
 import { Prisma } from '@prisma/client'
 import { r2, fyCode, EPS } from './erp'
+import { isValidDateString } from './validation'
 import { BusinessError } from './accounting'
 
 type Tx = Prisma.TransactionClient
@@ -45,7 +46,13 @@ export const TASK_ACTIVE = ['PENDING', 'ASSIGNED', 'IN_PROGRESS'] as const
 /** Over-production tolerance for task completion (planned vs actual+rejection). */
 const TASK_TOLERANCE = 1.1
 
-const iso = (d?: string | Date | null): Date => (d ? new Date(d) : new Date())
+const iso = (d?: string | Date | null): Date => {
+  if (d === undefined || d === null || d === '') return new Date()
+  if (typeof d === 'string' && !isValidDateString(d)) throw new BusinessError('Invalid date — use YYYY-MM-DD', 400)
+  const dt = d instanceof Date ? d : new Date(d)
+  if (Number.isNaN(dt.getTime())) throw new BusinessError('Invalid date — use YYYY-MM-DD', 400)
+  return dt
+}
 
 // ---------- numbering ----------
 
@@ -561,6 +568,8 @@ export async function updateBom(id: string, input: Partial<BomInput> & { lines: 
       const it = itemMap.get(l.itemId)
       if (!it) throw new BusinessError(`Item ${l.itemId} not found`, 404)
       if (!(l.qty > 0)) throw new BusinessError(`Quantity must be positive for "${it.name}"`)
+      if ((l.wastagePct ?? 0) < 0 || (l.wastagePct ?? 0) > 50) throw new BusinessError(`Wastage % must be 0–50 for "${it.name}"`)
+      if ((l.rate ?? 0) < 0) throw new BusinessError(`Rate cannot be negative for "${it.name}"`)
     }
 
     await tx.bomItem.deleteMany({ where: { bomId: id } })
@@ -709,6 +718,11 @@ export async function createWorkOrder(input: WorkOrderInput) {
     }
 
     const date = iso(input.date)
+    const startDate = input.startDate ? iso(input.startDate) : null
+    const endDate = input.endDate ? iso(input.endDate) : null
+    if (startDate && endDate && endDate.getTime() < startDate.getTime()) {
+      throw new BusinessError('Planned end date cannot be before the start date')
+    }
     const woNo = await nextDocNo(tx, 'WO', date)
     const wo = await tx.workOrder.create({
       data: {
@@ -716,8 +730,8 @@ export async function createWorkOrder(input: WorkOrderInput) {
         projectId: project.id,
         bomId,
         date,
-        startDate: input.startDate ? iso(input.startDate) : null,
-        endDate: input.endDate ? iso(input.endDate) : null,
+        startDate,
+        endDate,
         priority: input.priority ?? 'NORMAL',
         notes: input.notes ?? null,
         lines: {
@@ -752,6 +766,11 @@ export async function updateWorkOrder(id: string, input: Partial<WorkOrderInput>
     const data: Prisma.WorkOrderUpdateInput = {}
     if (input.startDate !== undefined) data.startDate = input.startDate ? iso(input.startDate) : null
     if (input.endDate !== undefined) data.endDate = input.endDate ? iso(input.endDate) : null
+    const start = (data.startDate as Date | null | undefined) ?? wo.startDate
+    const end = (data.endDate as Date | null | undefined) ?? wo.endDate
+    if (start && end && end.getTime() < start.getTime()) {
+      throw new BusinessError('Planned end date cannot be before the start date')
+    }
     if (input.priority !== undefined) data.priority = input.priority
     if (input.notes !== undefined) data.notes = input.notes
     return tx.workOrder.update({ where: { id }, data })
@@ -942,6 +961,17 @@ export async function completeTask(id: string, input: CompleteTaskInput) {
     if (!task) throw new BusinessError('Task not found', 404)
     if (task.status !== 'IN_PROGRESS' && task.status !== 'ASSIGNED') {
       throw new BusinessError(`Task is ${task.status}`)
+    }
+    // Claim the row with a conditional UPDATE inside this transaction: on a
+    // multi-user DB two simultaneous "complete" requests cannot both read
+    // IN_PROGRESS and then each write a MFG_ISSUE stock row (double material
+    // consumption). The loser sees count 0 after the winner commits.
+    const claimed = await tx.productionTask.updateMany({
+      where: { id, status: { in: ['IN_PROGRESS', 'ASSIGNED'] } },
+      data: { status: 'IN_PROGRESS' },
+    })
+    if (claimed.count !== 1) {
+      throw new BusinessError('This task was completed or cancelled by another user — refresh and try again', 409)
     }
     if (!(input.actualQty > 0)) throw new BusinessError('Actual quantity must be positive')
     const rejectionQty = input.rejectionQty ?? 0

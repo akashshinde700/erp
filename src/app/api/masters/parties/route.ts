@@ -2,6 +2,7 @@ import { ok, fail, handleError } from '@/lib/api'
 import { db } from '@/lib/db'
 import { z } from 'zod'
 import { gstinChecksumValid } from '@/lib/erp'
+import { gstStateCode } from '@/lib/validation'
 import { assertCompanyAccess, assertMutationAccess, assertLimit } from '@/lib/platform'
 import { logAudit } from '@/lib/audit'
 import { syncPartyOpeningBalance } from '@/lib/services'
@@ -32,7 +33,7 @@ const partySchema = z.object({
   name: z.string().min(1, 'Name is required'),
   types: z.array(z.enum(['CUSTOMER', 'SUPPLIER', 'JOBWORKER'])).min(1, 'Pick at least one party type'),
   gstin: z.string().optional().nullable(),
-  stateCode: z.string().length(2).default('27'),
+  stateCode: gstStateCode.default('27'),
   address: z.string().optional().nullable(),
   city: z.string().optional().nullable(),
   pincode: z

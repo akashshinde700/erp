@@ -1,5 +1,6 @@
 import { ok, handleError } from '@/lib/api'
 import { z } from 'zod'
+import { optionalDate, nullableDate } from '@/lib/validation'
 import { assertCompanyAccess, assertMutationAccess } from '@/lib/platform'
 import { logAudit } from '@/lib/audit'
 import { listWorkOrders, createWorkOrder } from '@/lib/manufacturing'
@@ -25,9 +26,9 @@ const woLineSchema = z.object({
 const woSchema = z.object({
   projectId: z.string().min(1, 'Project is required'),
   bomId: z.string().optional().nullable(),
-  date: z.string().optional(),
-  startDate: z.string().optional().nullable(),
-  endDate: z.string().optional().nullable(),
+  date: optionalDate,
+  startDate: nullableDate,
+  endDate: nullableDate,
   priority: z.enum(['LOW', 'NORMAL', 'HIGH', 'URGENT']).default('NORMAL'),
   notes: z.string().max(1000).optional().nullable(),
   lines: z.array(woLineSchema).max(200).optional(),

@@ -1,6 +1,7 @@
 import { ok, handleError } from '@/lib/api'
 import { db } from '@/lib/db'
 import { z } from 'zod'
+import { optionalDate } from '@/lib/validation'
 import { postJobworkInward } from '@/lib/services'
 import { assertCompanyAccess, assertMutationAccess } from '@/lib/platform'
 import { logAudit } from '@/lib/audit'
@@ -33,7 +34,7 @@ export async function GET(req: Request) {
 
 const postSchema = z.object({
   partyId: z.string().min(1, 'Party is required'),
-  date: z.string().optional(),
+  date: optionalDate,
   challanNo: z.string().max(40).optional().nullable(),
   warehouseId: z.string().optional().nullable(),
   notes: z.string().max(500).optional().nullable(),

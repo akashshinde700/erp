@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
-import { handleError, ok } from '@/lib/api'
+import { handleError, ok, fail } from '@/lib/api'
 import { logAudit } from '@/lib/audit'
 import { assertCompanyAccess, assertFeature } from '@/lib/platform'
+import { dateRangeError } from '@/lib/validation'
 import {
   buildEInvoice,
   eInvoiceFileName,
@@ -29,6 +30,8 @@ export async function GET(req: Request) {
     const from = sp.get('from') ?? ''
     const to = sp.get('to') ?? ''
     const preview = sp.get('preview') === '1'
+    const rangeErr = dateRangeError(from || null, to || null)
+    if (rangeErr) return fail(rangeErr)
 
     if (id) {
       const { inv, company } = await loadSalesInvoiceForIrp(id)

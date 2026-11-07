@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server'
-import { handleError } from '@/lib/api'
+import { handleError, fail } from '@/lib/api'
 import { db } from '@/lib/db'
 import { logAudit } from '@/lib/audit'
 import { assertCompanyAccess, assertFeature } from '@/lib/platform'
+import { dateRangeError } from '@/lib/validation'
 import { buildInvoiceVoucher, buildPaymentVoucher, getCompany, vouchersToXml, type TallyVoucher } from '@/lib/tally'
 
 /**
@@ -20,6 +21,8 @@ export async function GET(req: Request) {
 
     const from = sp.get('from')
     const to = sp.get('to')
+    const rangeErr = dateRangeError(from, to)
+    if (rangeErr) return fail(rangeErr)
     // Dates are stored at UTC midnight — UTC-bounded range (see reports.ts).
     const dateRange: { gte?: Date; lte?: Date } = {}
     if (from) dateRange.gte = new Date(`${from}T00:00:00.000Z`)

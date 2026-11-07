@@ -9,6 +9,7 @@
 import { db } from './db'
 import { Prisma } from '@prisma/client'
 import { r2, fyCode, computeInvoiceTotals, EPS, DEFAULT_WAREHOUSE_CODE } from './erp'
+import { isValidDateString } from './validation'
 import { BusinessError, AccountCode, postGl, cancelGlForVoucher } from './accounting'
 
 type Tx = Prisma.TransactionClient
@@ -32,6 +33,15 @@ async function defaultWarehouseId(tx: Tx): Promise<string> {
   const any = await tx.warehouse.findFirst({ orderBy: { code: 'asc' } })
   if (!any) throw new BusinessError('No warehouse defined. Create one in Masters first.', 409)
   return any.id
+}
+
+/** A client-supplied warehouse id is untrusted: validate it before it reaches
+ *  a FK column, otherwise a typo becomes a 500 instead of a clear 400. */
+async function resolveWarehouseId(tx: Tx, requested?: string | null): Promise<string> {
+  if (!requested) return defaultWarehouseId(tx)
+  const w = await tx.warehouse.findUnique({ where: { id: requested }, select: { id: true, active: true } })
+  if (!w || !w.active) throw new BusinessError('Selected warehouse does not exist or is inactive', 400)
+  return w.id
 }
 
 /** Atomic gapless-forward document number: INV-2526-003 */
@@ -108,7 +118,16 @@ async function cancelStockForVoucher(tx: Tx, voucherType: string, voucherNo: str
   })
 }
 
-const iso = (d?: string | Date): Date => (d ? new Date(d) : new Date())
+/** Never let an unparseable/rolled-over date reach Prisma (FY numbering and
+ *  as-of stock reports depend on it). Routes validate first; this is the
+ *  service-level trust boundary for seed/internal callers too. */
+const iso = (d?: string | Date): Date => {
+  if (d === undefined || d === null || d === '') return new Date()
+  if (typeof d === 'string' && !isValidDateString(d)) throw new BusinessError('Invalid date — use YYYY-MM-DD', 400)
+  const dt = d instanceof Date ? d : new Date(d)
+  if (Number.isNaN(dt.getTime())) throw new BusinessError('Invalid date — use YYYY-MM-DD', 400)
+  return dt
+}
 
 // ---------- Sales invoices (W1) ----------
 
@@ -218,7 +237,7 @@ export async function postSalesInvoiceTx(tx: Tx, input: PostSalesInput) {
     })
 
     // Stock ledger: qtyOut @ weighted-average cost, availability-guarded
-    const warehouseId = input.warehouseId ?? (await defaultWarehouseId(tx))
+    const warehouseId = await resolveWarehouseId(tx, input.warehouseId)
     const qtyByItem = new Map<string, number>()
     for (const l of input.lines) {
       const it = itemMap.get(l.itemId)!
@@ -363,7 +382,7 @@ export async function postPurchaseInvoice(input: PostPurchaseInput) {
     })
 
     // Stock: qtyIn @ effective line cost (taxable / qty)
-    const warehouseId = input.warehouseId ?? (await defaultWarehouseId(tx))
+    const warehouseId = await resolveWarehouseId(tx, input.warehouseId)
     const qtyByItem = new Map<string, { qty: number; value: number }>()
     for (const [idx, l] of input.lines.entries()) {
       const it = itemMap.get(l.itemId)!
@@ -457,6 +476,16 @@ export async function postPayment(input: PostPaymentInput) {
     if (allocSum > input.amount + 0.005) {
       throw new BusinessError(`Allocated (${allocSum}) exceeds payment amount (${r2(input.amount)})`)
     }
+    // One invoice may appear only ONCE per payment voucher. Two rows for the
+    // same invoice would make PaymentAllocation Σ drift from the invoice's
+    // paidAmount (and from the outstanding report) even if each row looked
+    // valid in isolation.
+    const seen = new Set<string>()
+    for (const a of allocations) {
+      const key = `${a.invoiceType}:${a.invoiceNo}`
+      if (seen.has(key)) throw new BusinessError(`Duplicate allocation for invoice ${a.invoiceNo} in one payment`)
+      seen.add(key)
+    }
     for (const a of allocations) {
       if (!(a.amount > 0)) throw new BusinessError('Allocation amount must be positive')
       const expectedType = input.type === 'RECEIPT' ? 'SALES' : 'PURCHASE'
@@ -474,7 +503,11 @@ export async function postPayment(input: PostPaymentInput) {
         if (a.amount > outstanding + 0.005) {
           throw new BusinessError(`Invoice ${a.invoiceNo} outstanding is only ${outstanding}`)
         }
-        await tx.salesInvoice.update({ where: { id: inv.id }, data: { paidAmount: r2(inv.paidAmount + a.amount) } })
+        const upd = await tx.salesInvoice.updateMany({
+          where: { id: inv.id, status: 'POSTED', paidAmount: { gte: r2(inv.paidAmount - 0.0001), lte: r2(inv.paidAmount + 0.0001) } },
+          data: { paidAmount: r2(inv.paidAmount + a.amount) },
+        })
+        if (upd.count !== 1) throw new BusinessError(`Invoice ${a.invoiceNo} was updated by another transaction — refresh and try again`, 409)
       } else {
         const inv = await tx.purchaseInvoice.findUnique({ where: { invoiceNo: a.invoiceNo } })
         if (!inv) throw new BusinessError(`Purchase invoice ${a.invoiceNo} not found`, 404)
@@ -484,7 +517,11 @@ export async function postPayment(input: PostPaymentInput) {
         if (a.amount > outstanding + 0.005) {
           throw new BusinessError(`Invoice ${a.invoiceNo} outstanding is only ${outstanding}`)
         }
-        await tx.purchaseInvoice.update({ where: { id: inv.id }, data: { paidAmount: r2(inv.paidAmount + a.amount) } })
+        const upd = await tx.purchaseInvoice.updateMany({
+          where: { id: inv.id, status: 'POSTED', paidAmount: { gte: r2(inv.paidAmount - 0.0001), lte: r2(inv.paidAmount + 0.0001) } },
+          data: { paidAmount: r2(inv.paidAmount + a.amount) },
+        })
+        if (upd.count !== 1) throw new BusinessError(`Invoice ${a.invoiceNo} was updated by another transaction — refresh and try again`, 409)
       }
     }
 
@@ -574,7 +611,7 @@ export async function postJobworkInward(input: PostInwardInput) {
 
     const date = iso(input.date)
     const inwardNo = await nextDocNo(tx, 'JWI', date)
-    const warehouseId = input.warehouseId ?? (await defaultWarehouseId(tx))
+    const warehouseId = await resolveWarehouseId(tx, input.warehouseId)
 
     const inward = await tx.jobworkInward.create({
       data: {
@@ -769,13 +806,23 @@ export async function postJobCard(input: PostJobCardInput) {
       include: { processes: { include: { process: true } } },
     })
 
-    // Bump processed quantities (per inward item, once — not per process row)
+    // Bump processed quantities (per inward item, once — not per process row).
+    // Conditional update: two concurrent cards that both read the same
+    // processedQty must not both pass the over-processing guard and then
+    // overwrite each other's progress (lost-update / over-billing race).
     for (const [itemId, a] of agg) {
       const it = inwardItemMap.get(itemId)!
-      await tx.jobworkInwardItem.update({
-        where: { id: itemId },
+      const upd = await tx.jobworkInwardItem.updateMany({
+        where: {
+          id: itemId,
+          processedQty: { gte: r2(it.processedQty - 0.0001), lte: r2(it.processedQty + 0.0001) },
+          processedWeight: { gte: r2(it.processedWeight - 0.0001), lte: r2(it.processedWeight + 0.0001) },
+        },
         data: { processedQty: r2(it.processedQty + a.qty), processedWeight: r2(it.processedWeight + a.weight) },
       })
+      if (upd.count !== 1) {
+        throw new BusinessError('This inward was processed by another job card at the same time — refresh and try again', 409)
+      }
     }
 
     // Derived status (ERPNext pattern): all items fully processed → COMPLETED
@@ -1014,7 +1061,7 @@ export async function postOpeningStock(input: PostOpeningInput) {
     async (tx) => {
       await getCompany(tx)
       const date = iso(input.date)
-      const warehouseId = input.warehouseId ?? (await defaultWarehouseId(tx))
+      const warehouseId = await resolveWarehouseId(tx, input.warehouseId)
       const voucherNo = await nextDocNo(tx, 'OPN', date)
 
       for (const r of input.rows) {

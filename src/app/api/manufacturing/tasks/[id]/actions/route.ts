@@ -1,5 +1,6 @@
 import { ok, fail, handleError } from '@/lib/api'
 import { z } from 'zod'
+import { nullableDate, optionalDate } from '@/lib/validation'
 import { assertMutationAccess } from '@/lib/platform'
 import { logAudit } from '@/lib/audit'
 import { assignTask, startTask, completeTask, cancelTask } from '@/lib/manufacturing'
@@ -8,7 +9,7 @@ const assignSchema = z.object({
   action: z.literal('assign'),
   employeeId: z.string().min(1, 'Pick a worker'),
   machineNo: z.string().max(30).optional().nullable(),
-  dueDate: z.string().optional().nullable(),
+  dueDate: nullableDate,
 })
 
 const startSchema = z.object({ action: z.literal('start') })
@@ -22,7 +23,7 @@ const completeSchema = z.object({
   materialItemId: z.string().optional().nullable(),
   materialQty: z.number().min(0).finite().max(10_000_000).default(0),
   notes: z.string().max(1000).optional().nullable(),
-  completedAt: z.string().optional(),
+  completedAt: optionalDate,
 })
 
 const cancelSchema = z.object({ action: z.literal('cancel') })

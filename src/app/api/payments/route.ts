@@ -1,6 +1,7 @@
 import { ok, handleError } from '@/lib/api'
 import { db } from '@/lib/db'
 import { z } from 'zod'
+import { optionalDate } from '@/lib/validation'
 import { postPayment } from '@/lib/services'
 import { assertCompanyAccess, assertMutationAccess } from '@/lib/platform'
 import { logAudit } from '@/lib/audit'
@@ -32,7 +33,7 @@ export async function GET(req: Request) {
 const postSchema = z.object({
   type: z.enum(['RECEIPT', 'PAYMENT']),
   partyId: z.string().min(1, 'Party is required'),
-  date: z.string().optional(),
+  date: optionalDate,
   amount: z.number().positive('Amount must be > 0').finite().max(1_000_000_000),
   mode: z.enum(['CASH', 'BANK', 'UPI', 'CHEQUE']).optional(),
   refNo: z.string().max(60).optional().nullable(),

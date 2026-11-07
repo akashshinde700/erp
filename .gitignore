@@ -63,3 +63,8 @@ db/*.db-*
 # deploy credentials (per-site SSH passwords) and python cache
 deploy_config*.json
 __pycache__/
+
+# local audit runtime (throwaway SQLite DB + generated results; never production data)
+/tests/erp-test.db
+/tests/erp-test.db-*
+/tests/audit-results.json

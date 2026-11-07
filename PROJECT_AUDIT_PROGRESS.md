@@ -3,6 +3,8 @@
 **Branch:** `arena/c87300cc-erp` · **Base commit:** `cf7a911` · **Checkpoint:** 2026-11-07 (Asia/Kolkata)
 **Status:** ACTIVE WORK IN PROGRESS — this is a saved checkpoint, **not** a final production sign-off.
 
+> **2026-11-07 procurement/returns UI continuation (branch `arena/16264bf2-erp`):** Purchase now includes a responsive Procurement & Returns workspace covering requisition submit/approval, PO approval and receipt progress, GRN/QC quantities, live three-way-match exceptions, commercial return/credit/debit-note visibility and guarded cancellation. Complex creation/QC forms remain API-backed pending local migrated-schema runtime verification.
+
 > **2026-11-07 returns/adjustment continuation (branch `arena/16264bf2-erp`):** added company-scoped sales and purchase returns with source-line quantity caps across prior posted returns, mandatory physical/QC accepted and rejected quantities, rejected-QC notes, stock availability guards, restock/return-to-vendor dispositions, credit/debit-note numbering, atomic GST/party GL adjustments, append-only stock reversals and cancellation stock-shortfall protection. Refund/advance-payment application and UI remain pending.
 
 > **2026-11-07 three-way-match hardening:** controlled GRN invoices now require the supplier's invoice number and reject active duplicates per supplier. The procurement dashboard derives accepted-versus-billed quantity and PO-versus-invoice rate exceptions with source GRN/invoice references.

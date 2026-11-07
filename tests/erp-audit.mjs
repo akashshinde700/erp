@@ -10,13 +10,20 @@
  * Usage: node tests/erp-audit.mjs
  */
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
-import { createRequire } from 'node:module'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { scryptSync, randomBytes } from 'node:crypto'
+import { openAuditDb } from './audit-db.mjs'
 
-const require = createRequire(import.meta.url)
+const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const BASE = process.env.AUDIT_BASE_URL ?? 'http://127.0.0.1:3000'
-const DB_PATH = process.env.AUDIT_DB_PATH ?? '/home/user/erp/tests/erp-test.db'
-const KEY_PATH = process.env.AUDIT_PLATFORM_KEY ?? '/home/user/erp/db/platform-key.key'
+// MySQL: AUDIT_DB_URL=mysql://user:pass@host:port/db (same DB the server under test uses).
+// SQLite (sandbox): AUDIT_DB_PATH=<file>. Never point either at a production database:
+// the suite starts with a destructive ?force=1 reseed.
+const DB_URL = process.env.AUDIT_DB_URL
+const DB_PATH = process.env.AUDIT_DB_PATH ?? join(ROOT, 'tests', 'erp-test.db')
+const KEY_PATH = process.env.AUDIT_PLATFORM_KEY ?? join(ROOT, 'db', 'platform-key.key')
+const RESULTS_PATH = process.env.AUDIT_RESULTS ?? join(ROOT, 'tests', 'audit-results.json')
 function platformKey() {
   if (!existsSync(KEY_PATH)) {
     // A probe with a non-empty header forces src/lib/secrets.ts to materialise
@@ -25,7 +32,7 @@ function platformKey() {
   }
   return readFileSync(KEY_PATH, 'utf8').trim()
 }
-const Database = require('better-sqlite3')
+const auditDb = openAuditDb({ url: DB_URL, path: DB_PATH })
 
 const results = []
 let cookie = ''
@@ -59,9 +66,8 @@ async function req(method, path, body, opts = {}) {
 }
 
 const data = (r) => r.json?.data
-const sql = () => new Database(DB_PATH, { readonly: true })
-const q1 = (query, ...args) => { const d = sql(); try { return d.prepare(query).get(...args) } finally { d.close() } }
-const qAll = (query, ...args) => { const d = sql(); try { return d.prepare(query).all(...args) } finally { d.close() } }
+const q1 = (query, ...args) => auditDb.get(query, args)
+const qAll = (query, ...args) => auditDb.all(query, args)
 
 async function trialBalance() {
   const r = await req('GET', '/api/reports?type=trial-balance')
@@ -267,7 +273,7 @@ async function main() {
     check('GST totals match independent hand calculation',
       Math.abs(inv.taxable - taxable) < 0.005 && Math.abs(inv.grandTotal - expectedGrand) < 0.005,
       `taxable=${inv.taxable} grand=${inv.grandTotal} expected=${expectedGrand}`)
-    const glSum = q1("SELECT COALESCE(SUM(debit),0) dr, COALESCE(SUM(credit),0) cr FROM AccountLedger WHERE voucherNo=? AND isCancelled=0", inv.invoiceNo)
+    const glSum = (await q1("SELECT COALESCE(SUM(debit),0) dr, COALESCE(SUM(credit),0) cr FROM AccountLedger WHERE voucherNo=? AND isCancelled=0", inv.invoiceNo))
     check('sales GL debit equals invoice grand total',
       Math.abs((glSum?.dr ?? 0) - inv.grandTotal) < 0.005 && Math.abs((glSum?.dr ?? 0) - (glSum?.cr ?? 0)) < 0.005,
       JSON.stringify(glSum))
@@ -299,9 +305,9 @@ async function main() {
     })
     check('duplicate allocations to one invoice rejected (400)', dup.status === 400, `status=${dup.status} ${JSON.stringify(dup.json)?.slice(0, 160)}`)
     if (dup.status === 200) {
-      const allocRows = qAll('SELECT * FROM PaymentAllocation WHERE invoiceNo=?', target.invoiceNo)
+      const allocRows = (await qAll('SELECT * FROM PaymentAllocation WHERE invoiceNo=?', target.invoiceNo))
       const allocSum = allocRows.reduce((s, a) => s + a.amount, 0)
-      const invRow = q1('SELECT paidAmount FROM SalesInvoice WHERE invoiceNo=?', target.invoiceNo)
+      const invRow = (await q1('SELECT paidAmount FROM SalesInvoice WHERE invoiceNo=?', target.invoiceNo))
       check('no orphaned allocation rows left behind', Math.abs(allocSum - (invRow?.paidAmount ?? 0)) < 0.005,
         `allocSum=${allocSum} paidAmount=${invRow?.paidAmount}`)
     }
@@ -333,13 +339,10 @@ async function main() {
   const viewerHash = scryptSync('viewer-pass-123', viewerSalt, 64).toString('hex')
   const viewerEmail = 'viewer-audit@local.test'
   {
-    const d = new Database(DB_PATH)
-    try {
-      const org = d.prepare('SELECT id FROM Company WHERE isPlatform=0 ORDER BY createdAt ASC LIMIT 1').get()
-      d.prepare('DELETE FROM OrgUser WHERE email=?').run(viewerEmail)
-      d.prepare('INSERT INTO OrgUser (id,email,passwordHash,name,role,companyId,tokenVersion,createdAt) VALUES (?,?,?,?,?,?,?,?)')
-        .run('viewer-audit-0001', viewerEmail, `${viewerSalt}:${viewerHash}`, 'Audit Viewer', 'VIEWER', org.id, 0, new Date().toISOString())
-    } finally { d.close() }
+    const org = await auditDb.get('SELECT id FROM Company WHERE isPlatform=0 ORDER BY createdAt ASC LIMIT 1', [])
+    await auditDb.run('DELETE FROM OrgUser WHERE email=?', [viewerEmail])
+    await auditDb.run('INSERT INTO OrgUser (id,email,passwordHash,name,role,companyId,tokenVersion,createdAt) VALUES (?,?,?,?,?,?,?,?)',
+      ['viewer-audit-0001', viewerEmail, `${viewerSalt}:${viewerHash}`, 'Audit Viewer', 'VIEWER', org.id, 0, new Date()])
   }
   const savedCookie = cookie
   cookie = ''
@@ -354,8 +357,7 @@ async function main() {
   check('VIEWER cannot post invoices (403)', viewerWrite.status === 403, `status=${viewerWrite.status}`)
   cookie = savedCookie
   {
-    const d = new Database(DB_PATH)
-    try { d.prepare('DELETE FROM OrgUser WHERE email=?').run(viewerEmail) } finally { d.close() }
+    await auditDb.run('DELETE FROM OrgUser WHERE email=?', [viewerEmail])
   }
 
   // ---- 8. Security probes -------------------------------------------------
@@ -371,12 +373,12 @@ async function main() {
 
   // ---- 9. Backup / restore round-trip ------------------------------------
   const before = {
-    employees: q1('SELECT COUNT(*) c FROM Employee').c,
-    projects: q1('SELECT COUNT(*) c FROM Project').c,
-    boms: q1('SELECT COUNT(*) c FROM Bom').c,
-    workOrders: q1('SELECT COUNT(*) c FROM WorkOrder').c,
-    tasks: q1('SELECT COUNT(*) c FROM ProductionTask').c,
-    invoices: q1('SELECT COUNT(*) c FROM SalesInvoice').c,
+    employees: (await q1('SELECT COUNT(*) c FROM Employee')).c,
+    projects: (await q1('SELECT COUNT(*) c FROM Project')).c,
+    boms: (await q1('SELECT COUNT(*) c FROM Bom')).c,
+    workOrders: (await q1('SELECT COUNT(*) c FROM WorkOrder')).c,
+    tasks: (await q1('SELECT COUNT(*) c FROM ProductionTask')).c,
+    invoices: (await q1('SELECT COUNT(*) c FROM SalesInvoice')).c,
   }
   const backup = await req('GET', '/api/backup', undefined, {
     auth: false,
@@ -398,16 +400,16 @@ async function main() {
     check('backup restore succeeds (200)', restore.status === 200, `status=${restore.status} ${JSON.stringify(restore.json)?.slice(0, 220)}`)
     if (restore.status === 200) {
       const after = {
-        employees: q1('SELECT COUNT(*) c FROM Employee').c,
-        projects: q1('SELECT COUNT(*) c FROM Project').c,
-        boms: q1('SELECT COUNT(*) c FROM Bom').c,
-        workOrders: q1('SELECT COUNT(*) c FROM WorkOrder').c,
-        tasks: q1('SELECT COUNT(*) c FROM ProductionTask').c,
-        invoices: q1('SELECT COUNT(*) c FROM SalesInvoice').c,
+        employees: (await q1('SELECT COUNT(*) c FROM Employee')).c,
+        projects: (await q1('SELECT COUNT(*) c FROM Project')).c,
+        boms: (await q1('SELECT COUNT(*) c FROM Bom')).c,
+        workOrders: (await q1('SELECT COUNT(*) c FROM WorkOrder')).c,
+        tasks: (await q1('SELECT COUNT(*) c FROM ProductionTask')).c,
+        invoices: (await q1('SELECT COUNT(*) c FROM SalesInvoice')).c,
       }
       check('restore preserves all business + manufacturing row counts',
         JSON.stringify(before) === JSON.stringify(after), `before=${JSON.stringify(before)} after=${JSON.stringify(after)}`)
-      const users = q1('SELECT COUNT(*) c FROM OrgUser').c
+      const users = (await q1('SELECT COUNT(*) c FROM OrgUser')).c
       check('restore preserves org logins', users >= 2, `users=${users}`)
       const tb2 = await trialBalance()
       check('trial balance balanced after restore', tb2?.balanced === true, `Dr=${tb2?.totalDr} Cr=${tb2?.totalCr}`)
@@ -454,7 +456,7 @@ async function main() {
         req('POST', `/api/manufacturing/tasks/${t.id}/actions`, completeBody),
         req('POST', `/api/manufacturing/tasks/${t.id}/actions`, completeBody),
       ])
-      const issued = qAll("SELECT COUNT(*) c FROM StockLedger WHERE voucherNo=? AND voucherType='MFG_ISSUE'", t.taskNo)
+      const issued = (await qAll("SELECT COUNT(*) c FROM StockLedger WHERE voucherNo=? AND voucherType='MFG_ISSUE'", t.taskNo))
       check('concurrent task completions post exactly one material issue',
         (a.status === 200 ? 1 : 0) + (b.status === 200 ? 1 : 0) === 1 && issued[0]?.c === 1,
         `statuses=${a.status},${b.status} issueRows=${issued[0]?.c} a=${JSON.stringify(a.json)?.slice(0, 160)} b=${JSON.stringify(b.json)?.slice(0, 160)}`)
@@ -527,8 +529,8 @@ async function main() {
   check('platform key in query string is rejected (401)', queryKey.status === 401, `status=${queryKey.status}`)
 
   // ---- Cancellation / append-only reversal integrity ----
-  const netStock = (itemId) => q1('SELECT COALESCE(SUM(qtyIn - qtyOut),0) net FROM StockLedger WHERE itemId=? AND isCancelled=0', itemId)?.net ?? 0
-  const netBefore = netStock(stockItem.id)
+  const netStock = async (itemId) => (await q1('SELECT COALESCE(SUM(qtyIn - qtyOut),0) net FROM StockLedger WHERE itemId=? AND isCancelled=0', itemId))?.net ?? 0
+  const netBefore = await netStock(stockItem.id)
   const buy = await req('POST', '/api/purchase-invoices', {
     partyId: supplier.id, warehouseId: wh?.id,
     lines: [{ itemId: stockItem.id, qty: 5, rate: 20 }],
@@ -541,14 +543,14 @@ async function main() {
   check('sale for cancellation fixture posts (200)', sellToCancel.status === 200, `status=${sellToCancel.status}`)
   const cancelInv = data(sellToCancel)
   if (cancelInv?.id) {
-    const netAfterSale = netStock(stockItem.id)
+    const netAfterSale = await netStock(stockItem.id)
     check('sale reduces raw stock ledger by 2', Math.abs((netBefore + 5) - netAfterSale - 2) < 0.005, `before=${netBefore} afterSale=${netAfterSale}`)
     const cancel = await req('DELETE', `/api/sales-invoices/${cancelInv.id}`)
     check('sales invoice cancellation succeeds (200)', cancel.status === 200, `status=${cancel.status}`)
-    const status = q1('SELECT status FROM SalesInvoice WHERE id=?', cancelInv.id)?.status
-    const netAfterCancel = netStock(stockItem.id)
-    const gl = q1('SELECT COALESCE(SUM(debit),0) dr, COALESCE(SUM(credit),0) cr FROM AccountLedger WHERE voucherNo=? AND isCancelled=0', cancelInv.invoiceNo)
-    const reversedRows = q1('SELECT COUNT(*) c FROM AccountLedger WHERE voucherNo=? AND isCancelled=1', cancelInv.invoiceNo)?.c ?? 0
+    const status = (await q1('SELECT status FROM SalesInvoice WHERE id=?', cancelInv.id))?.status
+    const netAfterCancel = await netStock(stockItem.id)
+    const gl = (await q1('SELECT COALESCE(SUM(debit),0) dr, COALESCE(SUM(credit),0) cr FROM AccountLedger WHERE voucherNo=? AND isCancelled=0', cancelInv.invoiceNo))
+    const reversedRows = (await q1('SELECT COUNT(*) c FROM AccountLedger WHERE voucherNo=? AND isCancelled=1', cancelInv.invoiceNo))?.c ?? 0
     check('cancel marks invoice CANCELLED and restores raw stock',
       status === 'CANCELLED' && Math.abs((netBefore + 5) - netAfterCancel) < 0.005,
       `status=${status} before=${netBefore} afterCancel=${netAfterCancel}`)
@@ -576,7 +578,7 @@ async function main() {
     if (payId) {
       const cancelPay = await req('DELETE', `/api/payments/${payId}`)
       check('payment cancellation succeeds (200)', cancelPay.status === 200, `status=${cancelPay.status}`)
-      const paidAfter = q1('SELECT paidAmount FROM SalesInvoice WHERE id=?', paidInv.id)?.paidAmount
+      const paidAfter = (await q1('SELECT paidAmount FROM SalesInvoice WHERE id=?', paidInv.id))?.paidAmount
       const freeCancel = await req('DELETE', `/api/sales-invoices/${paidInv.id}`)
       check('cancelling payment releases invoice for cancellation',
         Math.abs(paidAfter ?? 0) < 0.005 && freeCancel.status === 200,
@@ -607,9 +609,9 @@ async function main() {
         req('POST', '/api/jobwork/job-cards', cardBody),
         req('POST', '/api/jobwork/job-cards', cardBody),
       ])
-      const processed = q1('SELECT processedQty, processedWeight FROM JobworkInwardItem WHERE id=?', line.id)?.processedQty
-      const cards = q1("SELECT COUNT(*) c FROM JobCard WHERE inwardId=? AND status='COMPLETED'", inw.id)?.c
-      const billed = q1("SELECT COALESCE(SUM(jp.qty),0) total FROM JobCardProcess jp JOIN JobCard jc ON jp.jobCardId=jc.id WHERE jc.inwardId=?", inw.id)?.total
+      const processed = (await q1('SELECT processedQty, processedWeight FROM JobworkInwardItem WHERE id=?', line.id))?.processedQty
+      const cards = (await q1("SELECT COUNT(*) c FROM JobCard WHERE inwardId=? AND status='COMPLETED'", inw.id))?.c
+      const billed = (await q1("SELECT COALESCE(SUM(jp.qty),0) total FROM JobCardProcess jp JOIN JobCard jc ON jp.jobCardId=jc.id WHERE jc.inwardId=?", inw.id))?.total
       const successes = (c1.status === 200 ? 1 : 0) + (c2.status === 200 ? 1 : 0)
       check('concurrent job cards cannot over-process / double-bill an inward',
         successes === 1 && (processed ?? 0) <= 10.5 && (billed ?? 0) <= 10.5 && cards === 1,
@@ -627,13 +629,13 @@ async function main() {
   })
   const goodSnap = data(goodBackup)
   if (goodSnap) {
-    const countTables = () => ({
-      invoices: q1('SELECT COUNT(*) c FROM SalesInvoice').c,
-      projects: q1('SELECT COUNT(*) c FROM Project').c,
-      tasks: q1('SELECT COUNT(*) c FROM ProductionTask').c,
-      users: q1('SELECT COUNT(*) c FROM OrgUser').c,
+    const countTables = async () => ({
+      invoices: (await q1('SELECT COUNT(*) c FROM SalesInvoice')).c,
+      projects: (await q1('SELECT COUNT(*) c FROM Project')).c,
+      tasks: (await q1('SELECT COUNT(*) c FROM ProductionTask')).c,
+      users: (await q1('SELECT COUNT(*) c FROM OrgUser')).c,
     })
-    const beforeLegacy = countTables()
+    const beforeLegacy = await countTables()
     const legacy = { version: 2, data: { ...goodSnap.data, orgUsers: goodSnap.data.orgUsers } }
     delete legacy.data.employees
     delete legacy.data.projects
@@ -643,17 +645,17 @@ async function main() {
     const legacyRestore = await req('POST', '/api/backup/restore', { confirm: 'RESTORE', snapshot: legacy }, {
       auth: false, headers: { 'x-platform-key': platformKey() }, captureCookie: false,
     })
-    const afterLegacy = countTables()
+    const afterLegacy = await countTables()
     check('legacy v2 snapshot refused before erasing manufacturing data',
       legacyRestore.status === 400 && JSON.stringify(beforeLegacy) === JSON.stringify(afterLegacy),
       `status=${legacyRestore.status} before=${JSON.stringify(beforeLegacy)} after=${JSON.stringify(afterLegacy)}`)
 
-    const beforeBad = countTables()
+    const beforeBad = await countTables()
     const corrupt = { version: 3, data: { ...goodSnap.data, company: [...goodSnap.data.company, { ...goodSnap.data.company[0] }] } }
     const badRestore = await req('POST', '/api/backup/restore', { confirm: 'RESTORE', snapshot: corrupt }, {
       auth: false, headers: { 'x-platform-key': platformKey() }, captureCookie: false,
     })
-    const afterBad = countTables()
+    const afterBad = await countTables()
     check('failed restore rolls back the entire transaction (no partial wipe)',
       badRestore.status >= 400 && JSON.stringify(beforeBad) === JSON.stringify(afterBad),
       `status=${badRestore.status} before=${JSON.stringify(beforeBad)} after=${JSON.stringify(afterBad)}`)
@@ -672,13 +674,14 @@ async function main() {
     failed: failures,
     results,
   }
-  writeFileSync('/home/user/erp/tests/audit-results.json', JSON.stringify(summary, null, 2))
+  writeFileSync(RESULTS_PATH, JSON.stringify(summary, null, 2))
   console.log(`\n=== ${summary.passed}/${summary.total} checks passed, ${summary.failed} failed ===`)
+  await auditDb.close()
   if (failures > 0) process.exitCode = 1
 }
 
 main().catch((e) => {
   console.error('SUITE ERROR', e)
-  writeFileSync('/home/user/erp/tests/audit-results.json', JSON.stringify({ ranAt: new Date().toISOString(), error: String(e), results }, null, 2))
+  writeFileSync(RESULTS_PATH, JSON.stringify({ ranAt: new Date().toISOString(), error: String(e), results }, null, 2))
   process.exitCode = 2
 })

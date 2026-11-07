@@ -30,7 +30,7 @@ export function OrderToCashWorkspace() {
   }
   const data = report.data
   return <div className="space-y-5">
-    <SectionHeading title="Quote to Cash" subtitle="Quotation revisions, sales orders, dispatch QC and challan invoicing" action={<Button variant="outline" className="h-11 gap-2" onClick={() => void report.reload()}><RefreshCw className="size-4" />Refresh</Button>} />
+    <SectionHeading title="Quote to Cash" description="Quotation revisions, sales orders, dispatch QC and challan invoicing" actions={<Button variant="outline" className="h-11 gap-2" onClick={() => void report.reload()}><RefreshCw className="size-4" />Refresh</Button>} />
     <Tabs defaultValue="quotations" className="space-y-4">
       <TabsList className="h-auto flex-wrap justify-start"><TabsTrigger value="quotations">Quotations</TabsTrigger><TabsTrigger value="orders">Sales Orders</TabsTrigger><TabsTrigger value="dispatch">Delivery & QC</TabsTrigger></TabsList>
       <TabsContent value="quotations">

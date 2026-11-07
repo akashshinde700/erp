@@ -5,7 +5,10 @@ CloudPanel VPS that serves https://www.menu.aetherdevsolutions.online (200.141.9
 Production shape:
   - Next.js 16 standalone build, PM2 process `manuflow`, port 3008
   - PM2 runs  <APP>/.next/standalone/server.js  with cwd = .next/standalone
-  - MySQL database `manufacture` (CloudPanel), schema via `prisma db push`
+  - MySQL database (CloudPanel), schema via checked-in Prisma migrations:
+    `prisma migrate deploy` (never `db push`). A database that predates the
+    migrations directory (built by db push) is baselined once with
+    `prisma migrate resolve --applied <init migration>` before deploy.
   - Env comes from <APP>/.env, which Next loads from .next/standalone/.env
     at runtime. The server's .env is the source of truth; this script never
     uploads or rewrites it.
@@ -18,7 +21,7 @@ Production shape:
 Run:
   python deploy.py              # build in staging, swap, restart, health check
   python deploy.py --check      # read-only status of the live site
-  python deploy.py --no-db-push # skip `prisma db push`
+  python deploy.py --no-db-push # skip `prisma migrate deploy`
   python deploy.py --reset-db   # DROP all live tables, recreate from this schema
   python deploy.py --rollback   # put the previous release back
   python deploy.py --stage      # upload + type check + lint + build in staging only
@@ -54,7 +57,7 @@ ARGS = sys.argv[1:]
 CHECK_ONLY = "--check" in ARGS
 ROLLBACK = "--rollback" in ARGS
 STAGE_ONLY = "--stage" in ARGS
-DB_PUSH = "--no-db-push" not in ARGS and not STAGE_ONLY
+DB_PUSH = "--no-db-push" not in ARGS and not STAGE_ONLY  # name kept for the flag; runs migrate deploy
 # --reset-db: DROP every table in the live database and recreate it from this
 # repo's schema (used once, to replace ManuFlow with ForgeERP). The pre-deploy
 # dump in ~/backups/predeploy/ is the only way back.
@@ -117,7 +120,7 @@ LEGACY_MARKER = "ManuFlow ERP"
 
 # Source that gets uploaded. Everything else (node_modules, .next, .env,
 # deploy files, docs) stays local.
-UPLOAD_DIRS = ["src", "prisma", "scripts", "public"]
+UPLOAD_DIRS = ["src", "prisma", "scripts", "public"]  # prisma/ includes migrations/
 UPLOAD_FILES = [
     "package.json", "package-lock.json", "next.config.ts", "tsconfig.json",
     "tailwind.config.ts", "postcss.config.mjs", "eslint.config.mjs",
@@ -400,6 +403,54 @@ def rollback(ssh):
         raise RuntimeError(f"rolled-back release {prev} is not healthy either -- check pm2 logs {PM2_NAME}")
 
 
+# First migration in prisma/migrations: the schema the live database was built
+# with (db push, 2026-11-06). A database that has the tables but no
+# _prisma_migrations history is baselined by marking exactly this one applied.
+BASELINE_MIGRATION = "20261106000000_init"
+
+
+def migrate_database(ssh):
+    """Apply checked-in migrations with `prisma migrate deploy`.
+
+    Three states are handled, nothing else is touched:
+      * fresh database (no tables)         -> deploy applies every migration
+      * db-push database (no history)      -> verify it matches the baseline
+                                              schema, mark the baseline applied,
+                                              then deploy the rest
+      * migrated database                  -> deploy applies what is pending
+    A pending migration that would violate data (e.g. the unique index on
+    PurchaseInvoice(partyId, supplierInvoiceNo)) stops the deploy before the
+    swap; nothing is dropped automatically."""
+    out, _, _ = run(ssh, f"cd {STAGING} && npx prisma migrate status 2>&1 | tail -12", timeout=300)
+    if "No migration found" in out or "migration_lock" in out and "not found" in out:
+        raise RuntimeError("prisma/migrations is missing from the upload -- aborting")
+    if BASELINE_MIGRATION in out:
+        # The baseline is still pending: either a fresh database or one built by
+        # `db push` before migrations existed. Tell them apart by diffing the live
+        # schema against the schema the baseline was generated from (bundled next
+        # to the migration; `--to-migrations` would need a shadow database that
+        # CloudPanel site users cannot create).
+        baseline_schema = f"{STAGING}/prisma/migrations/{BASELINE_MIGRATION}/schema.baseline.prisma"
+        run(ssh, f"test -f {baseline_schema}", check=True)
+        diff, _, _ = run(ssh, f"cd {STAGING} && npx prisma migrate diff "
+                              f"--from-url \"$(grep -E '^DATABASE_URL=' .env | cut -d= -f2- | tr -d '\"')\" "
+                              f"--to-schema-datamodel {baseline_schema} --script 2>&1 | grep -vE '^--|^$'",
+                         timeout=300, quiet=True)
+        if not diff.strip():
+            p("  database already has the baseline schema (db-push era) -- recording the baseline as applied")
+            run(ssh, f"cd {STAGING} && npx prisma migrate resolve --applied {BASELINE_MIGRATION} 2>&1 | tail -3",
+                timeout=300, check=True)
+        elif "CREATE TABLE `Company`" in diff:
+            p("  empty database -- migrate deploy will create every table")
+        else:
+            raise RuntimeError("live database has tables but does not match the baseline migration -- "
+                               "refusing to baseline it; first lines of the diff:\n" + diff[:1500])
+    run(ssh, f"cd {STAGING} && npx prisma migrate deploy 2>&1 | tail -15", timeout=900, check=True)
+    out, _, _ = run(ssh, f"cd {STAGING} && npx prisma migrate status 2>&1 | tail -3", timeout=300)
+    if "Database schema is up to date" not in out:
+        raise RuntimeError("migrations did not converge -- see `prisma migrate status` output above")
+
+
 def deploy(ssh):
     stamp = time.strftime("%Y%m%d-%H%M%S")
 
@@ -440,11 +491,7 @@ def deploy(ssh):
     run(ssh, f"cd {STAGING} && npm install --no-audit --no-fund 2>&1 | tail -15", timeout=1800, check=True)
     run(ssh, f"cd {STAGING} && npx prisma generate 2>&1 | tail -5", check=True)
     if DB_PUSH:
-        # No --accept-data-loss: a schema change that would drop data makes
-        # this fail and the deploy stops before touching the running app.
-        reset = " --force-reset" if RESET_DB else ""
-        run(ssh, f"cd {STAGING} && npx prisma db push --skip-generate{reset} 2>&1 | tail -15",
-            timeout=600, check=True)
+        migrate_database(ssh)
 
     if STAGE_ONLY:
         banner("[3b] Type check + lint")

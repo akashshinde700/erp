@@ -2,6 +2,7 @@ import { handleError, ok } from '@/lib/api'
 import { db } from '@/lib/db'
 import { logAudit } from '@/lib/audit'
 import { requirePlatformAdmin } from '@/lib/platform'
+import { WORKFLOW_MODELS_CHILDREN_FIRST, delegate } from '@/lib/backup-tables'
 
 /**
  * GET /api/backup — full JSON snapshot of EVERY table (download).
@@ -13,6 +14,9 @@ import { requirePlatformAdmin } from '@/lib/platform'
  * Order → ProductionTask) and the platform-console tables. v1/v2 snapshots
  * omitted these, so restoring one silently destroyed production history and
  * even failed on FK constraints. Never ship a snapshot that cannot round-trip.
+ * v4: adds the workflow tables (procurement, quote-to-cash, QC, lots/serials,
+ *     production receipts, schedules, advances, refunds) under data.workflow,
+ *     keyed by Prisma model name (see src/lib/backup-tables.ts).
  */
 export async function GET(req: Request) {
   try {
@@ -74,9 +78,14 @@ export async function GET(req: Request) {
       db.counter.findMany(),
       db.auditLog.findMany(),
     ])
-    await logAudit('BACKUP', 'Backup', undefined, 'snapshot downloaded (v3, full schema)', 'platform-admin')
+    const workflowEntries = await Promise.all(
+      WORKFLOW_MODELS_CHILDREN_FIRST.map(async (model) => [model, await delegate(db, model).findMany()] as const)
+    )
+    const workflow = Object.fromEntries(workflowEntries) as Record<string, unknown[]>
+    const workflowCounts = Object.fromEntries(workflowEntries.map(([model, rows]) => [model, rows.length]))
+    await logAudit('BACKUP', 'Backup', undefined, 'snapshot downloaded (v4, full schema)', 'platform-admin')
     return ok({
-      version: 3,
+      version: 4,
       takenAt: new Date().toISOString(),
       counts: {
         company: company.length, plans: plans.length, orgUsers: orgUsers.length, parties: parties.length,
@@ -88,6 +97,7 @@ export async function GET(req: Request) {
         employees: employees.length, projects: projects.length, boms: boms.length,
         workOrders: workOrders.length, productionTasks: productionTasks.length,
         platformInquiries: platformInquiries.length, platformBlogPosts: platformBlogPosts.length,
+        workflow: workflowCounts,
       },
       data: {
         company, plans, orgUsers, parties, items, warehouses, processes, partyProcessRates,
@@ -96,6 +106,7 @@ export async function GET(req: Request) {
         employees, projects, boms, workOrders, productionTasks,
         platformInquiries, platformBlogPosts,
         counters, auditLogs,
+        workflow,
       },
     })
   } catch (e) {

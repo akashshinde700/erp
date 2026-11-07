@@ -2,6 +2,7 @@ import { handleError, ok, fail } from '@/lib/api'
 import { db } from '@/lib/db'
 import { logAudit } from '@/lib/audit'
 import { requirePlatformAdmin } from '@/lib/platform'
+import { WORKFLOW_MODELS_CHILDREN_FIRST, WORKFLOW_MODELS_PARENTS_FIRST, delegate } from '@/lib/backup-tables'
 
 /**
  * POST /api/backup/restore — {confirm:'RESTORE', snapshot}
@@ -12,11 +13,13 @@ import { requirePlatformAdmin } from '@/lib/platform'
  * console). v1/v2 snapshots predate those tables: restoring one into an
  * install that has production history is REFUSED rather than silently
  * erasing it (the old restore also failed on FK constraints).
+ * v4 snapshots add the workflow tables (data.workflow); a v3 snapshot is
+ * refused the same way when the install already has workflow rows.
  */
 
 interface Snapshot {
   version?: number
-  data?: Record<string, unknown[]>
+  data?: Record<string, unknown[]> & { workflow?: Record<string, unknown[]> }
 }
 
 export async function POST(req: Request) {
@@ -25,7 +28,7 @@ export async function POST(req: Request) {
     const body = (await req.json()) as { confirm?: string; snapshot?: Snapshot }
     if (body.confirm !== 'RESTORE') return fail('Type RESTORE to confirm the destructive restore', 400)
     const snap = body.snapshot
-    if (!snap || ![1, 2, 3].includes(snap.version ?? 0) || !snap.data) {
+    if (!snap || ![1, 2, 3, 4].includes(snap.version ?? 0) || !snap.data) {
       return fail('Invalid snapshot — export a backup first', 400)
     }
     // A restore that would leave ZERO org logins re-opens the anonymous
@@ -57,9 +60,23 @@ export async function POST(req: Request) {
       }
     }
 
+    if ((snap.version ?? 1) < 4 && !snap.data.workflow) {
+      const counts = await Promise.all(WORKFLOW_MODELS_CHILDREN_FIRST.map((model) => delegate(db, model).count()))
+      const existing = counts.reduce((sum, n) => sum + n, 0)
+      if (existing > 0) {
+        return fail(
+          `This is a v${snap.version} snapshot from before the procurement / quote-to-cash / QC / traceability tables existed. Restoring it would permanently erase ${existing} workflow row(s). Download a fresh backup (v4) and restore that instead.`,
+          400
+        )
+      }
+    }
+
     await db.$transaction(
       async (tx) => {
         // ---- children → parents wipe (FK-safe, full schema) ----
+        // Workflow tables first: they reference payments, work orders, items,
+        // parties and warehouses (order from src/lib/backup-tables.ts).
+        for (const model of WORKFLOW_MODELS_CHILDREN_FIRST) await delegate(tx, model).deleteMany({})
         await tx.paymentAllocation.deleteMany({})
         await tx.jobCardProcess.deleteMany({})
         await tx.jobworkCertificate.deleteMany({})
@@ -163,6 +180,14 @@ export async function POST(req: Request) {
           if (Array.isArray(followUps) && followUps.length) await tx.platformInquiryFollowUp.createMany({ data: followUps as never })
         }
         if (d.platformBlogPosts?.length) await tx.platformBlogPost.createMany({ data: d.platformBlogPosts as never })
+
+        // ---- workflow tables (v4), parents → children; after every legacy
+        // parent (company, parties, items, warehouses, payments, work orders) ----
+        const workflow = d.workflow ?? {}
+        for (const model of WORKFLOW_MODELS_PARENTS_FIRST) {
+          const rows = workflow[model]
+          if (Array.isArray(rows) && rows.length) await delegate(tx, model).createMany({ data: rows })
+        }
 
         if (d.counters?.length) await tx.counter.createMany({ data: d.counters as never })
         if (d.orgUsers?.length) await tx.orgUser.createMany({ data: d.orgUsers as never })

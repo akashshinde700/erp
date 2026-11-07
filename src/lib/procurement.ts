@@ -76,9 +76,10 @@ export async function createPurchaseOrder(input: { supplierId: string; requisiti
     if (!supplier || !supplier.types.split(',').includes('SUPPLIER')) throw new BusinessError('Active supplier not found', 404)
     const items = await loadItems(tx, input.lines)
     if (input.overReceiptPct !== undefined && (input.overReceiptPct < 0 || input.overReceiptPct > 25)) throw new BusinessError('Over-receipt tolerance must be between 0 and 25%')
-    let requisition = null
+    const requisition = input.requisitionId
+      ? await tx.purchaseRequisition.findFirst({ where: { id: input.requisitionId, companyId: company.id }, include: { lines: true } })
+      : null
     if (input.requisitionId) {
-      requisition = await tx.purchaseRequisition.findFirst({ where: { id: input.requisitionId, companyId: company.id }, include: { lines: true } })
       if (!requisition || requisition.status !== 'APPROVED') throw new BusinessError('Purchase order requires an approved requisition', 409)
       for (const line of input.lines) {
         const source = requisition.lines.find((x) => x.itemId === line.itemId)

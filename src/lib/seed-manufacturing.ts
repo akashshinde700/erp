@@ -7,6 +7,7 @@
  */
 import { db } from './db'
 import { postOpeningStock } from './services'
+import { postProductionReceipt } from './production-output'
 import {
   createEmployee,
   createProject,
@@ -39,6 +40,8 @@ export interface ManufacturingSeedDeps {
   weldRod: Ref
   paint: Ref
   bolts: Ref
+  main: Ref // finished-goods warehouse
+  fgTank: Ref // FG stock item received from the completed tank work order
 }
 
 /** Raw materials the BOMs consume — created (with opening stock) when missing. */
@@ -48,10 +51,11 @@ const FABRICATION_ITEMS = [
   { key: 'weldRod', code: 'RM-2004', name: 'Welding Rod E7018', groupName: 'Consumables', hsn: '831110', uom: 'KG', saleRate: 140, costRate: 110, reorderLevel: 50, openingQty: 500 },
   { key: 'paint', code: 'RM-2005', name: 'Epoxy Paint Zinc Primer', groupName: 'Consumables', hsn: '320990', uom: 'LTR', saleRate: 320, costRate: 240, reorderLevel: 40, openingQty: 200 },
   { key: 'bolts', code: 'RM-2006', name: 'Bolts & Nuts M16 HDG', groupName: 'Consumables', hsn: '731815', uom: 'PCS', saleRate: 45, costRate: 30, reorderLevel: 200, openingQty: 1000 },
+  { key: 'fgTank', code: 'FG-2001', name: 'Storage Tank 20KL SS304 (fabricated)', groupName: 'Finished Goods', hsn: '730900', uom: 'KG', saleRate: 120, costRate: 70, reorderLevel: 0, openingQty: 0 },
 ] as const
 
 export async function seedManufacturingDemo(deps: ManufacturingSeedDeps) {
-  const { mahindra, gujarat, bengal, msPlate, msPipe, weldRod, paint, bolts } = deps
+  const { mahindra, gujarat, bengal, msPlate, msPipe, weldRod, paint, bolts, main, fgTank } = deps
   // =========================================================================
   // Manufacturing chain (Project → BOM → Work Order → Tasks → Completion)
   // Everything below runs through the REAL manufacturing services, so
@@ -105,22 +109,27 @@ export async function seedManufacturingDemo(deps: ManufacturingSeedDeps) {
   // Operation tasks (job cards). Completed ones consume real stock.
   const cut = await createTask({ workOrderId: canopyWo.id, operation: 'CUTTING', seq: 1, plannedQty: 525 })
   await assignTask(cut.id, { employeeId: prakash.id, dueDate: daysAgo(30) })
+  await startTask(cut.id) // lifecycle guard: ASSIGNED -> IN_PROGRESS -> COMPLETED
   await completeTask(cut.id, { actualQty: 515, rejectionQty: 10, hours: 16, materialItemId: msPlate.id, materialQty: 520, completedAt: daysAgo(31) })
 
   const laser = await createTask({ workOrderId: canopyWo.id, operation: 'CNC_LASER', seq: 2, plannedQty: 100 })
   await assignTask(laser.id, { employeeId: imran.id, dueDate: daysAgo(26) })
+  await startTask(laser.id) // lifecycle guard: ASSIGNED -> IN_PROGRESS -> COMPLETED
   await completeTask(laser.id, { actualQty: 100, hours: 8, completedAt: daysAgo(26) })
 
   const bend = await createTask({ workOrderId: canopyWo.id, operation: 'BENDING', seq: 3, plannedQty: 100 })
   await assignTask(bend.id, { employeeId: prakash.id, dueDate: daysAgo(22) })
+  await startTask(bend.id) // lifecycle guard: ASSIGNED -> IN_PROGRESS -> COMPLETED
   await completeTask(bend.id, { actualQty: 100, hours: 6, materialItemId: msPipe.id, materialQty: 216, completedAt: daysAgo(22) })
 
   const weld = await createTask({ workOrderId: canopyWo.id, operation: 'WELDING', seq: 4, plannedQty: 100 })
   await assignTask(weld.id, { employeeId: sandeep.id, dueDate: daysAgo(15) })
+  await startTask(weld.id) // lifecycle guard: ASSIGNED -> IN_PROGRESS -> COMPLETED
   await completeTask(weld.id, { actualQty: 100, rejectionQty: 2, hours: 24, materialItemId: weldRod.id, materialQty: 25, completedAt: daysAgo(14) })
 
   const asm = await createTask({ workOrderId: canopyWo.id, operation: 'ASSEMBLY', seq: 5, plannedQty: 100 })
   await assignTask(asm.id, { employeeId: ravi.id, dueDate: daysAgo(8) })
+  await startTask(asm.id) // lifecycle guard: ASSIGNED -> IN_PROGRESS -> COMPLETED
   await completeTask(asm.id, { actualQty: 98, hours: 12, materialItemId: bolts.id, materialQty: 100, completedAt: daysAgo(7) })
 
   // Painting on the floor right now; finishing unassigned + OVERDUE (pending board demo)
@@ -187,16 +196,26 @@ export async function seedManufacturingDemo(deps: ManufacturingSeedDeps) {
   })
   const tCut = await createTask({ workOrderId: tankWo.id, operation: 'CUTTING', seq: 1, plannedQty: 2288 })
   await assignTask(tCut.id, { employeeId: prakash.id, dueDate: daysAgo(75) })
+  await startTask(tCut.id) // lifecycle guard: ASSIGNED -> IN_PROGRESS -> COMPLETED
   await completeTask(tCut.id, { actualQty: 2280, rejectionQty: 8, hours: 40, materialItemId: msPlate.id, materialQty: 2200, completedAt: daysAgo(74) })
   const tWeld = await createTask({ workOrderId: tankWo.id, operation: 'WELDING', seq: 2, plannedQty: 100 })
   await assignTask(tWeld.id, { employeeId: sandeep.id, dueDate: daysAgo(60) })
+  await startTask(tWeld.id) // lifecycle guard: ASSIGNED -> IN_PROGRESS -> COMPLETED
   await completeTask(tWeld.id, { actualQty: 100, rejectionQty: 1, hours: 55, materialItemId: weldRod.id, materialQty: 45, completedAt: daysAgo(58) })
   const tPaint = await createTask({ workOrderId: tankWo.id, operation: 'PAINTING', seq: 3, plannedQty: 100 })
   await assignTask(tPaint.id, { employeeId: anita.id, dueDate: daysAgo(45) })
+  await startTask(tPaint.id) // lifecycle guard: ASSIGNED -> IN_PROGRESS -> COMPLETED
   await completeTask(tPaint.id, { actualQty: 100, hours: 18, materialItemId: paint.id, materialQty: 55, completedAt: daysAgo(44) })
   const tFin = await createTask({ workOrderId: tankWo.id, operation: 'FINISHING', seq: 4, plannedQty: 100 })
   await assignTask(tFin.id, { employeeId: vilas.id, dueDate: daysAgo(20) })
+  await startTask(tFin.id) // lifecycle guard: ASSIGNED -> IN_PROGRESS -> COMPLETED
   await completeTask(tFin.id, { actualQty: 100, hours: 10, completedAt: daysAgo(19) })
+  // WO closure needs QC-accepted finished goods that settle the WIP (planned output
+  // = max task plannedQty); the receipt posts MFG_RECEIPT stock + WIP settlement GL.
+  await postProductionReceipt({
+    workOrderId: tankWo.id, outputItemId: fgTank.id, warehouseId: main.id, date: daysAgo(12),
+    batchNo: 'TK-20KL-001', manufacturedAt: daysAgo(14), producedQty: 2288, acceptedQty: 2288,
+  })
   await completeWorkOrder(tankWo.id)
   await completeProject(tank.id)
 
@@ -239,7 +258,7 @@ export async function seedManufacturingIfEmpty() {
       item = await db.item.create({
         data: { code: def.code, name: def.name, groupName: def.groupName, hsn: def.hsn, uom: def.uom, gstRate: 18, saleRate: def.saleRate, costRate: def.costRate, reorderLevel: def.reorderLevel },
       })
-      created.push({ itemId: item.id, qty: def.openingQty, rate: def.costRate })
+      if (def.openingQty > 0) created.push({ itemId: item.id, qty: def.openingQty, rate: def.costRate })
     }
     items[def.key] = item
   }
@@ -250,6 +269,7 @@ export async function seedManufacturingIfEmpty() {
   const mfg = await seedManufacturingDemo({
     mahindra, gujarat, bengal,
     msPlate: items.msPlate, msPipe: items.msPipe, weldRod: items.weldRod, paint: items.paint, bolts: items.bolts,
+    main, fgTank: items.fgTank,
   })
   return { seeded: true, company: company.name, itemsCreated: created.length, ...mfg }
 }

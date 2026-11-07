@@ -851,16 +851,22 @@ export async function cashBankBookReport(from: string, to: string) {
     db.accountLedger.findMany({
       where: { isCancelled: false, account: { in: accounts }, date: { gte: fromDate, lte: toDate } },
       orderBy: [{ date: 'asc' }, { createdAt: 'asc' }],
-      include: { party: { select: { id: true, code: true, name: true } } },
     }),
   ])
+  // AccountLedger.partyId carries no Prisma relation (append-only ledger rows
+  // must survive party edits), so the party label is joined by hand.
+  const partyIds = [...new Set(periodRows.map((row) => row.partyId).filter((id): id is string => !!id))]
+  const parties = partyIds.length
+    ? await db.party.findMany({ where: { id: { in: partyIds } }, select: { id: true, code: true, name: true } })
+    : []
+  const partyById = new Map(parties.map((p) => [p.id, p]))
   const opening = { CASH: 0, BANK: 0 }
   for (const row of openingRows) opening[row.account as 'CASH' | 'BANK'] = r2(opening[row.account as 'CASH' | 'BANK'] + row.debit - row.credit)
   const running = { ...opening }
   const rows = periodRows.map((row) => {
     const account = row.account as 'CASH' | 'BANK'
     running[account] = r2(running[account] + row.debit - row.credit)
-    return { ...row, movement: r2(row.debit - row.credit), balance: running[account] }
+    return { ...row, party: row.partyId ? partyById.get(row.partyId) ?? null : null, movement: r2(row.debit - row.credit), balance: running[account] }
   })
   const accountSummary = accounts.map((account) => {
     const entries = periodRows.filter((row) => row.account === account)

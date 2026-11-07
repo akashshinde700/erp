@@ -20,6 +20,7 @@ import {
   syncPartyOpeningBalance,
 } from './services'
 import { seedManufacturingDemo } from './seed-manufacturing'
+import { WORKFLOW_MODELS_CHILDREN_FIRST, delegate } from './backup-tables'
 
 const daysAgo = (n: number): Date => {
   const d = new Date()
@@ -41,6 +42,9 @@ export async function seedDatabase(force = false) {
     // a half-deleted database (transaction-safety invariant).
     await db.$transaction(
       async (tx) => {
+        // Workflow tables first (children before parents) — one shared list with
+        // backup/restore, so a new model is added in exactly one place.
+        for (const model of WORKFLOW_MODELS_CHILDREN_FIRST) await delegate(tx, model).deleteMany({})
         await tx.productionTask.deleteMany({})
         await tx.workOrderLine.deleteMany({})
         await tx.workOrder.deleteMany({})
@@ -224,6 +228,9 @@ export async function seedDatabase(force = false) {
   const bolts = await db.item.create({
     data: { code: 'RM-2006', name: 'Bolts & Nuts M16 HDG', groupName: 'Consumables', hsn: '731815', uom: 'PCS', gstRate: 18, saleRate: 45, costRate: 30, reorderLevel: 200 },
   })
+  const fgTank = await db.item.create({
+    data: { code: 'FG-2001', name: 'Storage Tank 20KL SS304 (fabricated)', groupName: 'Finished Goods', hsn: '730900', uom: 'KG', gstRate: 18, saleRate: 120, costRate: 70, reorderLevel: 0 },
+  })
 
   // ---------- Party-specific process rates (Mahindra contract) ----------
   await db.partyProcessRate.createMany({
@@ -370,7 +377,7 @@ export async function seedDatabase(force = false) {
 
   // Manufacturing chain lives in seed-manufacturing.ts so it can also be added
   // to an already-seeded demo org (POST /api/seed?manufacturing=1).
-  const mfg = await seedManufacturingDemo({ mahindra, gujarat, bengal, msPlate, msPipe, weldRod, paint, bolts })
+  const mfg = await seedManufacturingDemo({ mahindra, gujarat, bengal, msPlate, msPipe, weldRod, paint, bolts, main, fgTank })
 
   // Unallocated advance left on Gujarat shows in outstanding; verify trial balance
   const tb = await db.accountLedger.groupBy({ by: ['account'], _sum: { debit: true, credit: true } })
@@ -430,7 +437,7 @@ export async function seedDatabase(force = false) {
     seeded: true,
     company: company.name,
     counts: {
-      parties: 6, items: 10, processes: 6, warehouses: 2,
+      parties: 6, items: 11, processes: 6, warehouses: 2, // 11 = 3 FG + 2 RM + service + 4 fabrication + FG-2001 tank
       purchaseInvoices: 2, salesInvoices: 4, payments: 3,
       jobworkInwards: 2, jobCards: 2, certificates: 1,
       employees: 6, projects: 3, boms: 3, workOrders: 2, productionTasks: 12,

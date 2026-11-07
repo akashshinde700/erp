@@ -51,7 +51,7 @@ export function ProcurementWorkspace() {
 
   const data = procurement.data
   return <div className="space-y-5">
-    <SectionHeading title="Controlled Procurement & Returns" subtitle="Approval, PO, GRN, QC, three-way matching and commercial returns" action={<Button variant="outline" className="h-11 gap-2" onClick={() => { void procurement.reload(); void returns.reload() }}><RefreshCw className="size-4" />Refresh</Button>} />
+    <SectionHeading title="Controlled Procurement & Returns" description="Approval, PO, GRN, QC, three-way matching and commercial returns" actions={<Button variant="outline" className="h-11 gap-2" onClick={() => { void procurement.reload(); void returns.reload() }}><RefreshCw className="size-4" />Refresh</Button>} />
     <Tabs defaultValue="requisitions" className="space-y-4">
       <TabsList className="h-auto flex-wrap justify-start">
         <TabsTrigger value="requisitions">Requisitions</TabsTrigger><TabsTrigger value="orders">Purchase Orders</TabsTrigger><TabsTrigger value="receipts">GRN & QC</TabsTrigger><TabsTrigger value="matching">Three-way Match</TabsTrigger><TabsTrigger value="returns">Returns & Notes</TabsTrigger>

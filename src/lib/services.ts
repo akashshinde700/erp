@@ -482,7 +482,7 @@ export interface PostPaymentInput {
 
 export async function postPayment(input: PostPaymentInput) {
   return db.$transaction(async (tx) => {
-    await getCompany(tx) // company must exist
+    const company = await getCompany(tx) // company must exist
     const party = await tx.party.findUnique({ where: { id: input.partyId } })
     if (!party) throw new BusinessError('Party not found', 404)
     if (!(input.amount > 0)) throw new BusinessError('Payment amount must be positive')
@@ -581,15 +581,22 @@ export async function postPayment(input: PostPaymentInput) {
           ]
     await postGl(tx, { date, voucherType: 'PAYMENT', voucherNo: paymentNo }, gl)
 
+    const unallocated = r2(payment.amount - allocSum)
+    if (unallocated > EPS) {
+      await tx.partyAdvance.create({ data: { companyId: company.id, partyId: party.id, paymentId: payment.id, advanceType: input.type === 'RECEIPT' ? 'CUSTOMER' : 'SUPPLIER', originalAmount: unallocated } })
+    }
+
     return payment
   })
 }
 
 export async function cancelPayment(id: string) {
   return db.$transaction(async (tx) => {
-    const pay = await tx.payment.findUnique({ where: { id }, include: { allocations: true } })
+    const pay = await tx.payment.findUnique({ where: { id }, include: { allocations: true, advances: true, refunds: true } })
     if (!pay) throw new BusinessError('Payment not found', 404)
     if (pay.status === 'CANCELLED') throw new BusinessError('Payment is already cancelled')
+    if (pay.advances.some((advance) => advance.appliedAmount > EPS)) throw new BusinessError('Advance was already applied to invoices — reverse those applications first')
+    await tx.partyAdvance.updateMany({ where: { paymentId: pay.id }, data: { status: 'CANCELLED' } })
     for (const a of pay.allocations) {
       if (a.invoiceType === 'SALES') {
         await tx.salesInvoice.updateMany({

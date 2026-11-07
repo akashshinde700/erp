@@ -3,6 +3,8 @@
 **Branch:** `arena/c87300cc-erp` · **Base commit:** `cf7a911` · **Checkpoint:** 2026-11-07 (Asia/Kolkata)
 **Status:** ACTIVE WORK IN PROGRESS — this is a saved checkpoint, **not** a final production sign-off.
 
+> **2026-11-07 payment schedule/advance/refund continuation (branch `arena/16264bf2-erp`):** added sales-order milestone schedules whose total must reconcile to the order; overdue state derives from due dates. Unallocated customer receipts/supplier payments create durable advances, which can be partially applied only to active same-party invoices of the correct side with outstanding/available caps. Posted sales/purchase returns can be refunded up to their unrefunded adjustment value with atomic cash/bank and party-control GL; payment cancellation is blocked after advance application.
+
 > **2026-11-07 Quality UI continuation (branch `arena/16264bf2-erp`):** Manufacturing now includes a Quality workspace with pass/fail/quarantine KPIs, inspection audit table, versioned template creation with dynamic numeric/text/boolean parameters, and measurement entry that invokes server-side automatic evaluation. Failed measurements remain non-acceptable and default to quarantine.
 
 > **2026-11-07 traceability UI continuation (branch `arena/16264bf2-erp`):** Inventory now exposes a Lots & Serials workspace with live lot balances, warehouse, manufacture/expiry status, source document, available serial count and parent/child genealogy. A guarded recall action requires a reason and recursively recalls descendant lots/available serials.

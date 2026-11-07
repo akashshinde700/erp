@@ -69,6 +69,9 @@ model Company {
   inventoryLots        InventoryLot[]
   serialNumbers        SerialNumber[]
   lotMovements         LotMovement[]
+  paymentSchedules     PaymentSchedule[]
+  partyAdvances        PartyAdvance[]
+  refundAllocations    RefundAllocation[]
   itemVendors          ItemVendor[]
   returnDocuments      ReturnDocument[]
   quotations           SalesQuotation[]
@@ -199,6 +202,8 @@ model Party {
   returnDocuments  ReturnDocument[]
   quotations       SalesQuotation[]
   salesOrders      SalesOrder[]
+  paymentSchedules PaymentSchedule[]
+  partyAdvances    PartyAdvance[]
 
   @@index([types])
 }
@@ -1132,6 +1137,7 @@ model SalesOrder {
   createdAt      DateTime @default(now())
   lines          SalesOrderLine[]
   challans       DeliveryChallan[]
+  paymentSchedules PaymentSchedule[]
 
   @@unique([companyId, orderNo])
   @@index([companyId, status, date])
@@ -1235,6 +1241,7 @@ model ReturnDocument {
   createdBy       String?
   createdAt       DateTime @default(now())
   lines           ReturnDocumentLine[]
+  refunds         RefundAllocation[]
 
   @@unique([companyId, returnNo])
   @@unique([companyId, adjustmentNo])
@@ -1268,6 +1275,61 @@ model ReturnDocumentLine {
   @@index([itemId])
 }
 
+// ---------- Payment schedules, advances and refunds ----------
+
+model PaymentSchedule {
+  id           String @id @default(cuid())
+  companyId    String
+  company      Company @relation(fields: [companyId], references: [id])
+  salesOrderId String
+  salesOrder   SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  partyId      String
+  party        Party @relation(fields: [partyId], references: [id])
+  milestone    String
+  dueDate      DateTime
+  amount       Float
+  paidAmount   Float @default(0)
+  status       String @default("PENDING") // PENDING | PART_PAID | PAID | OVERDUE | CANCELLED
+  createdAt    DateTime @default(now())
+
+  @@unique([salesOrderId, milestone])
+  @@index([companyId, dueDate, status])
+  @@index([partyId])
+}
+
+model PartyAdvance {
+  id          String @id @default(cuid())
+  companyId   String
+  company     Company @relation(fields: [companyId], references: [id])
+  partyId     String
+  party       Party @relation(fields: [partyId], references: [id])
+  paymentId   String
+  payment     Payment @relation(fields: [paymentId], references: [id])
+  advanceType String // CUSTOMER | SUPPLIER
+  originalAmount Float
+  appliedAmount  Float @default(0)
+  status      String @default("OPEN") // OPEN | PART_APPLIED | APPLIED | CANCELLED
+  createdAt   DateTime @default(now())
+
+  @@unique([paymentId])
+  @@index([companyId, partyId, status])
+}
+
+model RefundAllocation {
+  id               String @id @default(cuid())
+  companyId        String
+  company          Company @relation(fields: [companyId], references: [id])
+  returnDocumentId String
+  returnDocument   ReturnDocument @relation(fields: [returnDocumentId], references: [id])
+  paymentId        String
+  payment          Payment @relation(fields: [paymentId], references: [id])
+  amount           Float
+  createdAt        DateTime @default(now())
+
+  @@unique([paymentId])
+  @@index([companyId, returnDocumentId])
+}
+
 // ---------- Payments ----------
 
 model Payment {
@@ -1285,6 +1347,8 @@ model Payment {
   createdAt  DateTime @default(now())
 
   allocations PaymentAllocation[]
+  advances PartyAdvance[]
+  refunds RefundAllocation[]
 
   @@index([partyId])
   @@index([date])

@@ -96,6 +96,66 @@ export async function stockSummaryReport() {
   })
 }
 
+// ---------- Inventory planning: ageing + reorder suggestions ----------
+
+/**
+ * Practical stores/planning view from Absolute ERP + Vyapar research.
+ * Company-owned stock only: customer JOBWORK_IN material must never satisfy a
+ * reorder requirement. Suggestions are advisory (reorder level − closing),
+ * not dummy purchase orders and do not mutate stock or books.
+ */
+export async function inventoryPlanningReport(asOf = new Date()) {
+  const [summary, movements] = await Promise.all([
+    stockSummaryReport(),
+    db.stockLedger.findMany({
+      where: { isCancelled: false, voucherType: { not: 'JOBWORK_IN' } },
+      orderBy: [{ postingDate: 'desc' }, { createdAt: 'desc' }],
+      select: { itemId: true, postingDate: true, voucherType: true, voucherNo: true },
+    }),
+  ])
+  const latest = new Map<string, { date: Date; voucherType: string; voucherNo: string }>()
+  for (const movement of movements) {
+    if (!latest.has(movement.itemId)) {
+      latest.set(movement.itemId, { date: movement.postingDate, voucherType: movement.voucherType, voucherNo: movement.voucherNo })
+    }
+  }
+  const asOfDay = Date.UTC(asOf.getUTCFullYear(), asOf.getUTCMonth(), asOf.getUTCDate())
+  const rows = summary.map((row) => {
+    const last = latest.get(row.item.id)
+    const lastDay = last ? Date.UTC(last.date.getUTCFullYear(), last.date.getUTCMonth(), last.date.getUTCDate()) : null
+    const inactiveDays = lastDay === null ? null : Math.max(0, Math.floor((asOfDay - lastDay) / 86_400_000))
+    const ageingClass = inactiveDays === null ? 'NO_MOVEMENT' : inactiveDays > 180 ? 'DEAD' : inactiveDays > 90 ? 'SLOW' : 'ACTIVE'
+    const suggestedOrderQty = row.item.reorderLevel > 0
+      ? r2(Math.max(0, row.item.reorderLevel - row.closing))
+      : 0
+    return {
+      ...row,
+      lastMovementAt: last?.date ?? null,
+      lastVoucherType: last?.voucherType ?? null,
+      lastVoucherNo: last?.voucherNo ?? null,
+      inactiveDays,
+      ageingClass,
+      suggestedOrderQty,
+    }
+  })
+  rows.sort((a, b) =>
+    (b.suggestedOrderQty - a.suggestedOrderQty) ||
+    ((b.inactiveDays ?? Number.MAX_SAFE_INTEGER) - (a.inactiveDays ?? Number.MAX_SAFE_INTEGER)) ||
+    a.item.code.localeCompare(b.item.code)
+  )
+  return {
+    asOf,
+    rows,
+    summary: {
+      itemCount: rows.length,
+      reorderItems: rows.filter((r) => r.suggestedOrderQty > 0).length,
+      deadItems: rows.filter((r) => r.ageingClass === 'DEAD' || r.ageingClass === 'NO_MOVEMENT').length,
+      slowItems: rows.filter((r) => r.ageingClass === 'SLOW').length,
+      stockValue: r2(rows.reduce((sum, r) => sum + r.closingValue, 0)),
+    },
+  }
+}
+
 // ---------- GSTR-1 summary (B2B / B2C, rate-wise) ----------
 
 export async function gstr1Report(month: string) {

@@ -7,7 +7,7 @@
  */
 
 import { useState } from 'react'
-import { BarChart3, CheckCircle2, FileSpreadsheet, Scale, TrendingDown, TrendingUp, XCircle } from 'lucide-react'
+import { BarChart3, CheckCircle2, FileSpreadsheet, PackageSearch, Scale, TrendingDown, TrendingUp, XCircle } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -19,6 +19,7 @@ import {
   currentMonth,
   useApi,
   type Gstr1Report,
+  type InventoryPlanningReport,
   type Outstanding,
   type Pnl,
   type TrialBalance,
@@ -38,6 +39,7 @@ export function ReportsView() {
           <TabsTrigger value="gstr1" className="h-11 sm:h-9">GSTR-1</TabsTrigger>
           <TabsTrigger value="trial" className="h-11 sm:h-9">Trial Balance</TabsTrigger>
           <TabsTrigger value="outstanding" className="h-11 sm:h-9">Outstanding</TabsTrigger>
+          <TabsTrigger value="inventory" className="h-11 sm:h-9">Inventory Planning</TabsTrigger>
           <TabsTrigger value="pnl" className="h-11 sm:h-9">P&amp;L</TabsTrigger>
         </TabsList>
         <TabsContent value="gstr1" className="mt-4">
@@ -48,6 +50,9 @@ export function ReportsView() {
         </TabsContent>
         <TabsContent value="outstanding" className="mt-4">
           <OutstandingTab />
+        </TabsContent>
+        <TabsContent value="inventory" className="mt-4">
+          <InventoryPlanningTab />
         </TabsContent>
         <TabsContent value="pnl" className="mt-4">
           <PnlTab />
@@ -343,6 +348,66 @@ function OutstandingTab() {
     <div className="grid gap-4 lg:grid-cols-2">
       {table('Receivables (customers)', data.customers, data.totalReceivable, 'in')}
       {table('Payables (suppliers)', data.suppliers, data.totalPayable, 'out')}
+    </div>
+  )
+}
+
+// ---------- inventory planning ----------
+
+function InventoryPlanningTab() {
+  const { data, loading } = useApi<InventoryPlanningReport>('/api/reports?type=inventory-planning')
+  if (loading) return <TableSkeleton rows={8} cols={7} />
+  if (!data) return <EmptyState title="No inventory data" hint="Post opening stock or purchase receipts to build the plan." icon={PackageSearch} />
+
+  const ageingTone = (value: string) => {
+    if (value === 'ACTIVE') return 'default' as const
+    if (value === 'SLOW') return 'secondary' as const
+    return 'destructive' as const
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Card className="p-4"><p className="text-xs text-muted-foreground">Stock Value</p><p className="mt-1 text-lg font-semibold"><Money value={data.summary.stockValue} plain /></p></Card>
+        <Card className="p-4"><p className="text-xs text-muted-foreground">Reorder Required</p><p className="mt-1 text-lg font-semibold text-destructive">{data.summary.reorderItems}</p></Card>
+        <Card className="p-4"><p className="text-xs text-muted-foreground">Slow Moving</p><p className="mt-1 text-lg font-semibold">{data.summary.slowItems}</p></Card>
+        <Card className="p-4"><p className="text-xs text-muted-foreground">Dead / No Movement</p><p className="mt-1 text-lg font-semibold">{data.summary.deadItems}</p></Card>
+      </div>
+      <p className="text-xs text-muted-foreground">
+        Reorder suggestion = reorder level − current company-owned stock. Customer Jobwork material is excluded. Ageing: active ≤90 days, slow 91–180, dead &gt;180.
+      </p>
+      <Card className="p-0">
+        <CardContent className="p-0">
+          <div className="max-h-[62dvh] overflow-auto erp-scroll">
+            <Table>
+              <TableHeader className="sticky top-0 z-10 bg-card">
+                <TableRow>
+                  <TableHead>Item</TableHead>
+                  <TableHead className="text-right">Closing</TableHead>
+                  <TableHead className="text-right">Reorder Level</TableHead>
+                  <TableHead className="text-right">Suggested Order</TableHead>
+                  <TableHead>Ageing</TableHead>
+                  <TableHead>Last Movement</TableHead>
+                  <TableHead className="text-right">Stock Value</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.rows.map((row) => (
+                  <TableRow key={row.item.id}>
+                    <TableCell><span className="block font-medium">{row.item.name}</span><span className="text-xs text-muted-foreground">{row.item.code} · {row.item.uom}</span></TableCell>
+                    <TableCell className="text-right tabular-nums">{row.closing}</TableCell>
+                    <TableCell className="text-right tabular-nums">{row.item.reorderLevel || '—'}</TableCell>
+                    <TableCell className={`text-right font-semibold tabular-nums ${row.suggestedOrderQty > 0 ? 'text-destructive' : ''}`}>{row.suggestedOrderQty || '—'}</TableCell>
+                    <TableCell><Badge variant={ageingTone(row.ageingClass)}>{row.ageingClass.replace('_', ' ')}</Badge><span className="ml-2 text-xs text-muted-foreground">{row.inactiveDays === null ? '' : `${row.inactiveDays}d`}</span></TableCell>
+                    <TableCell><span className="block text-xs">{row.lastMovementAt ? row.lastMovementAt.slice(0, 10) : 'Never'}</span><span className="text-xs text-muted-foreground">{row.lastVoucherNo ? `${row.lastVoucherType} · ${row.lastVoucherNo}` : 'No own-stock movement'}</span></TableCell>
+                    <TableCell className="text-right tabular-nums"><Money value={row.closingValue} plain /></TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }

@@ -291,6 +291,21 @@ export async function cancelSalesInvoice(id: string) {
     const now = new Date()
     await cancelStockForVoucher(tx, 'SALES', inv.invoiceNo, now)
     await cancelGlForVoucher(tx, 'SALES_INVOICE', inv.invoiceNo, now)
+    // Dispatch-backed invoices do not issue stock again: the delivery challan
+    // already did. Release billed quantities so a correction can be posted or
+    // the challan can be cancelled after this invoice reversal.
+    for (const line of inv.items) {
+      if (!line.deliveryChallanLineId) continue
+      const challanLine = await tx.deliveryChallanLine.findUnique({ where: { id: line.deliveryChallanLineId } })
+      if (!challanLine || challanLine.invoicedQty + EPS < line.qty) throw new BusinessError('Linked challan billing state is inconsistent; cancellation stopped', 409)
+      await tx.deliveryChallanLine.update({ where: { id: challanLine.id }, data: { invoicedQty: { decrement: line.qty } } })
+      await tx.salesOrderLine.update({ where: { id: challanLine.salesOrderLineId }, data: { invoicedQty: { decrement: line.qty } } })
+      if (inv.deliveryChallanId) await tx.deliveryChallan.update({ where: { id: inv.deliveryChallanId }, data: { status: 'DISPATCHED' } })
+    }
+    if (inv.deliveryChallanId) {
+      const challan = await tx.deliveryChallan.findUnique({ where: { id: inv.deliveryChallanId }, select: { salesOrderId: true } })
+      if (challan) await tx.salesOrder.update({ where: { id: challan.salesOrderId }, data: { status: 'DISPATCHED' } })
+    }
     return tx.salesInvoice.update({ where: { id }, data: { status: 'CANCELLED' }, include: { items: true } })
   })
 }

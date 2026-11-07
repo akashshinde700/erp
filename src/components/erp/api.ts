@@ -107,6 +107,7 @@ export interface Party {
   phone: string | null
   email: string | null
   openingBal: number
+  creditLimit: number
   active: boolean
 }
 

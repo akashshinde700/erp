@@ -1,6 +1,6 @@
 import { Prisma } from '@prisma/client'
 import { db } from './db'
-import { BusinessError } from './accounting'
+import { BusinessError, postGl, AccountCode } from './accounting'
 import { computeInvoiceTotals, EPS, fyCode, r2 } from './erp'
 
 type Tx = Prisma.TransactionClient
@@ -83,9 +83,14 @@ export async function quotationToOrder(id: string, input: { deliveryDate?: Date;
 
 export async function approveSalesOrder(id: string, actor?: string) {
   return db.$transaction(async (tx) => {
-    const company = await org(tx); const order = await tx.salesOrder.findFirst({ where: { id, companyId: company.id } })
+    const company = await org(tx); const order = await tx.salesOrder.findFirst({ where: { id, companyId: company.id }, include: { party: true } })
     if (!order) throw new BusinessError('Sales order not found', 404)
     if (order.status !== 'DRAFT') throw new BusinessError('Only draft sales orders can be approved')
+    if (order.party.creditLimit > EPS) {
+      const invoices = await tx.salesInvoice.findMany({ where: { partyId: order.partyId, status: 'POSTED' }, select: { grandTotal: true, paidAmount: true } })
+      const exposure = r2(Math.max(0, order.party.openingBal) + invoices.reduce((sum, invoice) => sum + invoice.grandTotal - invoice.paidAmount, 0))
+      if (exposure + order.grandTotal > order.party.creditLimit + EPS) throw new BusinessError(`Credit limit exceeded: current exposure ${exposure}, order ${order.grandTotal}, limit ${order.party.creditLimit}`, 409)
+    }
     return tx.salesOrder.update({ where: { id }, data: { status: 'APPROVED', creditApproved: true, approvedBy: actor, approvedAt: new Date() } })
   })
 }
@@ -135,6 +140,65 @@ export async function inspectAndDispatch(input: { deliveryChallanId: string; act
     const complete = refreshed.every((line) => line.dispatchedQty + EPS >= line.qty)
     await tx.salesOrder.update({ where: { id: dc.salesOrderId }, data: { status: complete ? 'DISPATCHED' : 'PART_DISPATCHED' } })
     return tx.deliveryChallan.update({ where: { id: dc.id }, data: { status: 'DISPATCHED', dispatchedAt: new Date() }, include: { lines: true } })
+  })
+}
+
+export async function invoiceDispatchedChallan(input: { deliveryChallanId: string; date?: Date; remarks?: string; lines: { deliveryChallanLineId: string; qty: number }[] }) {
+  return db.$transaction(async (tx) => {
+    const company = await org(tx)
+    const dc = await tx.deliveryChallan.findFirst({ where: { id: input.deliveryChallanId, companyId: company.id }, include: { salesOrder: { include: { party: true } }, lines: { include: { item: true, salesOrderLine: true } } } })
+    if (!dc || !['DISPATCHED', 'INVOICED'].includes(dc.status)) throw new BusinessError('Dispatched delivery challan not found', 404)
+    if (!input.lines.length) throw new BusinessError('At least one invoice line is required')
+    const seen = new Set<string>()
+    const selected = input.lines.map((request) => {
+      if (seen.has(request.deliveryChallanLineId)) throw new BusinessError('A challan line may occur only once on an invoice')
+      seen.add(request.deliveryChallanLineId)
+      const line = dc.lines.find((row) => row.id === request.deliveryChallanLineId)
+      if (!line) throw new BusinessError('Invoice line does not belong to delivery challan')
+      if (!(request.qty > 0) || line.invoicedQty + request.qty > line.acceptedQty + EPS) throw new BusinessError(`Invoice quantity exceeds unbilled dispatched quantity for ${line.item.name}`)
+      return { request, line }
+    })
+    const interState = dc.salesOrder.party.stateCode !== company.stateCode
+    const totals = computeInvoiceTotals(selected.map(({ request, line }) => ({ qty: request.qty, rate: line.salesOrderLine.rate, discPct: 0, gstRate: line.salesOrderLine.gstRate })), { taxInclusive: false, interState })
+    const date = input.date ?? new Date(); const invoiceNo = await number(tx, company.id, 'INV', date)
+    const invoice = await tx.salesInvoice.create({ data: {
+      invoiceNo, date, partyId: dc.salesOrder.partyId, poNo: dc.salesOrder.customerPoNo, pos: dc.salesOrder.party.stateCode, interState,
+      taxable: totals.taxable, discount: totals.discount, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst, roundOff: totals.roundOff, grandTotal: totals.grandTotal,
+      source: 'DELIVERY_CHALLAN', deliveryChallanId: dc.id, remarks: input.remarks,
+      items: { create: selected.map(({ request, line }, index) => ({ itemId: line.itemId, detail: `Delivery challan ${dc.challanNo}`, hsn: line.item.hsn, uom: line.item.uom, qty: request.qty, rate: line.salesOrderLine.rate, discPct: 0, discAmt: totals.lines[index].discAmt, taxable: totals.lines[index].taxable, gstRate: line.salesOrderLine.gstRate, cgst: totals.lines[index].cgst, sgst: totals.lines[index].sgst, igst: totals.lines[index].igst, total: totals.lines[index].total, deliveryChallanLineId: line.id })) },
+    }, include: { items: true } })
+    for (const { request, line } of selected) {
+      const updated = await tx.deliveryChallanLine.updateMany({ where: { id: line.id, invoicedQty: { gte: r2(line.invoicedQty - 0.0001), lte: r2(line.invoicedQty + 0.0001) } }, data: { invoicedQty: r2(line.invoicedQty + request.qty) } })
+      if (updated.count !== 1) throw new BusinessError('Challan billing changed concurrently; refresh and retry', 409)
+      await tx.salesOrderLine.update({ where: { id: line.salesOrderLineId }, data: { invoicedQty: { increment: request.qty } } })
+    }
+    const gl: Parameters<typeof postGl>[2] = [
+      { account: 'DEBT' as AccountCode, partyId: dc.salesOrder.partyId, debit: totals.grandTotal, remarks: `Invoice ${invoiceNo} against ${dc.challanNo}` },
+      { account: 'SALS' as AccountCode, credit: totals.taxable }, { account: 'CGSTP' as AccountCode, credit: totals.cgst }, { account: 'SGSTP' as AccountCode, credit: totals.sgst }, { account: 'IGSTP' as AccountCode, credit: totals.igst },
+    ]
+    if (Math.abs(totals.roundOff) > 0.004) gl.push(totals.roundOff > 0 ? { account: 'RND' as AccountCode, credit: totals.roundOff } : { account: 'RND' as AccountCode, debit: -totals.roundOff })
+    await postGl(tx, { date, voucherType: 'SALES_INVOICE', voucherNo: invoiceNo }, gl)
+    const all = await tx.deliveryChallanLine.findMany({ where: { deliveryChallanId: dc.id } })
+    if (all.every((line) => line.invoicedQty + EPS >= line.acceptedQty)) await tx.deliveryChallan.update({ where: { id: dc.id }, data: { status: 'INVOICED' } })
+    const orderLines = await tx.salesOrderLine.findMany({ where: { salesOrderId: dc.salesOrderId } })
+    if (orderLines.every((line) => line.invoicedQty + EPS >= line.qty)) await tx.salesOrder.update({ where: { id: dc.salesOrderId }, data: { status: 'CLOSED' } })
+    return invoice
+  })
+}
+
+export async function cancelDeliveryChallan(id: string) {
+  return db.$transaction(async (tx) => {
+    const company = await org(tx)
+    const dc = await tx.deliveryChallan.findFirst({ where: { id, companyId: company.id }, include: { lines: true } })
+    if (!dc) throw new BusinessError('Delivery challan not found', 404)
+    if (dc.status === 'CANCELLED') throw new BusinessError('Delivery challan is already cancelled')
+    if (dc.lines.some((line) => line.invoicedQty > EPS)) throw new BusinessError('Delivery challan has invoiced quantities; cancel linked sales invoices first')
+    const rows = await tx.stockLedger.findMany({ where: { voucherType: 'DELIVERY_CHALLAN', voucherNo: dc.challanNo, isCancelled: false } })
+    for (const row of rows) await tx.stockLedger.create({ data: { postingDate: new Date(), voucherType: 'DELIVERY_CHALLAN', voucherNo: dc.challanNo, itemId: row.itemId, warehouseId: row.warehouseId, qtyIn: row.qtyOut, qtyOut: 0, rate: row.rate, remarks: `Reversal of ${dc.challanNo}`, isCancelled: true } })
+    await tx.stockLedger.updateMany({ where: { voucherType: 'DELIVERY_CHALLAN', voucherNo: dc.challanNo, isCancelled: false }, data: { isCancelled: true } })
+    for (const line of dc.lines) if (line.acceptedQty > EPS) await tx.salesOrderLine.update({ where: { id: line.salesOrderLineId }, data: { dispatchedQty: { decrement: line.acceptedQty } } })
+    await tx.salesOrder.update({ where: { id: dc.salesOrderId }, data: { status: 'PART_DISPATCHED' } })
+    return tx.deliveryChallan.update({ where: { id: dc.id }, data: { status: 'CANCELLED', cancelledAt: new Date() } })
   })
 }
 

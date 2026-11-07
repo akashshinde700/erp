@@ -23,6 +23,7 @@ const partyUpdateSchema = z.object({
   phone: z.string().optional().nullable(),
   email: z.string().optional().nullable(),
   openingBal: z.number().optional(),
+  creditLimit: z.number().nonnegative().optional(),
   active: z.boolean().optional(),
 })
 

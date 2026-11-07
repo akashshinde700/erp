@@ -44,6 +44,7 @@ const partySchema = z.object({
   phone: z.string().optional().nullable(),
   email: z.string().optional().nullable(),
   openingBal: z.number().default(0),
+  creditLimit: z.number().nonnegative().default(0),
 })
 
 export async function POST(req: Request) {

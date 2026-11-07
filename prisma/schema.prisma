@@ -179,6 +179,7 @@ model Party {
   phone      String?
   email      String?
   openingBal Float    @default(0) // + = receivable / - = payable
+  creditLimit Float   @default(0) // 0 = unlimited; enforced when approving sales orders
   active     Boolean  @default(true)
   createdAt  DateTime @default(now())
 
@@ -334,7 +335,8 @@ model SalesInvoice {
   grandTotal   Float    @default(0)
   paidAmount   Float    @default(0)
   status       String   @default("POSTED") // POSTED | CANCELLED
-  source       String   @default("MANUAL") // MANUAL | JOBWORK
+  source       String   @default("MANUAL") // MANUAL | JOBWORK | DELIVERY_CHALLAN
+  deliveryChallanId String? // controlled dispatch source; null for direct/legacy invoices
   remarks      String? @db.Text
   createdAt    DateTime @default(now())
 
@@ -367,6 +369,7 @@ model SalesInvoiceItem {
   sgst    Float   @default(0)
   igst    Float   @default(0)
   total   Float
+  deliveryChallanLineId String? // accepted dispatch quantity billed by this line
 }
 
 // ---------- Purchase ----------

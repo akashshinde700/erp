@@ -138,6 +138,28 @@
   background: transparent;
 }
 
+/* ---------- Mobile scrollable tab rows ----------
+ERP module tab rows (Projects/BOMs/Work Orders/… , Parties/Items/…) use
+`overflow-x-auto` tabs that swipe horizontally on phones. A right-edge fade
+on the tab TRACK hints that more tabs are available. Only rendered <sm where
+the rows actually scroll. */
+@media (max-width: 639px) {
+  [data-slot="tabs"]:has(> [data-slot="tabs-list"].overflow-x-auto) {
+    position: relative;
+  }
+  [data-slot="tabs"]:has(> [data-slot="tabs-list"].overflow-x-auto)::after {
+    content: "";
+    position: absolute;
+    top: 3px;
+    right: 0;
+    bottom: 3px;
+    width: 2rem;
+    border-radius: 0 0.5rem 0.5rem 0;
+    background: linear-gradient(to right, oklch(0 0 0 / 0), var(--muted));
+    pointer-events: none;
+  }
+}
+
 /* ---------- GST invoice printing: show only .print-area ---------- */
 @media print {
   @page {

@@ -125,6 +125,10 @@ export function KpiCard({
         : tone === 'warning'
           ? 'text-amber-600 dark:text-amber-400'
           : 'text-foreground'
+  // Bind the ₹ symbol to the amount with a no-break space so a narrow card
+  // never wraps the currency symbol onto its own orphan line. Money values
+  // size to the CARD (container queries), not the viewport.
+  const valueSafe = value.replace(/^₹\s/, '₹\u00A0')
   const body = (
     <CardContent className="flex flex-col gap-1 p-0">
       <div className="flex items-center justify-between gap-2">
@@ -133,10 +137,14 @@ export function KpiCard({
           <Icon className="size-4" aria-hidden />
         </span>
       </div>
-      {/* Money values are unbreakable numbers — size them to the CARD, not the
-          viewport (container queries), so ₹ amounts never overflow their track. */}
-      <span className={cn('font-semibold tabular-nums text-base @min-[200px]:text-lg @min-[260px]:text-xl @min-[320px]:text-2xl', toneCls)} title={value}>
-        {value}
+      <span
+        className={cn(
+          'font-semibold tabular-nums text-sm @min-[200px]:text-base @min-[260px]:text-xl @min-[320px]:text-2xl',
+          toneCls
+        )}
+        title={value}
+      >
+        {valueSafe}
       </span>
       {hint ? <span className="text-xs text-muted-foreground">{hint}</span> : null}
     </CardContent>

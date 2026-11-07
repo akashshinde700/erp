@@ -132,6 +132,8 @@ export function ManufacturingView() {
       </div>
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as MfgTab)}>
+        {/* The tab row scrolls horizontally on phones (6 module tabs don't fit
+            320-360px); globals.css adds a right-edge fade affordance on <sm. */}
         <TabsList className="h-11 w-full justify-start overflow-x-auto sm:w-auto">
           <TabsTrigger value="projects" className="h-11 gap-1.5 sm:h-9">
             <FolderKanban className="size-4" aria-hidden /> Projects
@@ -218,11 +220,13 @@ function ProjectsTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-2">
+      {/* flex-wrap: on phones the description takes the full row and the
+          action button wraps below it instead of being squeezed (clipped text). */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-muted-foreground">
           {rows.length} project{rows.length === 1 ? '' : 's'} — customer fabrication jobs with budget, BOMs and progress.
         </p>
-        <Button onClick={() => setCreateOpen(true)} className="h-11 gap-2">
+        <Button onClick={() => setCreateOpen(true)} className="h-11 shrink-0 gap-2">
           <Plus className="size-4" aria-hidden /> New Project
         </Button>
       </div>
@@ -933,11 +937,11 @@ function BomsTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-muted-foreground">
           {rows.length} BOM{rows.length === 1 ? '' : 's'} — approve a BOM to unlock work-order generation.
         </p>
-        <Button onClick={() => setCreateOpen(true)} className="h-11 gap-2">
+        <Button onClick={() => setCreateOpen(true)} className="h-11 shrink-0 gap-2">
           <Plus className="size-4" aria-hidden /> New BOM
         </Button>
       </div>
@@ -2393,11 +2397,11 @@ function EmployeesTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-muted-foreground">
           {rows.length} employee{rows.length === 1 ? '' : 's'} — workers, supervisors and managers with skills, shifts and hourly rates.
         </p>
-        <Button onClick={() => setCreateOpen(true)} className="h-11 gap-2">
+        <Button onClick={() => setCreateOpen(true)} className="h-11 shrink-0 gap-2">
           <Plus className="size-4" aria-hidden /> New Employee
         </Button>
       </div>

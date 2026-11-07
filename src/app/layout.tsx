@@ -58,7 +58,9 @@ export default function RootLayout({
       >
         {children}
         <PwaRegister />
-        <Toaster richColors position="bottom-right" closeButton />
+        {/* position adapts: bottom-right on desktop, top-center on phones
+            (the fixed bottom nav lives there) — see ui/sonner.tsx */}
+        <Toaster richColors closeButton />
       </body>
     </html>
   );

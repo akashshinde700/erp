@@ -593,6 +593,30 @@ export interface InventoryPlanningReport {
   summary: { itemCount: number; reorderItems: number; deadItems: number; slowItems: number; stockValue: number }
 }
 
+export interface CashBankBook {
+  from: string
+  to: string
+  accounts: { account: string; accountName: string; opening: number; receipts: number; payments: number; closing: number }[]
+  rows: {
+    id: string
+    date: string
+    account: string
+    accountName: string
+    voucherType: string
+    voucherNo: string
+    party: { id: string; code: string; name: string } | null
+    debit: number
+    credit: number
+    movement: number
+    balance: number
+    remarks: string | null
+  }[]
+  totalOpening: number
+  totalReceipts: number
+  totalPayments: number
+  totalClosing: number
+}
+
 export interface Gstr1Bucket {
   rate: number
   count: number

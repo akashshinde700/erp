@@ -684,11 +684,11 @@ export function JobworkDetailView({ id }: { id: string }) {
           <Button onClick={() => setCardOpen(true)} disabled={!anyRemaining || iw.status === 'CANCELLED' || iw.status === 'INVOICED'} className="h-11 gap-2">
             <Wrench className="size-4" aria-hidden /> New Job Card
           </Button>
-          <Button variant="outline" onClick={issueCertificate} disabled={completedCards.length === 0 || hasActiveCert || iw.status === 'CANCELLED' || busy !== null} className="h-11 gap-2">
+          <Button variant="outline" onClick={issueCertificate} disabled={completedCards.length === 0 || anyRemaining || hasActiveCert || iw.status !== 'COMPLETED' || busy !== null} title={anyRemaining ? 'Finish all inward quantities before certification' : undefined} className="h-11 gap-2">
             {busy === 'cert' ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <FileCheck2 className="size-4" aria-hidden />}
             Issue Certificate
           </Button>
-          <Button variant="outline" onClick={generateInvoice} disabled={completedCards.length === 0 || iw.status === 'INVOICED' || iw.status === 'CANCELLED' || busy !== null} className="h-11 gap-2">
+          <Button variant="outline" onClick={generateInvoice} disabled={completedCards.length === 0 || !hasActiveCert || iw.status === 'INVOICED' || iw.status === 'CANCELLED' || busy !== null} title={!hasActiveCert ? 'Issue the completion certificate before invoicing' : undefined} className="h-11 gap-2">
             {busy === 'invoice' ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <ReceiptText className="size-4" aria-hidden />}
             Generate Invoice
           </Button>

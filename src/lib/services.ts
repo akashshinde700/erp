@@ -693,11 +693,14 @@ export async function postJobCard(input: PostJobCardInput) {
   return db.$transaction(async (tx) => {
     const inward = await tx.jobworkInward.findUnique({
       where: { id: input.inwardId },
-      include: { items: true },
+      include: { items: true, certificates: { where: { status: 'ISSUED' }, select: { certNo: true } } },
     })
     if (!inward) throw new BusinessError('Inward not found', 404)
     if (inward.status === 'CANCELLED') throw new BusinessError('Inward is cancelled')
     if (inward.status === 'INVOICED') throw new BusinessError('Inward is already invoiced')
+    if (inward.certificates.length > 0) {
+      throw new BusinessError(`Certificate ${inward.certificates[0].certNo} is already issued — no further job cards can be posted`)
+    }
 
     const inwardItemMap = new Map(inward.items.map((i) => [i.id, i]))
     for (const l of input.lines) {
@@ -910,6 +913,15 @@ export async function issueCertificate(inwardId: string, date?: string | Date) {
     if (inward.jobCards.length === 0) {
       throw new BusinessError('No completed job cards on this inward — complete a job card first')
     }
+    // A certificate freezes the processed quantities and billing value. Issue
+    // it only after every inward line is complete; otherwise later cards could
+    // make the certificate and invoice disagree.
+    const pendingItems = inward.items.filter((i) => i.processedQty < i.qty - EPS)
+    if (pendingItems.length > 0 || inward.status !== 'COMPLETED') {
+      throw new BusinessError(
+        `${pendingItems.length || 'Some'} inward item(s) are still pending — finish processing before issuing the certificate`
+      )
+    }
 
     const d = iso(date)
     const certNo = await nextDocNo(tx, 'CERT', d)
@@ -993,6 +1005,17 @@ export async function generateJobworkInvoice(inwardId: string, date?: string | D
     if (inward.status === 'CANCELLED') throw new BusinessError('Inward is cancelled')
     if (inward.jobCards.length === 0) {
       throw new BusinessError('No completed job cards on this inward — complete a job card first')
+    }
+    const activeCert = inward.certificates.find((c) => c.status === 'ISSUED')
+    if (!activeCert) {
+      throw new BusinessError('Issue the jobwork completion certificate before generating the GST invoice')
+    }
+    const cardTotal = r2(inward.jobCards.reduce((sum, card) => sum + card.totalAmount, 0))
+    if (Math.abs(cardTotal - activeCert.totalAmount) > 0.01) {
+      throw new BusinessError(
+        `Certificate ${activeCert.certNo} value (${activeCert.totalAmount}) does not match completed job cards (${cardTotal}) — review the chain before invoicing`,
+        409
+      )
     }
 
     const serviceItem = await tx.item.findFirst({ where: { code: 'JW-SERVICE' } })

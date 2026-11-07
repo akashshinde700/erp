@@ -394,6 +394,9 @@ export async function completeProject(id: string) {
       throw new BusinessError(`Only RUNNING projects can be completed (current: ${p.status}). Start the project first.`)
     }
     const active = p.workOrders.filter((w) => w.status !== 'CANCELLED')
+    if (active.length === 0) {
+      throw new BusinessError('A project cannot be completed without at least one completed work order')
+    }
     const open = active.filter((w) => w.status !== 'COMPLETED')
     if (open.length > 0) {
       throw new BusinessError(
@@ -801,6 +804,9 @@ export async function completeWorkOrder(id: string) {
       throw new BusinessError(`Work order is ${wo.status}`)
     }
     const active = wo.tasks.filter((t) => t.status !== 'CANCELLED')
+    if (active.length === 0) {
+      throw new BusinessError('A work order cannot be completed without at least one completed production task')
+    }
     const open = active.filter((t) => t.status !== 'COMPLETED')
     if (open.length > 0) {
       throw new BusinessError(`${open.length} task(s) still pending on this work order — complete them first`)
@@ -946,6 +952,25 @@ export async function startTask(id: string) {
     if (!task) throw new BusinessError('Task not found', 404)
     if (task.status === 'PENDING') throw new BusinessError('Assign the task to a worker before starting it')
     if (task.status !== 'ASSIGNED') throw new BusinessError(`Task is ${task.status}`)
+
+    // Routing dependency: lower sequence operations must finish first. Tasks
+    // with the same sequence are parallel and may run together; cancelled
+    // predecessors do not block the route.
+    const predecessor = await tx.productionTask.findFirst({
+      where: {
+        workOrderId: task.workOrderId,
+        seq: { lt: task.seq },
+        status: { notIn: ['COMPLETED', 'CANCELLED'] },
+      },
+      orderBy: { seq: 'asc' },
+      select: { taskNo: true, seq: true, operation: true, status: true },
+    })
+    if (predecessor) {
+      throw new BusinessError(
+        `Complete predecessor ${predecessor.taskNo} (sequence ${predecessor.seq}, ${OPERATION_LABEL[predecessor.operation] ?? predecessor.operation}) before starting this task`,
+        409
+      )
+    }
     return tx.productionTask.update({
       where: { id },
       data: { status: 'IN_PROGRESS', startedAt: new Date() },
@@ -974,7 +999,10 @@ export async function completeTask(id: string, input: CompleteTaskInput) {
   return db.$transaction(async (tx) => {
     const task = await tx.productionTask.findUnique({ where: { id }, include: { materialItem: true } })
     if (!task) throw new BusinessError('Task not found', 404)
-    if (task.status !== 'IN_PROGRESS' && task.status !== 'ASSIGNED') {
+    if (task.status !== 'IN_PROGRESS') {
+      if (task.status === 'ASSIGNED') {
+        throw new BusinessError('Start the task before recording production completion')
+      }
       throw new BusinessError(`Task is ${task.status}`)
     }
     // Claim the row with a conditional UPDATE inside this transaction: on a
@@ -982,7 +1010,7 @@ export async function completeTask(id: string, input: CompleteTaskInput) {
     // IN_PROGRESS and then each write a MFG_ISSUE stock row (double material
     // consumption). The loser sees count 0 after the winner commits.
     const claimed = await tx.productionTask.updateMany({
-      where: { id, status: { in: ['IN_PROGRESS', 'ASSIGNED'] } },
+      where: { id, status: 'IN_PROGRESS' },
       data: { status: 'IN_PROGRESS' },
     })
     if (claimed.count !== 1) {

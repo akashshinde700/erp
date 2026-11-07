@@ -25,6 +25,7 @@ These modules are **not duplicates**, but the old labels/navigation made them lo
 |---|---|---|
 | Immutable stock and GL ledgers; reversal instead of delete | Implemented, stronger than several demos | Preserve posting choke-points and cancellation reversals |
 | Customer-owned consignment separated from company stock | Implemented for jobwork availability/cost; now visible in planning | Future structural owner ledger and reservations |
+| Jobwork Inward → processing → completion certificate → GST invoice | Implemented and hardened | Certificate now requires full processing, freezes the chain, and invoice requires a matching issued certificate |
 | BOM-driven net material planning / shortages | Improved | New active-WO material plan: planned, issued, remaining, own stock, shortage, source WOs |
 | Duplicate-safe production demand | Improved | One live WO per fixed-quantity BOM until batch/output quantity is modelled |
 | Project → BOM → WO → operations | Partial | Existing; needs routing master, dependencies, capacity calendar and task time logs |

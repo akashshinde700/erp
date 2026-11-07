@@ -65,6 +65,7 @@ model Company {
   purchaseOrders       PurchaseOrder[]
   goodsReceipts        GoodsReceipt[]
   qualityInspections   QualityInspection[]
+  qualityTemplates     QualityTemplate[]
   itemVendors          ItemVendor[]
   returnDocuments      ReturnDocument[]
   quotations           SalesQuotation[]
@@ -231,6 +232,8 @@ model Item {
   salesOrderLines SalesOrderLine[]
   deliveryLines DeliveryChallanLine[]
   productionReceipts ProductionReceipt[]
+  qualityTemplates QualityTemplate[]
+  qualityInspections QualityInspection[]
 }
 
 model Warehouse {
@@ -853,6 +856,44 @@ model GoodsReceiptLine {
   @@index([itemId, batchNo])
 }
 
+model QualityTemplate {
+  id             String @id @default(cuid())
+  companyId      String
+  company        Company @relation(fields: [companyId], references: [id])
+  code           String
+  name           String
+  inspectionType String // INWARD | PRODUCTION | DISPATCH | RETURN
+  itemId         String?
+  item           Item? @relation(fields: [itemId], references: [id])
+  active         Boolean @default(true)
+  version        Int @default(1)
+  notes          String? @db.Text
+  createdAt      DateTime @default(now())
+  parameters     QualityParameter[]
+  inspections    QualityInspection[]
+
+  @@unique([companyId, code, version])
+  @@index([companyId, inspectionType, itemId, active])
+}
+
+model QualityParameter {
+  id           String @id @default(cuid())
+  templateId   String
+  template     QualityTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  name         String
+  dataType     String @default("NUMBER") // NUMBER | TEXT | BOOLEAN
+  unit         String?
+  minValue     Float?
+  maxValue     Float?
+  expectedText String?
+  required     Boolean @default(true)
+  seq          Int @default(0)
+  measurements QualityMeasurement[]
+
+  @@unique([templateId, name])
+  @@index([templateId, seq])
+}
+
 model QualityInspection {
   id                 String @id @default(cuid())
   companyId          String
@@ -861,6 +902,10 @@ model QualityInspection {
   inspectionType     String // INWARD | PRODUCTION | DISPATCH | RETURN
   referenceType      String
   referenceId        String
+  templateId         String?
+  template           QualityTemplate? @relation(fields: [templateId], references: [id])
+  itemId             String?
+  item               Item? @relation(fields: [itemId], references: [id])
   goodsReceiptId     String?
   goodsReceipt       GoodsReceipt? @relation(fields: [goodsReceiptId], references: [id])
   goodsReceiptLineId String?
@@ -872,9 +917,26 @@ model QualityInspection {
   resultsJson        String? @db.Text
   notes              String? @db.Text
   createdAt          DateTime @default(now())
+  measurements       QualityMeasurement[]
 
   @@unique([companyId, inspectionNo])
   @@index([companyId, referenceType, referenceId])
+}
+
+model QualityMeasurement {
+  id           String @id @default(cuid())
+  inspectionId String
+  inspection   QualityInspection @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  parameterId  String
+  parameter    QualityParameter @relation(fields: [parameterId], references: [id])
+  numberValue  Float?
+  textValue    String? @db.Text
+  booleanValue Boolean?
+  passed       Boolean
+  remarks      String? @db.Text
+
+  @@unique([inspectionId, parameterId])
+  @@index([parameterId])
 }
 
 model ItemVendor {

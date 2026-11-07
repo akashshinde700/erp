@@ -63,6 +63,7 @@ import { onPreset, setCreatePreset, takeCreatePreset } from './nav'
 import { computeInvoiceTotals, dateStr, INDIAN_STATES, money, r2, stateName } from '@/lib/erp'
 import { InvoicePrint } from './invoice-print'
 import { exportEInvoiceJson, exportEWayBillJson, exportTallyVoucher, markTallySent, queueForConnector } from './tally'
+import { useResetOnChange } from '@/hooks/use-reset-on-change'
 
 export type InvoiceKind = 'SALES' | 'PURCHASE'
 
@@ -200,7 +201,7 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
           />
         </div>
         <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as typeof statusFilter)}>
-          <SelectTrigger className="h-11 w-36" aria-label="Filter by status">
+          <SelectTrigger className="h-11 data-[size=default]:h-11 w-36" aria-label="Filter by status">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -436,8 +437,8 @@ function CreateInvoiceDialog({
   const [saving, setSaving] = useState(false)
 
   // Duplicate prefill: populate from an existing invoice (new number is assigned server-side).
-  useEffect(() => {
-    if (!open || !prefill) return
+  useResetOnChange(open && !!prefill, [prefill, isSales], () => {
+    if (!prefill) return
     setPartyId(prefill.partyId)
     setDate(String(prefill.date).slice(0, 10))
     setPoNo(prefill.poNo ?? '')
@@ -457,17 +458,16 @@ function CreateInvoiceDialog({
         }))
       )
     }
-  }, [open, prefill, isSales])
+  })
 
   // Cross-module preset: just the party (e.g. "New invoice for this customer").
-  useEffect(() => {
-    if (!open) return
+  useResetOnChange(open, [presetPartyId, parties, isSales], () => {
     if (presetPartyId) {
       setPartyId(presetPartyId)
       const p = parties.find((x) => x.id === presetPartyId)
       if (isSales && p) setPos(p.stateCode)
     }
-  }, [open, presetPartyId, parties, isSales])
+  })
 
   const party: Party | undefined = parties.find((p) => p.id === partyId)
   const companyState = company?.stateCode ?? '27'
@@ -646,7 +646,7 @@ function CreateInvoiceDialog({
             <div className="space-y-1.5 sm:col-span-2 lg:col-span-4">
               <Label>Stock From</Label>
               <Select value={warehouseId || 'DEFAULT'} onValueChange={(v) => setWarehouseId(v === 'DEFAULT' ? '' : v)}>
-                <SelectTrigger className="h-11 w-full sm:max-w-64">
+                <SelectTrigger className="h-11 data-[size=default]:h-11 w-full sm:max-w-64">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -677,7 +677,7 @@ function CreateInvoiceDialog({
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0 flex-1 space-y-1">
                         <Select value={l.itemId || undefined} onValueChange={(v) => onItemPick(l.key, v)}>
-                          <SelectTrigger className="h-11 w-full" aria-label={`Item for line ${l.key}`}>
+                          <SelectTrigger className="h-11 data-[size=default]:h-11 w-full" aria-label={`Item for line ${l.key}`}>
                             <SelectValue placeholder="Pick item…" />
                           </SelectTrigger>
                           <SelectContent className="max-h-64">
@@ -793,7 +793,7 @@ function CreateInvoiceDialog({
                       <TableRow key={l.key}>
                         <TableCell>
                           <Select value={l.itemId || undefined} onValueChange={(v) => onItemPick(l.key, v)}>
-                            <SelectTrigger className="h-11 w-full min-w-40">
+                            <SelectTrigger className="h-11 data-[size=default]:h-11 w-full min-w-40">
                               <SelectValue placeholder="Pick item…" />
                             </SelectTrigger>
                             <SelectContent className="max-h-64">

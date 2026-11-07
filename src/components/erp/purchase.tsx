@@ -12,7 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 export function PurchaseView() {
   return <Tabs defaultValue="invoices" className="space-y-4">
-    <TabsList><TabsTrigger value="invoices">Purchase Invoices</TabsTrigger><TabsTrigger value="procurement">Procurement & Returns</TabsTrigger></TabsList>
+    <TabsList className="h-auto flex-wrap justify-start"><TabsTrigger value="invoices" className="h-11 sm:h-9">Purchase Invoices</TabsTrigger><TabsTrigger value="procurement" className="h-11 sm:h-9">Procurement & Returns</TabsTrigger></TabsList>
     <TabsContent value="invoices"><InvoiceModule kind="PURCHASE" /></TabsContent>
     <TabsContent value="procurement"><ProcurementWorkspace /></TabsContent>
   </Tabs>

@@ -395,27 +395,30 @@ model SalesInvoiceItem {
 // ---------- Purchase ----------
 
 model PurchaseInvoice {
-  id                String   @id @default(cuid())
-  invoiceNo         String   @unique
-  date              DateTime
-  partyId           String
-  party             Party    @relation(fields: [partyId], references: [id])
-  poNo              String?
-  supplierInvoiceNo String?
-  interState        Boolean  @default(false)
-  taxInclusive      Boolean  @default(false)
-  taxable           Float    @default(0)
-  discount          Float    @default(0)
-  cgst              Float    @default(0)
-  sgst              Float    @default(0)
-  igst              Float    @default(0)
-  roundOff          Float    @default(0)
-  grandTotal        Float    @default(0)
-  paidAmount        Float    @default(0)
-  status            String   @default("POSTED") // POSTED | CANCELLED
-  remarks           String?  @db.Text
-  goodsReceiptId    String? // controlled procurement source; null for direct/legacy invoices
-  createdAt         DateTime @default(now())
+  id                      String   @id @default(cuid())
+  invoiceNo               String   @unique
+  date                    DateTime
+  partyId                 String
+  party                   Party    @relation(fields: [partyId], references: [id])
+  poNo                    String?
+  supplierInvoiceNo       String?
+  // = supplierInvoiceNo while POSTED, NULL once cancelled: the unique key below then
+  // only guards ACTIVE invoices, so a cancelled bill can be re-entered correctly.
+  activeSupplierInvoiceNo String?
+  interState              Boolean  @default(false)
+  taxInclusive            Boolean  @default(false)
+  taxable                 Float    @default(0)
+  discount                Float    @default(0)
+  cgst                    Float    @default(0)
+  sgst                    Float    @default(0)
+  igst                    Float    @default(0)
+  roundOff                Float    @default(0)
+  grandTotal              Float    @default(0)
+  paidAmount              Float    @default(0)
+  status                  String   @default("POSTED") // POSTED | CANCELLED
+  remarks                 String?  @db.Text
+  goodsReceiptId          String? // controlled procurement source; null for direct/legacy invoices
+  createdAt               DateTime @default(now())
 
   // Tally export stamps (records only — never blocks re-export)
   tallyExportedAt DateTime?
@@ -423,7 +426,8 @@ model PurchaseInvoice {
 
   items PurchaseInvoiceItem[]
 
-  @@unique([partyId, supplierInvoiceNo])
+  @@unique([partyId, activeSupplierInvoiceNo])
+  @@index([partyId, supplierInvoiceNo])
   @@index([partyId])
   @@index([date])
 }
@@ -918,6 +922,9 @@ model GoodsReceipt {
   purchaseOrderId String
   purchaseOrder   PurchaseOrder       @relation(fields: [purchaseOrderId], references: [id])
   supplierDocNo   String?
+  // `<supplierId>:<supplierDocNo>` while the GRN is active, NULL once cancelled: one
+  // supplier challan per supplier, re-receivable after a cancellation.
+  supplierDocKey  String?
   supplierDocDate DateTime?
   warehouseId     String
   warehouse       Warehouse           @relation(fields: [warehouseId], references: [id])
@@ -931,7 +938,8 @@ model GoodsReceipt {
   inspections     QualityInspection[]
 
   @@unique([companyId, grnNo])
-  @@unique([companyId, supplierDocNo])
+  @@unique([companyId, supplierDocKey])
+  @@index([companyId, supplierDocNo])
   @@index([companyId, status, date])
   @@index([purchaseOrderId])
 }
@@ -1235,6 +1243,9 @@ model ReturnDocument {
   sgst            Float                @default(0)
   igst            Float                @default(0)
   grandTotal      Float                @default(0)
+  // Running total of POSTED refunds. Incremented with a conditional UPDATE so two
+  // concurrent refunds can never exceed grandTotal (see finance-adjustments.ts).
+  refundedAmount  Float                @default(0)
   reason          String               @db.Text
   postedAt        DateTime?
   cancelledAt     DateTime?
@@ -1355,14 +1366,34 @@ model Payment {
 }
 
 model PaymentAllocation {
-  id          String  @id @default(cuid())
-  paymentId   String
-  payment     Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
-  invoiceType String // SALES | PURCHASE
-  invoiceId   String?
-  invoiceNo   String
-  amount      Float
+  id             String    @id @default(cuid())
+  paymentId      String
+  payment        Payment   @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  invoiceType    String // SALES | PURCHASE
+  invoiceId      String?
+  invoiceNo      String
+  amount         Float
+  // PAYMENT = allocated when the payment was posted; ADVANCE_APPLICATION = a later
+  // application of an unallocated advance (reversible via reversedAt).
+  kind           String    @default("PAYMENT")
+  reversedAt     DateTime?
+  reversalReason String?   @db.Text
 
   @@index([paymentId])
   @@index([invoiceNo])
+}
+
+// ---------- Request idempotency ----------
+// A client-supplied Idempotency-Key makes a create/post request safe to retry or
+// double-submit: the first request records its response, later ones replay it.
+model IdempotencyKey {
+  id           String   @id // "<scope>:<client key>"
+  scope        String
+  requestHash  String
+  state        String   @default("IN_PROGRESS") // IN_PROGRESS | COMPLETED
+  statusCode   Int?
+  responseBody String?  @db.LongText
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
 }

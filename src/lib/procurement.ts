@@ -1,6 +1,6 @@
 import { Prisma } from '@prisma/client'
 import { db } from './db'
-import { BusinessError, postGl, AccountCode } from './accounting'
+import { BusinessError, postGl, AccountCode, nextSharedInvoiceNo } from './accounting'
 import { computeInvoiceTotals, fyCode, r2, EPS } from './erp'
 import { cancelLotMovementsTx, receiveLotTx } from './traceability'
 
@@ -135,9 +135,14 @@ export async function createGoodsReceipt(input: { purchaseOrderId: string; wareh
       if (poLine.receivedQty + line.receivedQty > cap + EPS) throw new BusinessError(`Receipt exceeds PO quantity/tolerance for line ${poLine.id}`)
       if (line.expiryDate && line.manufactureDate && line.expiryDate <= line.manufactureDate) throw new BusinessError('Expiry date must be after manufacture date')
     }
+    const supplierDocNo = input.supplierDocNo?.trim() || undefined
+    if (supplierDocNo) {
+      const clash = await tx.goodsReceipt.findFirst({ where: { companyId: company.id, supplierDocKey: `${order.supplierId}:${supplierDocNo}` }, select: { grnNo: true } })
+      if (clash) throw new BusinessError(`Supplier challan ${supplierDocNo} from this supplier is already received as ${clash.grnNo} — cancel that GRN first if it was entered by mistake`, 409)
+    }
     const date = input.date ?? new Date()
     const grn = await tx.goodsReceipt.create({
-      data: { companyId: company.id, grnNo: await nextNumber(tx, company.id, 'GRN', date), date, purchaseOrderId: order.id, supplierDocNo: input.supplierDocNo, supplierDocDate: input.supplierDocDate, warehouseId: warehouse.id, remarks: input.remarks, createdBy: input.createdBy,
+      data: { companyId: company.id, grnNo: await nextNumber(tx, company.id, 'GRN', date), date, purchaseOrderId: order.id, supplierDocNo, supplierDocKey: supplierDocNo ? `${order.supplierId}:${supplierDocNo}` : null, supplierDocDate: input.supplierDocDate, warehouseId: warehouse.id, remarks: input.remarks, createdBy: input.createdBy,
         lines: { create: input.lines.map((line) => ({ ...line, itemId: order.lines.find((row) => row.id === line.purchaseOrderLineId)!.itemId })) } },
       include: { lines: { include: { item: true, purchaseOrderLine: true } } },
     })
@@ -156,8 +161,19 @@ export async function inspectGoodsReceipt(input: { goodsReceiptId: string; actor
     if (!grn) throw new BusinessError('Goods receipt not found', 404)
     if (grn.status !== 'PENDING_QC') throw new BusinessError(`Goods receipt is already ${grn.status}`)
     if (input.lines.length !== grn.lines.length) throw new BusinessError('Every GRN line must be inspected')
+    // Source of truth: a parameterised QC inspection recorded against this GRN
+    // (referenceType GOODS_RECEIPT) that FAILED, or was dispositioned anything but
+    // ACCEPT, forbids accepting quantity of that item on the GRN. The latest
+    // inspection per item wins, so a passing re-inspection lifts the block.
+    const parameterised = await tx.qualityInspection.findMany({ where: { companyId: company.id, referenceType: 'GOODS_RECEIPT', referenceId: grn.id, status: { not: 'CANCELLED' } }, orderBy: { inspectedAt: 'desc' }, select: { itemId: true, status: true, disposition: true, inspectionNo: true } })
+    const latestByItem = new Map<string, (typeof parameterised)[number]>()
+    for (const row of parameterised) if (row.itemId && !latestByItem.has(row.itemId)) latestByItem.set(row.itemId, row)
     let acceptedTotal = 0, rejectedTotal = 0
     for (const decision of input.lines) {
+      const blocking = latestByItem.get(grn.lines.find((row) => row.id === decision.goodsReceiptLineId)?.itemId ?? '')
+      if (blocking && decision.acceptedQty > EPS && (blocking.status === 'FAILED' || blocking.disposition !== 'ACCEPT')) {
+        throw new BusinessError(`Inspection ${blocking.inspectionNo} for this item ${blocking.status === 'FAILED' ? 'FAILED' : `is ${blocking.disposition}`} — record the quantity as rejected, or re-inspect before accepting it`, 409)
+      }
       const line = grn.lines.find((row) => row.id === decision.goodsReceiptLineId)
       if (!line) throw new BusinessError('Inspection line does not belong to this GRN')
       if (decision.acceptedQty < 0 || decision.rejectedQty < 0 || Math.abs(decision.acceptedQty + decision.rejectedQty - line.receivedQty) > EPS) throw new BusinessError(`Accepted + rejected must equal received quantity for ${line.item.name}`)
@@ -207,10 +223,10 @@ export async function invoiceAcceptedReceipt(input: { goodsReceiptId: string; su
     const taxInclusive = input.taxInclusive ?? grn.purchaseOrder.taxInclusive
     const totals = computeInvoiceTotals(selected.map(({ requested, line, rate }) => ({ qty: requested.qty, rate, discPct: 0, gstRate: line.purchaseOrderLine.gstRate })), { taxInclusive, interState })
     const date = input.date ?? new Date()
-    const invoiceNo = await nextNumber(tx, company.id, 'PIN', date)
+    const invoiceNo = await nextSharedInvoiceNo(tx, 'PIN', date)
     const invoice = await tx.purchaseInvoice.create({
       data: {
-        invoiceNo, date, partyId: grn.purchaseOrder.supplierId, poNo: grn.purchaseOrder.poNo, supplierInvoiceNo, interState, taxInclusive,
+        invoiceNo, date, partyId: grn.purchaseOrder.supplierId, poNo: grn.purchaseOrder.poNo, supplierInvoiceNo, activeSupplierInvoiceNo: supplierInvoiceNo, interState, taxInclusive,
         taxable: totals.taxable, discount: totals.discount, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst,
         roundOff: totals.roundOff, grandTotal: totals.grandTotal, remarks: input.remarks, goodsReceiptId: grn.id,
         items: { create: selected.map(({ requested, line, rate }, index) => ({
@@ -262,7 +278,7 @@ export async function cancelGoodsReceipt(id: string) {
     for (const line of grn.lines) await tx.purchaseOrderLine.update({ where: { id: line.purchaseOrderLineId }, data: { receivedQty: { decrement: line.receivedQty }, acceptedQty: { decrement: line.acceptedQty }, rejectedQty: { decrement: line.rejectedQty } } })
     await tx.qualityInspection.updateMany({ where: { goodsReceiptId: grn.id }, data: { status: 'CANCELLED' } })
     await tx.purchaseOrder.update({ where: { id: grn.purchaseOrderId }, data: { status: 'PART_RECEIVED' } })
-    return tx.goodsReceipt.update({ where: { id: grn.id }, data: { status: 'CANCELLED', cancelledAt: new Date() } })
+    return tx.goodsReceipt.update({ where: { id: grn.id }, data: { status: 'CANCELLED', cancelledAt: new Date(), supplierDocKey: null } })
   })
 }
 

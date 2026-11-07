@@ -386,8 +386,9 @@ function Console({
   const [posts, setPosts] = useState<BlogPost[] | null>(null)
   const [loading, setLoading] = useState(true)
 
-  const reload = useCallback(async () => {
-    setLoading(true)
+  // fetchAll sets state only after awaiting (safe to run from an effect);
+  // reload adds the spinner for user-triggered refreshes.
+  const fetchAll = useCallback(async () => {
     try {
       const [orgs, pl, inq, blog] = await Promise.all([
         platformApi<OrgsResponse>('/api/platform/orgs', undefined, apiKey),
@@ -409,10 +410,17 @@ function Console({
       setLoading(false)
     }
   }, [apiKey, onAuthLost])
+  const reload = useCallback(async () => {
+    setLoading(true)
+    await fetchAll()
+  }, [fetchAll])
 
   useEffect(() => {
-    void reload()
-  }, [reload])
+    // Start the load from a callback, not synchronously in the effect body.
+    let cancelled = false
+    void Promise.resolve().then(() => { if (!cancelled) return fetchAll() })
+    return () => { cancelled = true }
+  }, [fetchAll])
 
   const orgAction = async (id: string, body: Record<string, unknown>, okMsg: string) => {
     try {
@@ -876,7 +884,7 @@ function OrgsTab({
                           value={o.plan?.id ?? 'none'}
                           onValueChange={(v) => void onAction(o.id, { action: 'setPlan', planId: v === 'none' ? null : v }, 'Plan updated')}
                         >
-                          <SelectTrigger className="h-11 w-full md:h-9 md:w-36" aria-label={`Plan for ${o.name}`}>
+                          <SelectTrigger className="h-11 data-[size=default]:h-11 w-full md:h-9 md:w-36" aria-label={`Plan for ${o.name}`}>
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
@@ -1775,7 +1783,7 @@ function InquiriesTab({
                       </div>
                       <div className="flex w-full shrink-0 flex-wrap items-center gap-2 sm:w-auto">
                         <Select value={inq.status} onValueChange={(v) => void setStatus(inq.id, v)}>
-                          <SelectTrigger className="h-11 w-full md:h-9 md:w-32" aria-label={`Status for ${inq.name}`}>
+                          <SelectTrigger className="h-11 data-[size=default]:h-11 w-full md:h-9 md:w-32" aria-label={`Status for ${inq.name}`}>
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>

@@ -30,7 +30,27 @@ export class ApiError extends Error {
   }
 }
 
-export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+/**
+ * Identical mutations already in flight share one request. A double/triple
+ * click fires several submits in the same tick, before React re-renders the
+ * button as disabled; without this each became its own POST (duplicate
+ * documents, or 409 toasts where a unique key caught them). A later, separate
+ * submit after the first finished is a new request as usual.
+ */
+const inFlight = new Map<string, Promise<unknown>>()
+
+export function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const method = (init?.method ?? 'GET').toUpperCase()
+  if (method === 'GET') return send<T>(path, init)
+  const key = `${method} ${path} ${typeof init?.body === 'string' ? init.body : ''}`
+  const pending = inFlight.get(key)
+  if (pending) return pending as Promise<T>
+  const request = send<T>(path, init).finally(() => inFlight.delete(key))
+  inFlight.set(key, request)
+  return request
+}
+
+async function send<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response
   try {
     res = await fetch(path, {

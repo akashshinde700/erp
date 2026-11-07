@@ -30,7 +30,13 @@ export async function postProductionReceipt(input: { workOrderId: string; output
     const actualTotal = r2(active.reduce((sum, task) => sum + task.materialCost + task.labourCost, 0))
     const priorSettled = r2(wo.productionReceipts.reduce((sum, receipt) => sum + receipt.actualCost, 0))
     const remainingActual = Math.max(0, r2(actualTotal - priorSettled))
-    const receiptShare = Math.min(1, input.acceptedQty / Math.max(EPS, planned - alreadyAccepted))
+    // WIP is consumed by everything PRODUCED (rejected/rework/scrap units used the
+    // material and labour too); only accepted units are valued into stock at the
+    // BOM standard, so the cost of rejected output lands in manufacturing variance.
+    // Sharing by accepted quantity left WIP that could never settle after any QC
+    // rejection, blocking work-order closure permanently.
+    const alreadyProduced = wo.productionReceipts.reduce((sum, receipt) => sum + receipt.producedQty, 0)
+    const receiptShare = Math.min(1, input.producedQty / Math.max(EPS, planned - alreadyProduced))
     const actualCost = r2(remainingActual * receiptShare)
     const expectedTotal = r2(wo.bom?.items.reduce((sum, line) => sum + line.estCost, 0) ?? actualTotal)
     const expectedCost = r2(expectedTotal * (input.acceptedQty / planned))

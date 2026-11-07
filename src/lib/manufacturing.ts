@@ -16,6 +16,7 @@ import { Prisma } from '@prisma/client'
 import { r2, fyCode, EPS } from './erp'
 import { isValidDateString } from './validation'
 import { BusinessError, postGl } from './accounting'
+import { consumeLotsFefoTx } from './traceability'
 
 type Tx = Prisma.TransactionClient
 
@@ -1057,6 +1058,7 @@ export async function completeTask(id: string, input: CompleteTaskInput) {
           `Insufficient stock for "${mat.name}": available ${avail} ${mat.uom}, consumption ${qty} ${mat.uom} — receive material first (GRN/Purchase)`
         )
       }
+      await consumeLotsFefoTx(tx, { itemId, warehouseId, qty, voucherType: 'MFG_ISSUE', voucherNo: task.taskNo, referenceId: task.id })
       const rate = await avgCost(tx, itemId, warehouseId)
       materialItemId = itemId
       materialQty = qty

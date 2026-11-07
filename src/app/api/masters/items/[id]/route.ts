@@ -22,12 +22,12 @@ const itemUpdateSchema = z.object({
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
-    await assertMutationAccess()
+    const actor = await assertMutationAccess()
     const body = itemUpdateSchema.parse(await req.json())
     const data: any = { ...body }
     if (body.hsn !== undefined) data.hsn = body.hsn || null
     const item = await db.item.update({ where: { id }, data })
-    await logAudit('UPDATE', 'Item', id, `${item.code} — ${item.name}`)
+    await logAudit('UPDATE', 'Item', id, `${item.code} — ${item.name}`, actor?.email)
     return ok(item)
   } catch (e) {
     return handleError(e)
@@ -37,11 +37,11 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
-    await assertMutationAccess()
+    const actor = await assertMutationAccess()
     const url = new URL(req.url)
     const activate = url.searchParams.get('activate') === '1'
     const item = await db.item.update({ where: { id }, data: { active: activate } })
-    await logAudit('UPDATE', 'Item', id, `${item.code} ${activate ? 'reactivated' : 'deactivated'}`)
+    await logAudit('UPDATE', 'Item', id, `${item.code} ${activate ? 'reactivated' : 'deactivated'}`, actor?.email)
     return ok(item)
   } catch (e) {
     return handleError(e)

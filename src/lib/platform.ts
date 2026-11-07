@@ -241,8 +241,9 @@ export function orgLoginCount(): Promise<number> {
  *  - logins exist → a session whose org IS the operating org is required;
  *    the session is also DB-verified (user exists, tokenVersion matches) so
  *    password resets revoke live sessions immediately.
- *  Returns the acting user (role included) when authenticated, else null. */
-export async function assertCompanyAccess(): Promise<{ role: string } | null> {
+ *  Returns the acting user (role + email for audit attribution) when
+ *  authenticated, else null (first-boot anonymous window). */
+export async function assertCompanyAccess(): Promise<{ role: string; email: string | null } | null> {
   const org = await operatingCompany()
   const st = accessState(org)
   if (st.blocked) throw new BusinessError(st.message, 403)
@@ -256,17 +257,18 @@ export async function assertCompanyAccess(): Promise<{ role: string } | null> {
     if (session.cid !== org?.id) {
       throw new BusinessError('Your organization has no ERP workspace on this deployment yet', 403)
     }
-    const user = await db.orgUser.findUnique({ where: { id: session.uid }, select: { role: true, tokenVersion: true } })
+    const user = await db.orgUser.findUnique({ where: { id: session.uid }, select: { role: true, email: true, tokenVersion: true } })
     if (!user) throw new BusinessError('Sign in to your organization first', 401)
     if ((session.tv ?? 0) !== user.tokenVersion) throw new BusinessError('Your session was revoked — sign in again', 401)
-    return { role: user.role }
+    return { role: user.role, email: user.email }
   }
   return null
 }
 
 /** Mutation guard: VIEWER logins are read-only (OWNER/ACCOUNTANT/SUPER_ADMIN mutate).
- *  Call AFTER assertCompanyAccess in every POST/PUT/DELETE business handler. */
-export async function assertMutationAccess(): Promise<{ role: string } | null> {
+ *  Call AFTER assertCompanyAccess in every POST/PUT/DELETE business handler.
+ *  Returns the acting user (role + email for audit attribution). */
+export async function assertMutationAccess(): Promise<{ role: string; email: string | null } | null> {
   const actor = await assertCompanyAccess()
   if (actor && actor.role === 'VIEWER') {
     throw new BusinessError('Your login is read-only (VIEWER) — this action needs the OWNER or an ACCOUNTANT', 403)

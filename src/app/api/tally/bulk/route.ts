@@ -12,7 +12,7 @@ import { buildInvoiceVoucher, buildPaymentVoucher, getCompany, vouchersToXml, ty
  */
 export async function GET(req: Request) {
   try {
-    await assertCompanyAccess()
+    const actor = await assertCompanyAccess()
     await assertFeature('exportData')
     const sp = new URL(req.url).searchParams
     const company = await getCompany()
@@ -20,9 +20,10 @@ export async function GET(req: Request) {
 
     const from = sp.get('from')
     const to = sp.get('to')
+    // Dates are stored at UTC midnight — UTC-bounded range (see reports.ts).
     const dateRange: { gte?: Date; lte?: Date } = {}
-    if (from) dateRange.gte = new Date(from)
-    if (to) dateRange.lte = new Date(`${to}T23:59:59`)
+    if (from) dateRange.gte = new Date(`${from}T00:00:00.000Z`)
+    if (to) dateRange.lte = new Date(`${to}T23:59:59.999Z`)
 
     const wantSales = sp.get('sales') !== '0'
     const wantPurchase = sp.get('purchase') !== '0'
@@ -36,7 +37,10 @@ export async function GET(req: Request) {
         orderBy: [{ date: 'asc' }, { invoiceNo: 'asc' }],
         include: {
           party: { select: { code: true, name: true, gstin: true } },
-          items: { include: { item: { select: { code: true, name: true, hsn: true, uom: true } } } },
+          // isService MUST be selected: buildInvoiceVoucher routes service
+          // lines to the sales ledger — without it jobwork invoices export as
+          // fake inventory lines (qty × rate stock movement).
+          items: { include: { item: { select: { code: true, name: true, hsn: true, uom: true, isService: true } } } },
         },
       })
       for (const inv of rows) vouchers.push(buildInvoiceVoucher(inv, company, 'SALES'))
@@ -48,7 +52,7 @@ export async function GET(req: Request) {
         orderBy: [{ date: 'asc' }, { invoiceNo: 'asc' }],
         include: {
           party: { select: { code: true, name: true, gstin: true } },
-          items: { include: { item: { select: { code: true, name: true, hsn: true, uom: true } } } },
+          items: { include: { item: { select: { code: true, name: true, hsn: true, uom: true, isService: true } } } },
         },
       })
       for (const inv of rows) vouchers.push(buildInvoiceVoucher(inv, company, 'PURCHASE'))
@@ -68,7 +72,7 @@ export async function GET(req: Request) {
     }
 
     const xml = vouchersToXml(vouchers, company.tallyCompanyName ?? null)
-    await logAudit('EXPORT', 'TallyBulk', undefined, `${vouchers.length} vouchers (${from ?? 'begin'} → ${to ?? 'now'})`)
+    await logAudit('EXPORT', 'TallyBulk', undefined, `${vouchers.length} vouchers (${from ?? 'begin'} → ${to ?? 'now'})`, actor?.email)
     const stamp = new Date().toISOString().slice(0, 10)
     return new NextResponse(xml, {
       status: 200,

@@ -35,10 +35,10 @@ const woSchema = z.object({
 
 export async function POST(req: Request) {
   try {
-    await assertMutationAccess()
+    const actor = await assertMutationAccess()
     const body = woSchema.parse(await req.json())
     const wo = await createWorkOrder(body)
-    await logAudit('CREATE', 'WorkOrder', wo.id, `${wo.woNo} — ${body.bomId ? 'from BOM' : 'manual'} (${body.lines?.length ?? 0} lines)`)
+    await logAudit('CREATE', 'WorkOrder', wo.id, `${wo.woNo} — ${body.bomId ? 'from BOM' : 'manual'} (${body.lines?.length ?? 0} lines)`, actor?.email)
     return ok(wo)
   } catch (e) {
     return handleError(e)

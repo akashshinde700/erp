@@ -76,7 +76,7 @@ const actionSchema = z.object({
 /** POST /api/tally/voucher {doc, id, action} — explicit Tally stamp actions. */
 export async function POST(req: Request) {
   try {
-    await assertMutationAccess()
+    const actor = await assertMutationAccess()
     await assertFeature('exportData')
     const body = actionSchema.parse(await req.json())
     const { doc, id, action } = body
@@ -94,7 +94,7 @@ export async function POST(req: Request) {
       if (doc === 'SALES') await db.salesInvoice.updateMany({ where: { id, tallySentAt: null }, data: { tallyExportedAt: now } })
       else await db.purchaseInvoice.updateMany({ where: { id, tallySentAt: null }, data: { tallyExportedAt: now } })
     }
-    await logAudit(action === 'mark-sent' ? 'EXPORT' : 'UPDATE', `Tally:${doc}`, id, action)
+    await logAudit(action === 'mark-sent' ? 'EXPORT' : 'UPDATE', `Tally:${doc}`, id, action, actor?.email)
     return ok({ stamp: action === 'unmark' ? null : now })
   } catch (e) {
     return handleError(e)

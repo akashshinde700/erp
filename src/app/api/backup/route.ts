@@ -57,7 +57,7 @@ export async function GET(req: Request) {
       db.counter.findMany(),
       db.auditLog.findMany(),
     ])
-    await logAudit('BACKUP', 'Backup', undefined, 'snapshot downloaded')
+    await logAudit('BACKUP', 'Backup', undefined, 'snapshot downloaded', 'platform-admin')
     return ok({
       version: 2,
       takenAt: new Date().toISOString(),

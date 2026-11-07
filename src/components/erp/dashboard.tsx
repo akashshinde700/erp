@@ -33,7 +33,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useApi, type DashboardData } from './api'
-import { CardSkeleton, EmptyState, KpiCard, Money, SectionHeading, SourceBadge } from './bits'
+import { CardSkeleton, EmptyState, ErrorState, KpiCard, Money, SectionHeading, SourceBadge } from './bits'
 import { useErpUi } from './store'
 import { dateStr, money } from '@/lib/erp'
 
@@ -56,7 +56,7 @@ function TrendTooltip({ active, payload, label }: { active?: boolean; payload?: 
 }
 
 export function DashboardView() {
-  const { data, loading } = useApi<DashboardData>('/api/dashboard')
+  const { data, loading, error, reload } = useApi<DashboardData>('/api/dashboard')
   const setView = useErpUi((s) => s.setView)
 
   const quickActions = [
@@ -69,6 +69,17 @@ export function DashboardView() {
   ]
 
   if (loading || !data) {
+    // A failed dashboard fetch must not render a permanent skeleton — show
+    // the honest error with a retry (data stays null on error, so this also
+    // catches that case after loading finishes).
+    if (error) {
+      return (
+        <div className="space-y-6">
+          <SectionHeading title="Dashboard" description="Live business snapshot" />
+          <ErrorState error={error} onRetry={reload} entity="the dashboard" />
+        </div>
+      )
+    }
     return (
       <div className="space-y-6">
         <SectionHeading title="Dashboard" description="Live business snapshot" />

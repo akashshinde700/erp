@@ -12,9 +12,9 @@ const postSchema = z.object({
 export async function POST(req: Request) {
   try {
     const body = postSchema.parse(await req.json())
-    await assertMutationAccess()
+    const actor = await assertMutationAccess()
     const res = await issueCertificate(body.inwardId, body.date)
-    await logAudit('POST', 'JobworkCertificate', res.id, `${res.certNo} issued`)
+    await logAudit('POST', 'JobworkCertificate', res.id, `${res.certNo} issued`, actor?.email)
     return ok(res)
   } catch (e) {
     return handleError(e)

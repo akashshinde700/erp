@@ -47,8 +47,15 @@ export async function POST(req: Request) {
 
     // Key path (scripted access; never sets a session cookie). Constant-work:
     // an unknown key burns the same scrypt cost as a wrong password below.
+    // The comparison itself is length-safe + XOR-accumulated (constant-time
+    // for equal-length inputs) — never a plain !== on a secret.
     if (body.key !== undefined) {
-      if (body.key !== PLATFORM_KEY()) {
+      const expected = PLATFORM_KEY()
+      const given = body.key
+      const matched =
+        expected.length === given.length &&
+        [...expected].reduce((diff, ch, i) => diff | (ch.charCodeAt(0) ^ given.charCodeAt(i)), 0) === 0
+      if (!matched) {
         burnPasswordCheck()
         return fail('Invalid platform admin key', 401)
       }

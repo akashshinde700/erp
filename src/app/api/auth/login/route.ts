@@ -40,7 +40,7 @@ export async function POST(req: Request) {
 
     clearFailures(throttleKey)
     await db.orgUser.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } })
-    await logAudit('LOGIN', 'OrgUser', user.id, `${user.email} signed in (${user.company.name})`)
+    await logAudit('LOGIN', 'OrgUser', user.id, `${user.email} signed in (${user.company.name})`, user.email)
 
     const data = await buildSessionInfo(user)
     const res = NextResponse.json({ success: true, data })

@@ -1,0 +1,993 @@
+     1→'use client'
+     2→
+     3→/**
+     4→ * ForgeERP — API client.
+     5→ * One helper for the {success,data,error} envelope; typed entities for every
+     6→ * backend endpoint; tiny fetch hooks with loading/error state.
+     7→ * All paths are relative (same origin) — Caddy-friendly by construction.
+     8→ */
+     9→
+    10→import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
+    11→import { toast } from 'sonner'
+    12→
+    13→// ---------- envelope ----------
+    14→
+    15→interface Envelope<T> {
+    16→  success: boolean
+    17→  data?: T
+    18→  error?: string
+    19→}
+    20→
+    21→/** API error carrying the HTTP status — lets callers distinguish auth loss
+    22→ *  (401) from transient failures (409 races, 5xx, network). */
+    23→export class ApiError extends Error {
+    24→  status: number
+    25→
+    26→  constructor(message: string, status: number) {
+    27→    super(message)
+    28→    this.name = 'ApiError'
+    29→    this.status = status
+    30→  }
+    31→}
+    32→
+    33→export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+    34→  let res: Response
+    35→  try {
+    36→    res = await fetch(path, {
+    37→      ...init,
+    38→      headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+    39→    })
+    40→  } catch {
+    41→    throw new ApiError('Network error — is the server running?', 0)
+    42→  }
+    43→  let json: Envelope<T>
+    44→  try {
+    45→    json = (await res.json()) as Envelope<T>
+    46→  } catch {
+    47→    throw new ApiError(`Request failed (${res.status})`, res.status)
+    48→  }
+    49→  if (!res.ok || !json.success) throw new ApiError(json.error ?? `Request failed (${res.status})`, res.status)
+    50→  return json.data as T
+    51→}
+    52→
+    53→export const apiGet = <T>(path: string): Promise<T> => api<T>(path)
+    54→export const apiPost = <T>(path: string, body: unknown): Promise<T> =>
+    55→  api<T>(path, { method: 'POST', body: JSON.stringify(body) })
+    56→export const apiPut = <T>(path: string, body: unknown): Promise<T> =>
+    57→  api<T>(path, { method: 'PUT', body: JSON.stringify(body) })
+    58→export const apiDelete = <T>(path: string): Promise<T> => api<T>(path, { method: 'DELETE' })
+    59→
+    60→/** Toast any thrown error (sonner). */
+    61→export function toastError(e: unknown): void {
+    62→  toast.error(e instanceof Error ? e.message : 'Something went wrong')
+    63→}
+    64→
+    65→// ---------- masters ----------
+    66→
+    67→export interface Company {
+    68→  id: string
+    69→  name: string
+    70→  legalName: string | null
+    71→  gstin: string | null
+    72→  stateCode: string
+    73→  address: string | null
+    74→  city: string | null
+    75→  pincode: string | null
+    76→  phone: string | null
+    77→  email: string | null
+    78→  bankName: string | null
+    79→  bankAcct: string | null
+    80→  bankIfsc: string | null
+    81→  upiId: string | null
+    82→  tallyCompanyName: string | null
+    83→  tallySalesLedger: string | null
+    84→  tallyPurchaseLedger: string | null
+    85→  tallyCgstLedger: string | null
+    86→  tallySgstLedger: string | null
+    87→  tallyIgstLedger: string | null
+    88→  tallyRoundOffLedger: string | null
+    89→  plan: { id: string; name: string; priceMonthly: number } | null
+    90→  saasStatus: string
+    91→  billingCycle: string
+    92→  paidUntil: string | null
+    93→  trialEndsAt: string | null
+    94→  access?: { state: string; blocked: boolean; message: string }
+    95→}
+    96→
+    97→export interface Party {
+    98→  id: string
+    99→  code: string
+   100→  name: string
+   101→  types: string // CSV: CUSTOMER,SUPPLIER,JOBWORKER
+   102→  gstin: string | null
+   103→  stateCode: string
+   104→  address: string | null
+   105→  city: string | null
+   106→  pincode: string | null
+   107→  phone: string | null
+   108→  email: string | null
+   109→  openingBal: number
+   110→  active: boolean
+   111→}
+   112→
+   113→export interface Item {
+   114→  id: string
+   115→  code: string
+   116→  name: string
+   117→  groupName: string
+   118→  hsn: string | null
+   119→  isService: boolean
+   120→  isStockItem: boolean
+   121→  uom: string
+   122→  gstRate: number
+   123→  saleRate: number
+   124→  costRate: number
+   125→  reorderLevel: number
+   126→  active: boolean
+   127→}
+   128→
+   129→export interface Warehouse {
+   130→  id: string
+   131→  code: string
+   132→  name: string
+   133→  location: string | null
+   134→  active: boolean
+   135→}
+   136→
+   137→export interface Process {
+   138→  id: string
+   139→  code: string
+   140→  name: string
+   141→  seq: number
+   142→  basis: string // WEIGHT | QTY
+   143→  rate: number
+   144→  lotCharge: number
+   145→  active: boolean
+   146→}
+   147→
+   148→export interface PartyRateRow {
+   149→  processId: string
+   150→  code: string
+   151→  name: string
+   152→  basis: string
+   153→  defaultRate: number
+   154→  defaultLot: number
+   155→  rate: number
+   156→  lotCharge: number
+   157→  overridden: boolean
+   158→}
+   159→
+   160→export interface PartyRateGrid {
+   161→  party: { id: string; code: string; name: string }
+   162→  rows: PartyRateRow[]
+   163→}
+   164→
+   165→// ---------- invoices ----------
+   166→
+   167→export interface InvoiceItem {
+   168→  id: string
+   169→  itemId: string
+   170→  detail: string | null
+   171→  hsn: string | null
+   172→  uom: string
+   173→  qty: number
+   174→  rate: number
+   175→  discPct: number
+   176→  discAmt: number
+   177→  taxable: number
+   178→  gstRate: number
+   179→  cgst: number
+   180→  sgst: number
+   181→  igst: number
+   182→  total: number
+   183→}
+   184→
+   185→export interface PartyMini {
+   186→  code: string
+   187→  name: string
+   188→  gstin?: string | null
+   189→  stateCode?: string
+   190→}
+   191→
+   192→export interface SalesInvoice {
+   193→  id: string
+   194→  invoiceNo: string
+   195→  date: string
+   196→  partyId: string
+   197→  poNo: string | null
+   198→  pos: string
+   199→  interState: boolean
+   200→  taxInclusive: boolean
+   201→  taxable: number
+   202→  discount: number
+   203→  cgst: number
+   204→  sgst: number
+   205→  igst: number
+   206→  roundOff: number
+   207→  grandTotal: number
+   208→  paidAmount: number
+   209→  status: string
+   210→  source: string
+   211→  remarks: string | null
+   212→  tallySentAt?: string | null
+   213→  party?: PartyMini
+   214→  items?: InvoiceItem[]
+   215→}
+   216→
+   217→export interface PurchaseInvoice {
+   218→  id: string
+   219→  invoiceNo: string
+   220→  date: string
+   221→  partyId: string
+   222→  poNo: string | null
+   223→  interState: boolean
+   224→  taxInclusive: boolean
+   225→  taxable: number
+   226→  discount: number
+   227→  cgst: number
+   228→  sgst: number
+   229→  igst: number
+   230→  roundOff: number
+   231→  grandTotal: number
+   232→  paidAmount: number
+   233→  status: string
+   234→  remarks: string | null
+   235→  tallySentAt?: string | null
+   236→  party?: PartyMini
+   237→  items?: InvoiceItem[]
+   238→}
+   239→
+   240→// ---------- payments ----------
+   241→
+   242→export interface PaymentAllocation {
+   243→  id?: string
+   244→  invoiceType: string // SALES | PURCHASE
+   245→  invoiceNo: string
+   246→  amount: number
+   247→}
+   248→
+   249→export interface Payment {
+   250→  id: string
+   251→  paymentNo: string
+   252→  date: string
+   253→  type: string // RECEIPT | PAYMENT
+   254→  partyId: string
+   255→  amount: number
+   256→  mode: string | null
+   257→  refNo: string | null
+   258→  notes: string | null
+   259→  status: string
+   260→  party?: { code: string; name: string }
+   261→  allocations?: PaymentAllocation[]
+   262→}
+   263→
+   264→// ---------- jobwork ----------
+   265→
+   266→export interface JobworkInwardItem {
+   267→  id: string
+   268→  itemId: string
+   269→  item: Item
+   270→  batchNo: string | null
+   271→  qty: number
+   272→  weight: number
+   273→  processedQty: number
+   274→  processedWeight: number
+   275→  remarks: string | null
+   276→}
+   277→
+   278→export interface JobCardProcess {
+   279→  id: string
+   280→  jobCardId: string
+   281→  processId: string
+   282→  process: Process
+   283→  inwardItemId: string
+   284→  qty: number
+   285→  weight: number
+   286→  basis: string
+   287→  rate: number
+   288→  amount: number
+   289→  lotCharge: number
+   290→}
+   291→
+   292→export interface JobCard {
+   293→  id: string
+   294→  cardNo: string
+   295→  inwardId: string
+   296→  date: string
+   297→  status: string // COMPLETED | CANCELLED
+   298→  totalAmount: number
+   299→  notes: string | null
+   300→  processes?: JobCardProcess[]
+   301→}
+   302→
+   303→export interface JobworkCertificate {
+   304→  id: string
+   305→  certNo: string
+   306→  inwardId: string
+   307→  date: string
+   308→  totalQty: number
+   309→  totalWeight: number
+   310→  totalAmount: number
+   311→  status: string
+   312→  details: string | null
+   313→}
+   314→
+   315→export interface JobworkInward {
+   316→  id: string
+   317→  inwardNo: string
+   318→  date: string
+   319→  partyId: string
+   320→  party: Party
+   321→  challanNo: string | null
+   322→  warehouseId: string | null
+   323→  notes: string | null
+   324→  status: string // OPEN | IN_PROGRESS | COMPLETED | INVOICED | CANCELLED
+   325→  items: JobworkInwardItem[]
+   326→  jobCards: JobCard[]
+   327→  certificates: JobworkCertificate[]
+   328→}
+   329→
+   330→// ---------- manufacturing (Project → BOM → Work Order → Tasks) ----------
+   331→
+   332→export interface Employee {
+   333→  id: string
+   334→  code: string
+   335→  name: string
+   336→  role: string // WORKER | SUPERVISOR | MANAGER
+   337→  skill: string | null
+   338→  machineNo: string | null
+   339→  shift: string // GENERAL | DAY | NIGHT
+   340→  hourlyRate: number
+   341→  phone: string | null
+   342→  active: boolean
+   343→  createdAt: string
+   344→  _count?: { tasks: number }
+   345→}
+   346→
+   347→export interface ProjectStats {
+   348→  bomCount: number
+   349→  woCount: number
+   350→  taskTotal: number
+   351→  taskDone: number
+   352→  progressPct: number
+   353→  actualCost: number
+   354→  labourCost: number
+   355→  materialCost: number
+   356→}
+   357→
+   358→export interface Project {
+   359→  id: string
+   360→  projectNo: string
+   361→  name: string
+   362→  partyId: string
+   363→  party: { id: string; code: string; name: string; city: string | null }
+   364→  manager: string | null
+   365→  location: string | null
+   366→  startDate: string
+   367→  endDate: string | null
+   368→  budget: number
+   369→  estCost: number
+   370→  documents: string | null
+   371→  status: string // PENDING | RUNNING | COMPLETED | CANCELLED
+   372→  completedAt: string | null
+   373→  notes: string | null
+   374→  createdAt: string
+   375→  stats: ProjectStats
+   376→}
+   377→
+   378→export interface BomItemRow {
+   379→  id: string
+   380→  itemId: string
+   381→  item: { id?: string; code: string; name: string; uom: string; costRate?: number }
+   382→  grade: string | null
+   383→  thickness: number
+   384→  length: number
+   385→  width: number
+   386→  qty: number
+   387→  uom: string
+   388→  wastagePct: number
+   389→  rate: number
+   390→  estCost: number
+   391→  drawingRef: string | null
+   392→  remarks: string | null
+   393→  /** MRP stock check */
+   394→  avail: number
+   395→  grossQty: number
+   396→  shortage: number
+   397→}
+   398→
+   399→export interface Bom {
+   400→  id: string
+   401→  bomNo: string
+   402→  projectId: string
+   403→  project: { id: string; projectNo: string; name: string; status: string }
+   404→  productName: string
+   405→  drawingRef: string | null
+   406→  status: string // DRAFT | APPROVED | CANCELLED
+   407→  approvedAt: string | null
+   408→  notes: string | null
+   409→  createdAt: string
+   410→  items: BomItemRow[]
+   411→  totalEstCost: number
+   412→  _count?: { workOrders: number }
+   413→}
+   414→
+   415→export interface WorkOrderLineRow {
+   416→  id: string
+   417→  itemId: string
+   418→  item: { code: string; name: string; uom: string }
+   419→  description: string | null
+   420→  plannedQty: number
+   421→  uom: string
+   422→}
+   423→
+   424→export interface ProductionTask {
+   425→  id: string
+   426→  taskNo: string
+   427→  workOrderId: string
+   428→  seq: number
+   429→  operation: string
+   430→  employeeId: string | null
+   431→  employee?: { id: string; code: string; name: string; machineNo?: string | null; shift?: string } | null
+   432→  machineNo: string | null
+   433→  plannedQty: number
+   434→  actualQty: number
+   435→  rejectionQty: number
+   436→  hours: number
+   437→  labourRate: number
+   438→  labourCost: number
+   439→  materialItemId: string | null
+   440→  materialItem?: { id: string; code: string; name: string; uom: string } | null
+   441→  materialQty: number
+   442→  materialCost: number
+   443→  status: string // PENDING | ASSIGNED | IN_PROGRESS | COMPLETED | CANCELLED
+   444→  dueDate: string | null
+   445→  startedAt: string | null
+   446→  completedAt: string | null
+   447→  notes: string | null
+   448→  createdAt: string
+   449→}
+   450→
+   451→export interface WorkOrder {
+   452→  id: string
+   453→  woNo: string
+   454→  projectId: string
+   455→  project: { id: string; projectNo: string; name: string; status: string }
+   456→  bomId: string | null
+   457→  bom?: { id: string; bomNo: string; productName: string } | null
+   458→  date: string
+   459→  startDate: string | null
+   460→  endDate: string | null
+   461→  priority: string // LOW | NORMAL | HIGH | URGENT
+   462→  status: string // OPEN | IN_PROGRESS | COMPLETED | CANCELLED
+   463→  completedAt: string | null
+   464→  notes: string | null
+   465→  createdAt: string
+   466→  lines: WorkOrderLineRow[]
+   467→  tasks: ProductionTask[]
+   468→  stats: { taskTotal: number; taskDone: number; progressPct: number; labourCost: number; materialCost: number }
+   469→}
+   470→
+   471→export interface ProjectDetail extends Omit<Project, 'stats'> {
+   472→  boms: (Bom & { items: BomItemRow[] })[]
+   473→  workOrders: WorkOrder[]
+   474→  stats: ProjectStats & {
+   475→    estCost: number
+   476→    budget: number
+   477→    margin: number
+   478→    pendingTasks: number
+   479→  }
+   480→}
+   481→
+   482→export interface PendingTaskRow extends ProductionTask {
+   483→  employee: { id: string; code: string; name: string; shift: string } | null
+   484→  workOrder: {
+   485→    id: string
+   486→    woNo: string
+   487→    priority: string
+   488→    status: string
+   489→    endDate: string | null
+   490→    project: { id: string; projectNo: string; name: string; status: string }
+   491→  }
+   492→  overdue: boolean
+   493→  woOverdue: boolean
+   494→}
+   495→
+   496→export interface PendingReport {
+   497→  rows: PendingTaskRow[]
+   498→  summary: { total: number; overdue: number; unassigned: number; inProgress: number }
+   499→}
+   500→
+   501→export interface ManufacturingStats {
+   502→  projects: { total: number; pending: number; running: number; completed: number }
+   503→  workOrders: { open: number; inProgress: number; completed: number }
+   504→  tasks: { pending: number; assigned: number; inProgress: number }
+   505→}
+   506→
+   507→export const MANUFACTURING_OPERATIONS: { key: string; label: string }[] = [
+   508→  { key: 'CUTTING', label: 'Material Cutting' },
+   509→  { key: 'CNC_LASER', label: 'CNC / Laser Cutting' },
+   510→  { key: 'BENDING', label: 'Bending' },
+   511→  { key: 'DRILLING', label: 'Drilling' },
+   512→  { key: 'WELDING', label: 'Welding' },
+   513→  { key: 'GRINDING', label: 'Grinding' },
+   514→  { key: 'ASSEMBLY', label: 'Assembly' },
+   515→  { key: 'PAINTING', label: 'Painting / Powder Coating' },
+   516→  { key: 'FINISHING', label: 'Final Finishing' },
+   517→  { key: 'OTHER', label: 'Other' },
+   518→]
+   519→
+   520→export const operationLabel = (key: string): string =>
+   521→  MANUFACTURING_OPERATIONS.find((o) => o.key === key)?.label ?? key
+   522→
+   523→export const WO_PRIORITIES = ['LOW', 'NORMAL', 'HIGH', 'URGENT'] as const
+   524→
+   525→// ---------- reports ----------
+   526→
+   527→export interface StockLedgerRow {
+   528→  id: string
+   529→  postingDate: string
+   530→  voucherType: string
+   531→  voucherNo: string
+   532→  itemId: string
+   533→  item: Item
+   534→  warehouseId: string | null
+   535→  warehouse: Warehouse | null
+   536→  qtyIn: number
+   537→  qtyOut: number
+   538→  rate: number
+   539→  balance: number
+   540→  value: number
+   541→  avgCost: number
+   542→  remarks: string | null
+   543→  isCancelled: boolean
+   544→}
+   545→
+   546→export interface StockSummaryRow {
+   547→  item: {
+   548→    id: string
+   549→    code: string
+   550→    name: string
+   551→    uom: string
+   552→    reorderLevel: number
+   553→    hsn: string | null
+   554→  }
+   555→  inQty: number
+   556→  outQty: number
+   557→  closing: number
+   558→  avgCost: number
+   559→  closingValue: number
+   560→  lowStock: boolean
+   561→  /** Per-warehouse closing split (non-zero only). */
+   562→  warehouses?: { code: string; closing: number }[]
+   563→}
+   564→
+   565→export interface Gstr1Bucket {
+   566→  rate: number
+   567→  count: number
+   568→  taxable: number
+   569→  cgst: number
+   570→  sgst: number
+   571→  igst: number
+   572→}
+   573→
+   574→export interface Gstr1Report {
+   575→  month: string
+   576→  invoiceCount: number
+   577→  b2bCount: number
+   578→  b2cCount: number
+   579→  b2b: Gstr1Bucket[]
+   580→  b2c: Gstr1Bucket[]
+   581→  b2bTotal: { count: number; taxable: number; cgst: number; sgst: number; igst: number }
+   582→  b2cTotal: { count: number; taxable: number; cgst: number; sgst: number; igst: number }
+   583→}
+   584→
+   585→export interface TrialBalanceAccount {
+   586→  account: string
+   587→  accountName: string
+   588→  debit: number
+   589→  credit: number
+   590→  closing: number
+   591→}
+   592→
+   593→export interface TrialBalance {
+   594→  accounts: TrialBalanceAccount[]
+   595→  totalDr: number
+   596→  totalCr: number
+   597→  balanced: boolean
+   598→}
+   599→
+   600→export interface OutstandingRow {
+   601→  party: { id: string; code: string; name: string; stateCode?: string; openingBal?: number }
+   602→  amount: number
+   603→}
+   604→
+   605→export interface Outstanding {
+   606→  customers: OutstandingRow[]
+   607→  suppliers: OutstandingRow[]
+   608→  totalReceivable: number
+   609→  totalPayable: number
+   610→}
+   611→
+   612→export interface Pnl {
+   613→  from: string
+   614→  to: string
+   615→  sales: number
+   616→  jobworkIncome: number
+   617→  purchases: number
+   618→  roundOff: number
+   619→  revenue: number
+   620→  grossProfit: number
+   621→  netProfit: number
+   622→}
+   623→
+   624→export interface PartyLedgerRow {
+   625→  id: string
+   626→  date: string
+   627→  account: string
+   628→  accountName: string
+   629→  partyId: string | null
+   630→  debit: number
+   631→  credit: number
+   632→  voucherType: string
+   633→  voucherNo: string
+   634→  balance: number
+   635→  isCancelled: boolean
+   636→}
+   637→
+   638→export interface PartyLedger {
+   639→  party: Party
+   640→  openingBal: number
+   641→  rows: PartyLedgerRow[]
+   642→  closing: number
+   643→}
+   644→
+   645→export interface JobworkPendingItem {
+   646→  item: { id: string; code: string; name: string; uom: string }
+   647→  batchNo: string | null
+   648→  receivedQty: number
+   649→  processedQty: number
+   650→  remainingQty: number
+   651→  receivedWeight: number
+   652→  processedWeight: number
+   653→  remainingWeight: number
+   654→  pendingProcesses: { id: string; code: string; name: string }[]
+   655→}
+   656→
+   657→export interface JobworkPendingRow {
+   658→  inward: {
+   659→    id: string
+   660→    inwardNo: string
+   661→    date: string
+   662→    status: string
+   663→    party: { name: string; code: string }
+   664→  }
+   665→  items: JobworkPendingItem[]
+   666→  cardValue: number
+   667→}
+   668→
+   669→export interface DashboardData {
+   670→  monthSales: number
+   671→  monthPurchase: number
+   672→  receivables: number
+   673→  payables: number
+   674→  stockValue: number
+   675→  openJobworkValue: number
+   676→  runningProjects: number
+   677→  pendingTasks: number
+   678→  trend: { month: string; label: string; sales: number; purchase: number }[]
+   679→  recentInvoices: {
+   680→    id: string
+   681→    invoiceNo: string
+   682→    date: string
+   683→    party: string
+   684→    grandTotal: number
+   685→    paidAmount: number
+   686→    source: string
+   687→  }[]
+   688→  lowStock: { code: string; name: string; closing: number; reorderLevel: number; uom: string }[]
+   689→}
+   690→
+   691→// ---------- hooks ----------
+   692→
+   693→const emptySubscribe = () => () => {}
+   694→
+   695→/** Hydration-safe "is client" flag (no setState-in-effect). */
+   696→export function useMounted(): boolean {
+   697→  return useSyncExternalStore(
+   698→    emptySubscribe,
+   699→    () => true,
+   700→    () => false
+   701→  )
+   702→}
+   703→
+   704→/** Fetch + parse with loading/error state; `reload()` re-runs (stale-while-revalidate). `null` path skips. */
+   705→export function useApi<T>(path: string | null) {
+   706→  const [state, setState] = useState<{ forPath: string | null; data: T | null; error: string | null }>({
+   707→    forPath: null,
+   708→    data: null,
+   709→    error: null,
+   710→  })
+   711→  const [tick, setTick] = useState(0)
+   712→
+   713→  useEffect(() => {
+   714→    if (path === null) return
+   715→    let alive = true
+   716→    api<T>(path)
+   717→      .then((d) => {
+   718→        if (alive) setState({ forPath: path, data: d, error: null })
+   719→      })
+   720→      .catch((e: unknown) => {
+   721→        if (alive)
+   722→          setState({ forPath: path, data: null, error: e instanceof Error ? e.message : 'Request failed' })
+   723→      })
+   724→    return () => {
+   725→      alive = false
+   726→    }
+   727→  }, [path, tick])
+   728→
+   729→  const current = state.forPath === path ? state : null
+   730→  const data = current?.data ?? null
+   731→  const error = current?.error ?? null
+   732→  const loading = path !== null && current === null
+   733→  const reload = useCallback(() => setTick((t) => t + 1), [])
+   734→  return { data, loading, error, reload }
+   735→}
+   736→
+   737→/** All masters in parallel (parties/items/warehouses/processes). */
+   738→export function useMasters() {
+   739→  const parties = useApi<Party[]>('/api/masters/parties')
+   740→  const items = useApi<Item[]>('/api/masters/items')
+   741→  const warehouses = useApi<Warehouse[]>('/api/masters/warehouses')
+   742→  const processes = useApi<Process[]>('/api/masters/processes')
+   743→  return {
+   744→    parties: parties.data ?? [],
+   745→    items: items.data ?? [],
+   746→    warehouses: warehouses.data ?? [],
+   747→    processes: processes.data ?? [],
+   748→    loading: parties.loading || items.loading || warehouses.loading || processes.loading,
+   749→    reloadAll: () => {
+   750→      parties.reload()
+   751→      items.reload()
+   752→      warehouses.reload()
+   753→      processes.reload()
+   754→    },
+   755→  }
+   756→}
+   757→
+   758→// ---------- org login (SaaS) ----------
+   759→
+   760→/** Session payload returned by /api/auth/{login,session,bootstrap}. */
+   761→export interface SessionInfo {
+   762→  user: { id: string; name: string; email: string; role: string }
+   763→  company: { id: string; name: string; gstin: string | null; city: string | null; email: string | null }
+   764→  operating: boolean
+   765→  operatingOrg: { id: string; name: string } | null
+   766→  plan: string | null
+   767→  access: { state: string; blocked: boolean; message: string }
+   768→  paidUntil: string | null
+   769→  trialEndsAt: string | null
+   770→}
+   771→
+   772→export interface AuthStatus {
+   773→  companyExists: boolean
+   774→  companyName: string | null
+   775→  usersExist: boolean
+   776→  demoHint: boolean
+   777→  /** True when the SUPER_ADMIN login exists (no email/password ever exposed). */
+   778→  platformConfigured: boolean
+   779→}
+   780→
+   781→// ---------- tally / platform / audit ----------
+   782→
+   783→export interface TallyVoucherPreview {
+   784→  voucher: {
+   785→    voucherType: string
+   786→    voucherNumber: string
+   787→    remoteId: string
+   788→    date: string
+   789→    party: string
+   790→    entries: { ledger: string; amount: number; isDebit: boolean; isParty: boolean }[]
+   791→    items: { stockItem: string; qty: number; rate: number; amount: number; uom: string }[]
+   792→    totals: { taxable: number; cgst: number; sgst: number; igst: number; roundOff: number; grandTotal: number }
+   793→  }
+   794→  warnings: string[]
+   795→}
+   796→
+   797→// ---------- e-invoice ----------
+   798→
+   799→export interface EInvoicePreview {
+   800→  valid: boolean
+   801→  docNo: string
+   802→  errors: string[]
+   803→  warnings: string[]
+   804→  supTyp: string
+   805→  itemCount: number
+   806→  totInvVal: number
+   807→}
+   808→
+   809→export interface EInvoiceBulkPreview {
+   810→  total: number
+   811→  eligible: number
+   812→  skipped: { docNo: string; errors: string[] }[]
+   813→  value: number
+   814→}
+   815→
+   816→export interface TallyConnectorStatus {
+   817→  paired: boolean
+   818→  online: boolean
+   819→  pending: number
+   820→  lastSeenAt: number | null
+   821→  pairedAt: number | null
+   822→  connectorVersion: string | null
+   823→  recent: { docNo: string; ok: boolean; created: number; altered: number; errors: number; errorText: string }[]
+   824→}
+   825→
+   826→export interface Plan {
+   827→  id: string
+   828→  name: string
+   829→  priceMonthly: number
+   830→  priceYearly: number
+   831→  maxItems: number
+   832→  maxWarehouses: number
+   833→  maxParties: number
+   834→  active: boolean
+   835→  features: string[]
+   836→  _count?: { companies: number }
+   837→}
+   838→
+   839→export interface OrgRow {
+   840→  id: string
+   841→  name: string
+   842→  gstin: string | null
+   843→  city: string | null
+   844→  email: string | null
+   845→  isPlatform: boolean
+   846→  operating: boolean
+   847→  ownerEmail: string | null
+   848→  userCount: number
+   849→  plan: { id: string; name: string; priceMonthly: number } | null
+   850→  customized: boolean
+   851→  limits: { items: number; warehouses: number; parties: number }
+   852→  usage: { parties: number; items: number; warehouses: number; salesInvoices: number }
+   853→  saasStatus: string
+   854→  billingCycle: string
+   855→  paidUntil: string | null
+   856→  trialEndsAt: string | null
+   857→  createdAt: string
+   858→}
+   859→
+   860→export interface OrgsResponse {
+   861→  orgs: OrgRow[]
+   862→  stats: { total: number; active: number; suspended: number; mrr: number; parties: number; items: number; warehouses: number; salesInvoices: number }
+   863→}
+   864→
+   865→// ---------- platform inquiries & blog ----------
+   866→
+   867→/** Client-side mirror of PLAN_FEATURES in src/lib/platform.ts (keys must match). */
+   868→export const PLAN_FEATURE_CATALOG = [
+   869→  { key: 'exportData', label: 'Data export' },
+   870→  { key: 'advancedReports', label: 'Advanced reports' },
+   871→] as const
+   872→
+   873→export const INQUIRY_STATUSES = ['new', 'contacted', 'converted', 'closed'] as const
+   874→export type InquiryStatus = (typeof INQUIRY_STATUSES)[number]
+   875→
+   876→export interface InquiryFollowUp {
+   877→  id: string
+   878→  inquiryId: string
+   879→  note: string
+   880→  createdAt: string
+   881→}
+   882→
+   883→export interface InquiryRow {
+   884→  id: string
+   885→  name: string
+   886→  contactName: string | null
+   887→  email: string | null
+   888→  phone: string | null
+   889→  city: string | null
+   890→  message: string | null
+   891→  status: InquiryStatus | string
+   892→  createdAt: string
+   893→  followUps: InquiryFollowUp[]
+   894→}
+   895→
+   896→export interface InquiriesResponse {
+   897→  inquiries: InquiryRow[]
+   898→  newCount: number
+   899→}
+   900→
+   901→export interface BlogPost {
+   902→  id: string
+   903→  title: string
+   904→  slug: string
+   905→  excerpt: string | null
+   906→  body: string | null
+   907→  status: 'draft' | 'published' | string
+   908→  publishedAt: string | null
+   909→  createdAt: string
+   910→  updatedAt: string
+   911→}
+   912→
+   913→export interface BlogResponse {
+   914→  posts: BlogPost[]
+   915→}
+   916→
+   917→export interface AuditRow {
+   918→  id: string
+   919→  action: string
+   920→  entity: string
+   921→  entityId: string | null
+   922→  details: string | null
+   923→  createdAt: string
+   924→}
+   925→
+   926→// ---------- platform api (key-authenticated) ----------
+   927→
+   928→export async function platformApi<T>(path: string, init?: RequestInit, key?: string): Promise<T> {
+   929→  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(init?.headers as Record<string, string> | undefined) }
+   930→  if (key) headers['x-platform-key'] = key
+   931→  return api<T>(path, { ...init, headers })
+   932→}
+   933→
+   934→// ---------- misc helpers ----------
+   935→
+   936→/** Trigger a browser download for a GET endpoint that returns an attachment. */
+   937→export function downloadUrl(path: string): void {
+   938→  const a = document.createElement('a')
+   939→  a.href = path
+   940→  a.rel = 'noopener'
+   941→  document.body.appendChild(a)
+   942→  a.click()
+   943→  a.remove()
+   944→}
+   945→
+   946→/** GST e-invoice portal — Bulk Upload page (where the IRP JSON is uploaded). */
+   947→export const EINVOICE_PORTAL_URL =
+   948→  'https://einvoice1.gst.gov.in/Home/Index?ReturnUrl=%2FInvoice%2FBulkUpload'
+   949→
+   950→/**
+   951→ * Opens the GST e-invoice portal's Bulk Upload page in a new tab, together with
+   952→ * an e-Invoice JSON download. Popup-blocker-safe: the tab is opened
+   953→ * synchronously inside the click gesture (browsers block window.open after
+   954→ * awaits). `retry()` re-attempts in case the first open was blocked;
+   955→ * `cancel()` closes the tab when pre-validation fails and no JSON is produced.
+   956→ */
+   957→export function openEInvoicePortal(): { retry: () => void; cancel: () => void } {
+   958→  const tab = window.open(EINVOICE_PORTAL_URL, '_blank')
+   959→  return {
+   960→    retry: () => {
+   961→      if (!tab) void window.open(EINVOICE_PORTAL_URL, '_blank', 'noopener')
+   962→    },
+   963→    cancel: () => tab?.close(),
+   964→  }
+   965→}
+   966→
+   967→/** Client-side CSV download (BOM + quote escaping). */
+   968→export function downloadCsv(filename: string, rows: (string | number)[][]): void {
+   969→  const csv = rows.map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n')
+   970→  const blob = new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' })
+   971→  const url = URL.createObjectURL(blob)
+   972→  const a = document.createElement('a')
+   973→  a.href = url
+   974→  a.download = filename
+   975→  document.body.appendChild(a)
+   976→  a.click()
+   977→  a.remove()
+   978→  URL.revokeObjectURL(url)
+   979→}
+   980→
+   981→/** Parse an input value into a finite number (default 0). */
+   982→export const num = (v: string | number): number => {
+   983→  const n = typeof v === 'number' ? v : parseFloat(v)
+   984→  return Number.isFinite(n) ? n : 0
+   985→}
+   986→
+   987→export const todayISO = (): string => new Date().toISOString().slice(0, 10)
+   988→
+   989→export const currentMonth = (): string => new Date().toISOString().slice(0, 7)
+   990→
+   991→/** Client-side party filter by type CSV. */
+   992→export const partyTypes = (p: Party): string[] => p.types.split(',').filter(Boolean)
+   993→

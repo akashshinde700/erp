@@ -6,9 +6,9 @@ import { logAudit } from '@/lib/audit'
 export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
-    await assertMutationAccess()
+    const actor = await assertMutationAccess()
     const res = await cancelJobCard(id)
-    await logAudit('CANCEL', 'JobCard', id, `${res.cardNo} cancelled`)
+    await logAudit('CANCEL', 'JobCard', id, `${res.cardNo} cancelled`, actor?.email)
     return ok(res)
   } catch (e) {
     return handleError(e)

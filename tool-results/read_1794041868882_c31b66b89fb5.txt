@@ -1,0 +1,609 @@
+     1→     1→/**
+     2→     2→ * ForgeERP — Demo seed. Builds a realistic Maharashtrian manufacturing-jobwork
+     3→     3→ * scenario through the REAL posting services (never raw inserts), so invoice ≡
+     4→     4→ * stock ledger ≡ GL by construction. Idempotent: skips when a company exists
+     5→     5→ * unless force = true (which wipes everything in FK-safe order).
+     6→     6→ */
+     7→     7→import { db } from './db'
+     8→     8→import { makeGstin } from './erp'
+     9→     9→import { hashPassword } from './auth'
+    10→    10→import { ensurePlatformAdmin, PLATFORM_ADMIN_EMAIL } from './platform'
+    11→    11→import {
+    12→    12→  postOpeningStock,
+    13→    13→  postPurchaseInvoice,
+    14→    14→  postSalesInvoice,
+    15→    15→  postPayment,
+    16→    16→  postJobworkInward,
+    17→    17→  postJobCard,
+    18→    18→  issueCertificate,
+    19→    19→  generateJobworkInvoice,
+    20→    20→  syncPartyOpeningBalance,
+    21→    21→} from './services'
+    22→    22→import {
+    23→    23→  createEmployee,
+    24→    24→  createProject,
+    25→    25→  startProject,
+    26→    26→  completeProject,
+    27→    27→  createBom,
+    28→    28→  approveBom,
+    29→    29→  createWorkOrder,
+    30→    30→  completeWorkOrder,
+    31→    31→  createTask,
+    32→    32→  assignTask,
+    33→    33→  startTask,
+    34→    34→  completeTask,
+    35→    35→} from './manufacturing'
+    36→    36→
+    37→    37→const daysAgo = (n: number): Date => {
+    38→    38→  const d = new Date()
+    39→    39→  d.setDate(d.getDate() - n)
+    40→    40→  d.setHours(10, 30, 0, 0)
+    41→    41→  return d
+    42→    42→}
+    43→    43→
+    44→    44→const daysAhead = (n: number): Date => daysAgo(-n)
+    45→    45→
+    46→    46→export async function seedDatabase(force = false) {
+    47→    47→  // Only a customer organization counts as "seeded" (the platform company is
+    48→    48→  // the operator's own and never the demo scenario).
+    49→    49→  const existing = await db.company.findFirst({ where: { isPlatform: false } })
+    50→    50→  if (existing && !force) return { seeded: false, reason: 'Company already exists (platform admin ?force=1 reseeds)' }
+    51→    51→
+    52→    52→  if (force) {
+    53→    53→    // FK-safe wipe inside ONE transaction — a crash mid-wipe can never leave
+    54→    54→    // a half-deleted database (transaction-safety invariant).
+    55→    55→    await db.$transaction(
+    56→    56→      async (tx) => {
+    57→    57→        await tx.productionTask.deleteMany({})
+    58→    58→        await tx.workOrderLine.deleteMany({})
+    59→    59→        await tx.workOrder.deleteMany({})
+    60→    60→        await tx.bomItem.deleteMany({})
+    61→    61→        await tx.bom.deleteMany({})
+    62→    62→        await tx.project.deleteMany({})
+    63→    63→        await tx.employee.deleteMany({})
+    64→    64→        await tx.paymentAllocation.deleteMany({})
+    65→    65→        await tx.payment.deleteMany({})
+    66→    66→        await tx.jobCardProcess.deleteMany({})
+    67→    67→        await tx.jobCard.deleteMany({})
+    68→    68→        await tx.jobworkCertificate.deleteMany({})
+    69→    69→        await tx.jobworkInwardItem.deleteMany({})
+    70→    70→        await tx.jobworkInward.deleteMany({})
+    71→    71→        await tx.salesInvoiceItem.deleteMany({})
+    72→    72→        await tx.salesInvoice.deleteMany({})
+    73→    73→        await tx.purchaseInvoiceItem.deleteMany({})
+    74→    74→        await tx.purchaseInvoice.deleteMany({})
+    75→    75→        await tx.stockLedger.deleteMany({})
+    76→    76→        await tx.accountLedger.deleteMany({})
+    77→    77→        await tx.partyProcessRate.deleteMany({})
+    78→    78→        await tx.counter.deleteMany({})
+    79→    79→        await tx.item.deleteMany({})
+    80→    80→        await tx.process.deleteMany({})
+    81→    81→        await tx.warehouse.deleteMany({})
+    82→    82→        await tx.party.deleteMany({})
+    83→    83→        // Platform-console rows have no FKs to business tables but DO have unique
+    84→    84→        // keys (blog slug) — a force reseed must wipe them too or the
+    85→    85→        // rebuild dies on P2002.
+    86→    86→        await tx.platformInquiryFollowUp.deleteMany({})
+    87→    87→        await tx.platformInquiry.deleteMany({})
+    88→    88→        await tx.platformBlogPost.deleteMany({})
+    89→    89→        await tx.orgUser.deleteMany({})
+    90→    90→        await tx.company.deleteMany({})
+    91→    91→      },
+    92→    92→      { timeout: 30_000 }
+    93→    93→    )
+    94→    94→  }
+    95→    95→
+    96→    96→  // ---------- Company ----------
+    97→    97→  const company = await db.company.create({
+    98→    98→    data: {
+    99→    99→      name: 'Shree Forge Industries',
+   100→   100→      legalName: 'Shree Forge Industries Pvt. Ltd.',
+   101→   101→      gstin: makeGstin('27', 'AAECS1429B1Z'),
+   102→   102→      stateCode: '27',
+   103→   103→      address: 'Plot 42, MIDC Bhosari Industrial Estate',
+   104→   104→      city: 'Pune',
+   105→   105→      pincode: '411026',
+   106→   106→      phone: '+91 20 4567 8900',
+   107→   107→      email: 'works@shreeforge.example.com',
+   108→   108→      bankName: 'HDFC Bank, Bhosari Branch',
+   109→   109→      bankAcct: '50200034567891',
+   110→   110→      bankIfsc: 'HDFC0000123',
+   111→   111→      upiId: 'shreeforge@hdfcbank',
+   112→   112→    },
+   113→   113→  })
+   114→   114→
+   115→   115→  // ---------- Demo organization login (owner) ----------
+   116→   116→  await db.orgUser.create({
+   117→   117→    data: {
+   118→   118→      name: 'Anil Deshpande',
+   119→   119→      email: 'owner@shreeforge.example.com',
+   120→   120→      passwordHash: hashPassword('forge123'),
+   121→   121→      role: 'OWNER',
+   122→   122→      companyId: company.id,
+   123→   123→    },
+   124→   124→  })
+   125→   125→
+   126→   126→  // ---------- Platform administrator (SUPER_ADMIN) ----------
+   127→   127→  // Delegated to ensurePlatformAdmin: env password or a RANDOM one printed
+   128→   128→  // once in the server log — never a public repo constant. Created AFTER the
+   129→   129→  // operating org so Shree Forge stays the first company.
+   130→   130→  await ensurePlatformAdmin()
+   131→   131→  // The platform-console gate ADVERTISES the demo admin password
+   132→   132→  // (platform123) — make that true for demo installs. This seed only ever
+   133→   133→  // runs on a blank install; an explicit PLATFORM_ADMIN_PASSWORD env always
+   134→   134→  // wins (operator intent beats the demo default).
+   135→   135→  const envPwd = process.env.PLATFORM_ADMIN_PASSWORD
+   136→   136→  if (!envPwd || envPwd.length < 8) {
+   137→   137→    await db.orgUser.update({
+   138→   138→      where: { email: PLATFORM_ADMIN_EMAIL },
+   139→   139→      data: { passwordHash: hashPassword('platform123') },
+   140→   140→    })
+   141→   141→  }
+   142→   142→
+   143→   143→  // ---------- Warehouses ----------
+   144→   144→  const main = await db.warehouse.create({ data: { code: 'MAIN', name: 'Main Stores', location: 'Pune Plant 1' } })
+   145→   145→  const jw = await db.warehouse.create({ data: { code: 'JW', name: 'Jobwork Store', location: 'Pune Plant 1 — customer material cage' } })
+   146→   146→
+   147→   147→  // ---------- Processes ----------
+   148→   148→  const shot = await db.process.create({ data: { code: 'SHOT', name: 'Shot Blasting', seq: 1, basis: 'WEIGHT', rate: 6, lotCharge: 0 } })
+   149→   149→  const ht = await db.process.create({ data: { code: 'HT', name: 'Heat Treatment', seq: 2, basis: 'WEIGHT', rate: 9, lotCharge: 150 } })
+   150→   150→  const galv = await db.process.create({ data: { code: 'GALV', name: 'Galvanizing', seq: 3, basis: 'WEIGHT', rate: 14, lotCharge: 200 } })
+   151→   151→  const mach = await db.process.create({ data: { code: 'MACH', name: 'CNC Machining', seq: 4, basis: 'QTY', rate: 120, lotCharge: 0 } })
+   152→   152→  const qc = await db.process.create({ data: { code: 'QC', name: 'Quality Check & NDT', seq: 5, basis: 'QTY', rate: 15, lotCharge: 0 } })
+   153→   153→  const pack = await db.process.create({ data: { code: 'PACK', name: 'Packing & Marking', seq: 6, basis: 'QTY', rate: 20, lotCharge: 100 } })
+   154→   154→
+   155→   155→  // ---------- Parties ----------
+   156→   156→  const mahindra = await db.party.create({
+   157→   157→    data: {
+   158→   158→      code: 'CUST-001', name: 'Mahindra Metal Works Pvt. Ltd.',
+   159→   159→      types: 'CUSTOMER', gstin: makeGstin('27', 'AABCM5239K1Z'), stateCode: '27',
+   160→   160→      address: 'Sector 22, MIDC Chakan', city: 'Pune', pincode: '410501', phone: '+91 20 2760 1122',
+   161→   161→      email: 'purchase@mahindrametal.example.com',
+   162→   162→    },
+   163→   163→  })
+   164→   164→  const gujarat = await db.party.create({
+   165→   165→    data: {
+   166→   166→      code: 'CUST-002', name: 'Gujarat Heavy Castings LLP',
+   167→   167→      types: 'CUSTOMER', gstin: makeGstin('24', 'AACFG8821L1Z'), stateCode: '24',
+   168→   168→      address: 'GIDC Vatva, Phase II', city: 'Ahmedabad', pincode: '382210', phone: '+91 79 2583 4477',
+   169→   169→    },
+   170→   170→  })
+   171→   171→  const bengal = await db.party.create({
+   172→   172→    data: {
+   173→   173→      code: 'CUST-003', name: 'Bengal Alloys & Forgings Co.',
+   174→   174→      types: 'CUSTOMER', gstin: makeGstin('19', 'AAJCB0417D1Z'), stateCode: '19',
+   175→   175→      address: 'Howrah Industrial Zone', city: 'Kolkata', pincode: '711106', phone: '+91 33 2664 7788',
+   176→   176→    },
+   177→   177→  })
+   178→   178→  const steelTrader = await db.party.create({
+   179→   179→    data: {
+   180→   180→      code: 'SUPP-001', name: 'Pune Steel Traders',
+   181→   181→      types: 'SUPPLIER', gstin: makeGstin('27', 'AAKPS6033F1Z'), stateCode: '27',
+   182→   182→      address: 'Bhawani Peth Steel Market', city: 'Pune', pincode: '411004', phone: '+91 20 2446 0918',
+   183→   183→    },
+   184→   184→  })
+   185→   185→  const alloysSupply = await db.party.create({
+   186→   186→    data: {
+   187→   187→      code: 'SUPP-002', name: 'Mumbai Alloys Supply Corp.',
+   188→   188→      types: 'SUPPLIER', gstin: makeGstin('27', 'AABCM9955E1Z'), stateCode: '27',
+   189→   189→      address: 'Kalamboli Steel Market', city: 'Navi Mumbai', pincode: '410218', phone: '+91 22 2739 5566',
+   190→   190→    },
+   191→   191→  })
+   192→   192→  await db.party.create({
+   193→   193→    data: {
+   194→   194→      code: 'SUPP-003', name: 'Nagpur Ferro Alloys',
+   195→   195→      types: 'SUPPLIER', gstin: makeGstin('27', 'AACCN2210H1Z'), stateCode: '27',
+   196→   196→      address: 'MIDC Hingna', city: 'Nagpur', pincode: '440016', phone: '+91 712 226 3344',
+   197→   197→      openingBal: -25000, // payable
+   198→   198→    },
+   199→   199→  })
+   200→   200→
+   201→   201→  // ---------- GL-mirror every seeded opening balance ----------
+   202→   202→  const partiesWithOpening = await db.party.findMany({ where: { openingBal: { not: 0 } } })
+   203→   203→  for (const p of partiesWithOpening) {
+   204→   204→    await syncPartyOpeningBalance(p.id)
+   205→   205→  }
+   206→   206→
+   207→   207→  // ---------- Items ----------
+   208→   208→  const gearBlank = await db.item.create({
+   209→   209→    data: { code: 'FG-1001', name: 'Gear Blank C45', groupName: 'Finished Goods', hsn: '848390', uom: 'PCS', gstRate: 18, saleRate: 850, costRate: 520, reorderLevel: 40 },
+   210→   210→  })
+   211→   211→  const flange = await db.item.create({
+   212→   212→    data: { code: 'FG-1002', name: 'Flange DN50 SS316', groupName: 'Finished Goods', hsn: '730790', uom: 'PCS', gstRate: 18, saleRate: 640, costRate: 380, reorderLevel: 60 },
+   213→   213→  })
+   214→   214→  const shaft = await db.item.create({
+   215→   215→    data: { code: 'FG-1003', name: 'Input Shaft EN24', groupName: 'Finished Goods', hsn: '848330', uom: 'PCS', gstRate: 18, saleRate: 1200, costRate: 750, reorderLevel: 25 },
+   216→   216→  })
+   217→   217→  const msPlate = await db.item.create({
+   218→   218→    data: { code: 'RM-2001', name: 'MS Plate 12mm', groupName: 'Raw Material', hsn: '720890', uom: 'KGS', gstRate: 18, saleRate: 68, costRate: 52, reorderLevel: 500 },
+   219→   219→  })
+   220→   220→  const brassRod = await db.item.create({
+   221→   221→    data: { code: 'RM-2002', name: 'Brass Rod 25mm', groupName: 'Raw Material', hsn: '740721', uom: 'KGS', gstRate: 18, saleRate: 520, costRate: 410, reorderLevel: 200 },
+   222→   222→  })
+   223→   223→  const jwService = await db.item.create({
+   224→   224→    data: { code: 'JW-SERVICE', name: 'Jobwork Services', groupName: 'Services', hsn: '998887', isService: true, isStockItem: false, uom: 'PCS', gstRate: 18, saleRate: 0, costRate: 0 },
+   225→   225→  })
+   226→   226→
+   227→   227→  // ---------- Fabrication materials (project BOM lines) ----------
+   228→   228→  const msPipe = await db.item.create({
+   229→   229→    data: { code: 'RM-2003', name: 'MS Pipe SQ 40x40', groupName: 'Raw Material', hsn: '730630', uom: 'KG', gstRate: 18, saleRate: 72, costRate: 56, reorderLevel: 300 },
+   230→   230→  })
+   231→   231→  const weldRod = await db.item.create({
+   232→   232→    data: { code: 'RM-2004', name: 'Welding Rod E7018', groupName: 'Consumables', hsn: '831110', uom: 'KG', gstRate: 18, saleRate: 140, costRate: 110, reorderLevel: 50 },
+   233→   233→  })
+   234→   234→  const paint = await db.item.create({
+   235→   235→    data: { code: 'RM-2005', name: 'Epoxy Paint Zinc Primer', groupName: 'Consumables', hsn: '320990', uom: 'LTR', gstRate: 18, saleRate: 320, costRate: 240, reorderLevel: 40 },
+   236→   236→  })
+   237→   237→  const bolts = await db.item.create({
+   238→   238→    data: { code: 'RM-2006', name: 'Bolts & Nuts M16 HDG', groupName: 'Consumables', hsn: '731815', uom: 'PCS', gstRate: 18, saleRate: 45, costRate: 30, reorderLevel: 200 },
+   239→   239→  })
+   240→   240→
+   241→   241→  // ---------- Party-specific process rates (Mahindra contract) ----------
+   242→   242→  await db.partyProcessRate.createMany({
+   243→   243→    data: [
+   244→   244→      { partyId: mahindra.id, processId: ht.id, rate: 8.5, lotCharge: 120 },
+   245→   245→      { partyId: mahindra.id, processId: galv.id, rate: 13, lotCharge: 180 },
+   246→   246→    ],
+   247→   247→  })
+   248→   248→
+   249→   249→  // ---------- Opening stock ----------
+   250→   250→  await postOpeningStock({
+   251→   251→    date: daysAgo(75),
+   252→   252→    warehouseId: main.id,
+   253→   253→    rows: [
+   254→   254→      { itemId: msPlate.id, qty: 5000, rate: 52 },
+   255→   255→      { itemId: brassRod.id, qty: 800, rate: 410 },
+   256→   256→      { itemId: flange.id, qty: 100, rate: 380 },
+   257→   257→      { itemId: msPipe.id, qty: 3000, rate: 56 },
+   258→   258→      { itemId: weldRod.id, qty: 500, rate: 110 },
+   259→   259→      { itemId: paint.id, qty: 200, rate: 240 },
+   260→   260→      { itemId: bolts.id, qty: 1000, rate: 30 },
+   261→   261→    ],
+   262→   262→  })
+   263→   263→
+   264→   264→  // ---------- Purchases ----------
+   265→   265→  const pin1 = await postPurchaseInvoice({
+   266→   266→    partyId: steelTrader.id,
+   267→   267→    date: daysAgo(48),
+   268→   268→    poNo: 'PO-2026-014',
+   269→   269→    warehouseId: main.id,
+   270→   270→    lines: [
+   271→   271→      { itemId: msPlate.id, qty: 3000, rate: 54 },
+   272→   272→      { itemId: brassRod.id, qty: 200, rate: 415 },
+   273→   273→    ],
+   274→   274→  })
+   275→   275→  const pin2 = await postPurchaseInvoice({
+   276→   276→    partyId: alloysSupply.id,
+   277→   277→    date: daysAgo(3),
+   278→   278→    poNo: 'PO-2026-019',
+   279→   279→    warehouseId: main.id,
+   280→   280→    lines: [{ itemId: msPlate.id, qty: 1500, rate: 55 }],
+   281→   281→  })
+   282→   282→
+   283→   283→  // ---------- Sales ----------
+   284→   284→  const inv1 = await postSalesInvoice({
+   285→   285→    partyId: mahindra.id,
+   286→   286→    date: daysAgo(30),
+   287→   287→    poNo: 'MMW/PO/8841',
+   288→   288→    lines: [{ itemId: flange.id, qty: 50, rate: 640 }],
+   289→   289→  })
+   290→   290→  const inv2 = await postSalesInvoice({
+   291→   291→    partyId: gujarat.id,
+   292→   292→    date: daysAgo(24),
+   293→   293→    lines: [{ itemId: brassRod.id, qty: 250, rate: 520 }],
+   294→   294→  })
+   295→   295→  const inv3 = await postSalesInvoice({
+   296→   296→    partyId: bengal.id,
+   297→   297→    date: daysAgo(2),
+   298→   298→    taxInclusive: true,
+   299→   299→    lines: [
+   300→   300→      { itemId: flange.id, qty: 40, rate: 640 },
+   301→   301→      { itemId: msPlate.id, qty: 200, rate: 68, discPct: 5 },
+   302→   302→    ],
+   303→   303→  })
+   304→   304→
+   305→   305→  // ---------- Payments ----------
+   306→   306→  await postPayment({
+   307→   307→    type: 'RECEIPT',
+   308→   308→    partyId: mahindra.id,
+   309→   309→    date: daysAgo(20),
+   310→   310→    amount: 30000,
+   311→   311→    mode: 'BANK',
+   312→   312→    refNo: 'NEFT-884120',
+   313→   313→    allocations: [{ invoiceType: 'SALES', invoiceNo: inv1.invoiceNo, amount: 30000 }],
+   314→   314→  })
+   315→   315→  await postPayment({
+   316→   316→    type: 'PAYMENT',
+   317→   317→    partyId: steelTrader.id,
+   318→   318→    date: daysAgo(18),
+   319→   319→    amount: 100000,
+   320→   320→    mode: 'BANK',
+   321→   321→    refNo: 'RTGS-552103',
+   322→   322→    allocations: [{ invoiceType: 'PURCHASE', invoiceNo: pin1.invoiceNo, amount: 100000 }],
+   323→   323→  })
+   324→   324→  await postPayment({
+   325→   325→    type: 'RECEIPT',
+   326→   326→    partyId: gujarat.id,
+   327→   327→    date: daysAgo(2),
+   328→   328→    amount: 25000,
+   329→   329→    mode: 'UPI',
+   330→   330→    refNo: 'UPI-7712093',
+   331→   331→    allocations: [],
+   332→   332→  })
+   333→   333→
+   334→   334→  // ---------- Jobwork chain (core workflow) ----------
+   335→   335→  // Inward from Mahindra: gear blanks + shafts for treatment
+   336→   336→  const inward = await postJobworkInward({
+   337→   337→    partyId: mahindra.id,
+   338→   338→    date: daysAgo(22),
+   339→   339→    challanNo: 'MMW/CH/2026-118',
+   340→   340→    warehouseId: jw.id,
+   341→   341→    notes: 'Customer material for heat treatment + machining batch',
+   342→   342→    items: [
+   343→   343→      { itemId: gearBlank.id, batchNo: 'GB-BATCH-07', qty: 200, weight: 480 },
+   344→   344→      { itemId: shaft.id, batchNo: 'SH-BATCH-03', qty: 150, weight: 420 },
+   345→   345→    ],
+   346→   346→  })
+   347→   347→
+   348→   348→  // Job card 1: gears full chain; shafts partial (100 of 150)
+   349→   349→  await postJobCard({
+   350→   350→    inwardId: inward.id,
+   351→   351→    date: daysAgo(16),
+   352→   352→    notes: 'Batch 07 — line 2',
+   353→   353→    lines: [
+   354→   354→      { inwardItemId: inward.items[0].id, qty: 200, weight: 480, processIds: [shot.id, ht.id, qc.id] },
+   355→   355→      { inwardItemId: inward.items[1].id, qty: 100, weight: 280, processIds: [ht.id, mach.id] },
+   356→   356→    ],
+   357→   357→  })
+   358→   358→  // Job card 2: remaining 50 shafts → inward COMPLETED
+   359→   359→  await postJobCard({
+   360→   360→    inwardId: inward.id,
+   361→   361→    date: daysAgo(9),
+   362→   362→    notes: 'Shaft balance quantity',
+   363→   363→    lines: [{ inwardItemId: inward.items[1].id, qty: 50, weight: 140, processIds: [ht.id, mach.id, qc.id] }],
+   364→   364→  })
+   365→   365→
+   366→   366→  // Certificate
+   367→   367→  const cert = await issueCertificate(inward.id, daysAgo(6))
+   368→   368→
+   369→   369→  // Jobwork invoice (service lines per process, SAC 998887, income → JWIN)
+   370→   370→  const jwInv = await generateJobworkInvoice(inward.id, daysAgo(2))
+   371→   371→
+   372→   372→  // One more open inward to show the pending report
+   373→   373→  await postJobworkInward({
+   374→   374→    partyId: gujarat.id,
+   375→   375→    date: daysAgo(1),
+   376→   376→    challanNo: 'GHC/CH/4412',
+   377→   377→    warehouseId: jw.id,
+   378→   378→    items: [
+   379→   379→      { itemId: gearBlank.id, batchNo: 'GB-GUJ-01', qty: 120, weight: 290 },
+   380→   380→      { itemId: shaft.id, batchNo: 'SH-GUJ-01', qty: 80, weight: 225 },
+   381→   381→    ],
+   382→   382→  })
+   383→   383→
+   384→   384→  // =========================================================================
+   385→   385→  // Manufacturing chain (Project → BOM → Work Order → Tasks → Completion)
+   386→   386→  // Everything below runs through the REAL manufacturing services, so
+   387→   387→  // numbering, guards, progress stats and the stock ledger are honest.
+   388→   388→  // =========================================================================
+   389→   389→
+   390→   390→  // ---------- Employees (fabrication floor) ----------
+   391→   391→  const ravi = await createEmployee({ code: 'EMP001', name: 'Ravi Kulkarni', role: 'SUPERVISOR', skill: 'Fitter', shift: 'GENERAL', hourlyRate: 180, phone: '+91 98220 11001' })
+   392→   392→  const sandeep = await createEmployee({ code: 'EMP002', name: 'Sandeep Patil', role: 'WORKER', skill: 'Welder', machineNo: 'WLD-02', shift: 'DAY', hourlyRate: 120 })
+   393→   393→  const imran = await createEmployee({ code: 'EMP003', name: 'Imran Shaikh', role: 'WORKER', skill: 'CNC Operator', machineNo: 'CNC-01', shift: 'DAY', hourlyRate: 150 })
+   394→   394→  const prakash = await createEmployee({ code: 'EMP004', name: 'Prakash Jadhav', role: 'WORKER', skill: 'Fitter', machineNo: 'GRD-01', shift: 'GENERAL', hourlyRate: 110 })
+   395→   395→  const anita = await createEmployee({ code: 'EMP005', name: 'Anita Deshmukh', role: 'WORKER', skill: 'Painter', machineNo: 'PNT-01', shift: 'GENERAL', hourlyRate: 100 })
+   396→   396→  const vilas = await createEmployee({ code: 'EMP006', name: 'Vilas Shinde', role: 'WORKER', skill: 'Helper', shift: 'NIGHT', hourlyRate: 80 })
+   397→   397→
+   398→   398→  // ---------- PRJ-0001 · RUNNING — canopy, tasks in every state ----------
+   399→   399→  const canopy = await createProject({
+   400→   400→    name: 'Steel Structure Fabrication — Canopy',
+   401→   401→    partyId: mahindra.id,
+   402→   402→    manager: 'Anil Deshpande',
+   403→   403→    location: 'Chakan Plant 2',
+   404→   404→    startDate: daysAgo(40),
+   405→   405→    endDate: daysAhead(10),
+   406→   406→    budget: 850000,
+   407→   407→    documents: 'DWG-2025-117 canopy frame\nGA-0042 general arrangement\nWPS-D1.1 welding procedure',
+   408→   408→    notes: 'Hot-dip galvanised canopy over the dispatch bay. 12 columns + trusses.',
+   409→   409→  })
+   410→   410→  const canopyBom = await createBom({
+   411→   411→    projectId: canopy.id,
+   412→   412→    productName: 'Canopy Frame — Level 1',
+   413→   413→    drawingRef: 'DWG-2025-117',
+   414→   414→    notes: 'Net quantities; wastage per shop practice.',
+   415→   415→    lines: [
+   416→   416→      { itemId: msPlate.id, grade: 'IS2062 E250', thickness: 12, qty: 500, uom: 'KG', wastagePct: 5, rate: 54 },
+   417→   417→      { itemId: msPipe.id, grade: 'IS2062', qty: 200, uom: 'KG', wastagePct: 8, rate: 56 },
+   418→   418→      { itemId: weldRod.id, qty: 25, uom: 'KG', wastagePct: 2, rate: 110 },
+   419→   419→      { itemId: paint.id, qty: 40, uom: 'LTR', wastagePct: 5, rate: 240 },
+   420→   420→      { itemId: bolts.id, qty: 100, uom: 'PCS', wastagePct: 3, rate: 30 },
+   421→   421→    ],
+   422→   422→  })
+   423→   423→  await approveBom(canopyBom.id)
+   424→   424→  // WO-1 pulls grossed lines from the approved BOM; project auto-starts (RUNNING)
+   425→   425→  const canopyWo = await createWorkOrder({
+   426→   426→    projectId: canopy.id,
+   427→   427→    bomId: canopyBom.id,
+   428→   428→    priority: 'HIGH',
+   429→   429→    startDate: daysAgo(38),
+   430→   430→    endDate: daysAhead(6),
+   431→   431→    notes: 'Single batch — full frame in one WO.',
+   432→   432→  })
+   433→   433→
+   434→   434→  // Operation tasks (job cards). Completed ones consume real stock.
+   435→   435→  const cut = await createTask({ workOrderId: canopyWo.id, operation: 'CUTTING', seq: 1, plannedQty: 525 })
+   436→   436→  await assignTask(cut.id, { employeeId: prakash.id, dueDate: daysAgo(30) })
+   437→   437→  await completeTask(cut.id, { actualQty: 515, rejectionQty: 10, hours: 16, materialItemId: msPlate.id, materialQty: 520, completedAt: daysAgo(31) })
+   438→   438→
+   439→   439→  const laser = await createTask({ workOrderId: canopyWo.id, operation: 'CNC_LASER', seq: 2, plannedQty: 100 })
+   440→   440→  await assignTask(laser.id, { employeeId: imran.id, dueDate: daysAgo(26) })
+   441→   441→  await completeTask(laser.id, { actualQty: 100, hours: 8, completedAt: daysAgo(26) })
+   442→   442→
+   443→   443→  const bend = await createTask({ workOrderId: canopyWo.id, operation: 'BENDING', seq: 3, plannedQty: 100 })
+   444→   444→  await assignTask(bend.id, { employeeId: prakash.id, dueDate: daysAgo(22) })
+   445→   445→  await completeTask(bend.id, { actualQty: 100, hours: 6, materialItemId: msPipe.id, materialQty: 216, completedAt: daysAgo(22) })
+   446→   446→
+   447→   447→  const weld = await createTask({ workOrderId: canopyWo.id, operation: 'WELDING', seq: 4, plannedQty: 100 })
+   448→   448→  await assignTask(weld.id, { employeeId: sandeep.id, dueDate: daysAgo(15) })
+   449→   449→  await completeTask(weld.id, { actualQty: 100, rejectionQty: 2, hours: 24, materialItemId: weldRod.id, materialQty: 25, completedAt: daysAgo(14) })
+   450→   450→
+   451→   451→  const asm = await createTask({ workOrderId: canopyWo.id, operation: 'ASSEMBLY', seq: 5, plannedQty: 100 })
+   452→   452→  await assignTask(asm.id, { employeeId: ravi.id, dueDate: daysAgo(8) })
+   453→   453→  await completeTask(asm.id, { actualQty: 98, hours: 12, materialItemId: bolts.id, materialQty: 100, completedAt: daysAgo(7) })
+   454→   454→
+   455→   455→  // Painting on the floor right now; finishing unassigned + OVERDUE (pending board demo)
+   456→   456→  const pnt = await createTask({ workOrderId: canopyWo.id, operation: 'PAINTING', seq: 6, plannedQty: 98 })
+   457→   457→  await assignTask(pnt.id, { employeeId: anita.id, dueDate: daysAhead(2) })
+   458→   458→  await startTask(pnt.id)
+   459→   459→
+   460→   460→  const fin = await createTask({ workOrderId: canopyWo.id, operation: 'FINISHING', seq: 7, plannedQty: 98 })
+   461→   461→  await assignTask(fin.id, { employeeId: vilas.id, dueDate: daysAgo(2) }) // overdue
+   462→   462→
+   463→   463→  const qcTask = await createTask({ workOrderId: canopyWo.id, operation: 'OTHER', seq: 8, plannedQty: 98, notes: 'Dimensional QC + dispatch docs' })
+   464→   464→
+   465→   465→  // ---------- PRJ-0002 · PENDING — gantry, draft BOM ----------
+   466→   466→  const gantry = await createProject({
+   467→   467→    name: 'Conveyor Gantry Line — Phase 2',
+   468→   468→    partyId: gujarat.id,
+   469→   469→    manager: 'Sunil Rao',
+   470→   470→    location: 'Vatva Site',
+   471→   471→    startDate: daysAgo(5),
+   472→   472→    endDate: daysAhead(55),
+   473→   473→    budget: 2400000,
+   474→   474→    documents: 'GA-GANTRY-2026-08',
+   475→   475→  })
+   476→   476→  await createBom({
+   477→   477→    projectId: gantry.id,
+   478→   478→    productName: 'Gantry Truss Assembly',
+   479→   479→    drawingRef: 'GA-GANTRY-2026-08',
+   480→   480→    lines: [
+   481→   481→      { itemId: msPlate.id, grade: 'IS2062 E350', thickness: 10, qty: 1200, uom: 'KG', wastagePct: 6, rate: 54 },
+   482→   482→      { itemId: msPipe.id, qty: 800, uom: 'KG', wastagePct: 8, rate: 56 },
+   483→   483→      { itemId: bolts.id, qty: 400, uom: 'PCS', wastagePct: 3, rate: 30 },
+   484→   484→    ],
+   485→   485→  })
+   486→   486→
+   487→   487→  // ---------- PRJ-0003 · COMPLETED — the full happy path ----------
+   488→   488→  const tank = await createProject({
+   489→   489→    name: 'Storage Tank 20KL — SS304',
+   490→   490→    partyId: bengal.id,
+   491→   491→    manager: 'Vikram Joshi',
+   492→   492→    location: 'Howrah Yard',
+   493→   493→    startDate: daysAgo(90),
+   494→   494→    endDate: daysAgo(10),
+   495→   495→    budget: 1250000,
+   496→   496→    documents: 'TK-20KL-DWG-01 shell\nTK-20KL-DWG-02 dome',
+   497→   497→  })
+   498→   498→  const tankBom = await createBom({
+   499→   499→    projectId: tank.id,
+   500→   500→    productName: 'Tank Shell + Dome Assembly',
+   501→   501→    drawingRef: 'TK-20KL-DWG-01',
+   502→   502→    lines: [
+   503→   503→      { itemId: msPlate.id, grade: 'IS2062', thickness: 8, qty: 2200, uom: 'KG', wastagePct: 4, rate: 54 },
+   504→   504→      { itemId: weldRod.id, qty: 45, uom: 'KG', wastagePct: 2, rate: 110 },
+   505→   505→      { itemId: paint.id, qty: 60, uom: 'LTR', wastagePct: 5, rate: 240 },
+   506→   506→      { itemId: bolts.id, qty: 250, uom: 'PCS', wastagePct: 3, rate: 30 },
+   507→   507→    ],
+   508→   508→  })
+   509→   509→  await approveBom(tankBom.id)
+   510→   510→  const tankWo = await createWorkOrder({
+   511→   511→    projectId: tank.id,
+   512→   512→    bomId: tankBom.id,
+   513→   513→    priority: 'NORMAL',
+   514→   514→    startDate: daysAgo(85),
+   515→   515→    endDate: daysAgo(12),
+   516→   516→  })
+   517→   517→  const tCut = await createTask({ workOrderId: tankWo.id, operation: 'CUTTING', seq: 1, plannedQty: 2288 })
+   518→   518→  await assignTask(tCut.id, { employeeId: prakash.id, dueDate: daysAgo(75) })
+   519→   519→  await completeTask(tCut.id, { actualQty: 2280, rejectionQty: 8, hours: 40, materialItemId: msPlate.id, materialQty: 2200, completedAt: daysAgo(74) })
+   520→   520→  const tWeld = await createTask({ workOrderId: tankWo.id, operation: 'WELDING', seq: 2, plannedQty: 100 })
+   521→   521→  await assignTask(tWeld.id, { employeeId: sandeep.id, dueDate: daysAgo(60) })
+   522→   522→  await completeTask(tWeld.id, { actualQty: 100, rejectionQty: 1, hours: 55, materialItemId: weldRod.id, materialQty: 45, completedAt: daysAgo(58) })
+   523→   523→  const tPaint = await createTask({ workOrderId: tankWo.id, operation: 'PAINTING', seq: 3, plannedQty: 100 })
+   524→   524→  await assignTask(tPaint.id, { employeeId: anita.id, dueDate: daysAgo(45) })
+   525→   525→  await completeTask(tPaint.id, { actualQty: 100, hours: 18, materialItemId: paint.id, materialQty: 55, completedAt: daysAgo(44) })
+   526→   526→  const tFin = await createTask({ workOrderId: tankWo.id, operation: 'FINISHING', seq: 4, plannedQty: 100 })
+   527→   527→  await assignTask(tFin.id, { employeeId: vilas.id, dueDate: daysAgo(20) })
+   528→   528→  await completeTask(tFin.id, { actualQty: 100, hours: 10, completedAt: daysAgo(19) })
+   529→   529→  await completeWorkOrder(tankWo.id)
+   530→   530→  await completeProject(tank.id)
+   531→   531→
+   532→   532→  // Unallocated advance left on Gujarat shows in outstanding; verify trial balance
+   533→   533→  const tb = await db.accountLedger.groupBy({ by: ['account'], _sum: { debit: true, credit: true } })
+   534→   534→  const dr = tb.reduce((s, r) => s + (r._sum.debit ?? 0), 0)
+   535→   535→  const cr = tb.reduce((s, r) => s + (r._sum.credit ?? 0), 0)
+   536→   536→  if (Math.abs(dr - cr) > 0.01) {
+   537→   537→    throw new Error(`Seed produced unbalanced GL (Dr ${dr} vs Cr ${cr}) — refusing to ship broken demo data`)
+   538→   538→  }
+   539→   539→
+   540→   540→  // ---------- Platform demo data (inquiries + blog, for the Platform Admin console) ----------
+   541→   541→  const inq1 = await db.platformInquiry.create({
+   542→   542→    data: {
+   543→   543→      name: 'Kalyani Castings Pvt. Ltd.',
+   544→   544→      contactName: 'Anitha V',
+   545→   545→      email: 'purchase@kalyanicastings.example.com',
+   546→   546→      phone: '8971233080',
+   547→   547→      city: 'Bengaluru',
+   548→   548→      message: 'Need jobwork billing for heat treatment + galvanizing across 3 plants. ~400 invoices/month.',
+   549→   549→      status: 'new',
+   550→   550→    },
+   551→   551→  })
+   552→   552→  await db.platformInquiry.create({
+   553→   553→    data: {
+   554→   554→      name: 'Shakti Forge & Alloys',
+   555→   555→      contactName: 'R. Deshmukh',
+   556→   556→      email: 'rdeshmukh@shaktiforge.example.com',
+   557→   557→      phone: '9822014567',
+   558→   558→      city: 'Pune',
+   559→   559→      message: 'Evaluating a switch from Tally-only accounting. Wants GST + jobwork certificates.',
+   560→   560→      status: 'contacted',
+   561→   561→    },
+   562→   562→  })
+   563→   563→  await db.platformInquiryFollowUp.create({
+   564→   564→    data: { inquiryId: inq1.id, note: 'Sent the feature tour link — waiting for their CA to review GST reports.' },
+   565→   565→  })
+   566→   566→  await db.platformBlogPost.create({
+   567→   567→    data: {
+   568→   568→      title: 'Introducing ForgeERP 2.0 — jobwork-first manufacturing ERP',
+   569→   569→      slug: 'introducing-forgeerp-2',
+   570→   570→      excerpt: 'Inward → Job Card → Certificate → Invoice, one chain, gapless numbering, GST-safe by construction.',
+   571→   571→      body: 'Full post body…',
+   572→   572→      status: 'published',
+   573→   573→      publishedAt: daysAgo(9),
+   574→   574→    },
+   575→   575→  })
+   576→   576→  await db.platformBlogPost.create({
+   577→   577→    data: {
+   578→   578→      title: 'GST e-Invoice bulk upload, the safe way',
+   579→   579→      slug: 'gst-e-invoice-bulk-upload',
+   580→   580→      excerpt: 'Pre-validate before the portal ever sees your JSON. Draft post for the launch blog.',
+   581→   581→      body: 'Full post body…',
+   582→   582→      status: 'draft',
+   583→   583→    },
+   584→   584→  })
+   585→   585→
+   586→   586→  return {
+   587→   587→    seeded: true,
+   588→   588→    company: company.name,
+   589→   589→    counts: {
+   590→   590→      parties: 7, items: 10, processes: 6, warehouses: 2,
+   591→   591→      purchaseInvoices: 2, salesInvoices: 4, payments: 3,
+   592→   592→      jobworkInwards: 2, jobCards: 2, certificates: 1,
+   593→   593→      employees: 6, projects: 3, boms: 3, workOrders: 2, productionTasks: 12,
+   594→   594→      inquiries: 2, blogPosts: 2,
+   595→   595→    },
+   596→   596→    sample: {
+   597→   597→      firstSalesInvoice: inv1.invoiceNo,
+   598→   598→      jobworkInward: inward.inwardNo,
+   599→   599→      jobworkInvoice: jwInv.invoiceNo,
+   600→   600→      certificate: cert.certNo,
+   601→   601→      runningProject: canopy.projectNo,
+   602→   602→      pendingProject: gantry.projectNo,
+   603→   603→      completedProject: tank.projectNo,
+   604→   604→    },
+   605→   605→    trialBalanceDr: Math.round(dr * 100) / 100,
+   606→   606→    trialBalanceCr: Math.round(cr * 100) / 100,
+   607→   607→  }
+   608→   608→}
+   609→   609→

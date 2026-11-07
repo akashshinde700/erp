@@ -190,7 +190,7 @@ export async function POST(req: Request) {
     }
 
     if (action === 'queue') {
-      await assertMutationAccess()
+      const actor = await assertMutationAccess()
       const doc = (body.doc ?? '').toUpperCase() as TallyDocKind
       const id = body.id ?? ''
       if (!id || !['SALES', 'PURCHASE', 'PAYMENT'].includes(doc)) return fail('doc and id are required', 400)
@@ -211,6 +211,10 @@ export async function POST(req: Request) {
       s.jobs.push(job)
       // retention trim
       s.jobs = s.jobs.filter((j) => j.queuedAt > Date.now() - JOB_TTL_MS)
+      // Exporting voucher XML to an external Tally instance is an outbound
+      // data movement — it must be attributable at QUEUE time (not only when
+      // the connector reports the result).
+      await logAudit('EXPORT', 'TallyConnector', job.docNo, `queued ${doc} ${job.docNo} for Tally`, actor?.email)
       return ok({ jobId: job.id, docNo: job.docNo })
     }
 

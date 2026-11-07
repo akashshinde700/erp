@@ -46,7 +46,7 @@ export async function POST(req: Request) {
       },
       include: { company: { include: { plan: true } } },
     })
-    await logAudit('CREATE', 'OrgUser', user.id, `${user.email} bootstrapped as OWNER of ${company.name}`)
+    await logAudit('CREATE', 'OrgUser', user.id, `${user.email} bootstrapped as OWNER of ${company.name}`, user.email)
 
     const data = await buildSessionInfo(user)
     const res = NextResponse.json({ success: true, data })

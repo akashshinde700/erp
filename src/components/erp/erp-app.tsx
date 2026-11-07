@@ -265,7 +265,7 @@ function SetupScreen({ onDone, onManual }: { onDone: () => void; onManual: () =>
     }
   }
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-background p-6 text-center">
+    <div className="flex min-h-dvh flex-col items-center justify-center gap-6 bg-background p-6 text-center">
       <div className="flex size-16 items-center justify-center rounded-2xl bg-primary text-primary-foreground">
         <Factory className="size-8" aria-hidden />
       </div>
@@ -411,7 +411,7 @@ export function ErpApp() {
   // company profile loads lazily behind the session.
   if (session === undefined || (status.data === null && !status.error)) {
     return (
-      <div className="flex min-h-screen flex-col gap-4 p-6">
+      <div className="flex min-h-dvh flex-col gap-4 p-6">
         <Skeleton className="h-14 w-full rounded-lg" />
         <div className="flex flex-1 gap-4">
           <Skeleton className="hidden h-96 w-60 rounded-lg md:block" />
@@ -425,7 +425,7 @@ export function ErpApp() {
   // wrong setup wizard).
   if (status.error && status.data === null) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
+      <div className="flex min-h-dvh flex-col items-center justify-center gap-4 p-6 text-center">
         <ShieldAlert className="size-10 text-destructive" aria-hidden />
         <h1 className="text-lg font-semibold">Cannot reach the server</h1>
         <p className="max-w-md text-sm text-muted-foreground">{status.error}</p>
@@ -592,7 +592,7 @@ export function ErpApp() {
 
   return (
     <CompanyProvider company={company.data ?? null}>
-      <div className="flex min-h-screen flex-col bg-background">
+      <div className="flex min-h-dvh flex-col bg-background">
         {company.data?.access?.blocked ? (
           <div
             role="alert"

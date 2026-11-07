@@ -34,7 +34,7 @@ function parsePin(raw: unknown): string | null | undefined {
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
-    await assertMutationAccess()
+    const actor = await assertMutationAccess()
     const body = partyUpdateSchema.parse(await req.json())
     if (body.gstin && !gstinChecksumValid(body.gstin)) {
       return fail('Invalid GSTIN — checksum failed')
@@ -50,7 +50,7 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
     if (body.openingBal !== undefined) {
       await syncPartyOpeningBalance(id)
     }
-    await logAudit('UPDATE', 'Party', id, `${party.code} — ${party.name}`)
+    await logAudit('UPDATE', 'Party', id, `${party.code} — ${party.name}`, actor?.email)
     return ok(party)
   } catch (e) {
     return handleError(e)
@@ -61,11 +61,11 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
-    await assertMutationAccess()
+    const actor = await assertMutationAccess()
     const url = new URL(req.url)
     const activate = url.searchParams.get('activate') === '1'
     const party = await db.party.update({ where: { id }, data: { active: activate } })
-    await logAudit('UPDATE', 'Party', id, `${party.code} ${activate ? 'reactivated' : 'deactivated'}`)
+    await logAudit('UPDATE', 'Party', id, `${party.code} ${activate ? 'reactivated' : 'deactivated'}`, actor?.email)
     return ok(party)
   } catch (e) {
     return handleError(e)

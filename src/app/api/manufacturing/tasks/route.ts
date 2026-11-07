@@ -33,10 +33,10 @@ const taskSchema = z.object({
 
 export async function POST(req: Request) {
   try {
-    await assertMutationAccess()
+    const actor = await assertMutationAccess()
     const body = taskSchema.parse(await req.json())
     const task = await createTask(body)
-    await logAudit('CREATE', 'ProductionTask', task.id, `${task.taskNo} — ${task.operation} qty ${body.plannedQty}`)
+    await logAudit('CREATE', 'ProductionTask', task.id, `${task.taskNo} — ${task.operation} qty ${body.plannedQty}`, actor?.email)
     return ok(task)
   } catch (e) {
     return handleError(e)

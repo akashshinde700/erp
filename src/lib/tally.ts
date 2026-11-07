@@ -528,7 +528,11 @@ function utcYmd(d: Date): string {
 }
 
 export async function getCompany(): Promise<TallyCompany | null> {
-  return db.company.findFirst({ orderBy: { createdAt: 'asc' } })
+  // OPERATING org only (first NON-platform company). The platform company is
+  // created FIRST on a blank DB (ensurePlatformAdmin), so ordering by
+  // createdAt alone resolves the WRONG company — exports would use the
+  // operator's row (no GSTIN, no tally ledger overrides).
+  return db.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } })
 }
 
 export async function loadInvoiceVoucher(kind: 'SALES' | 'PURCHASE', id: string): Promise<TallyVoucher> {

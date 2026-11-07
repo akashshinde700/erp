@@ -74,16 +74,22 @@ async function nextProjectNo(tx: Tx): Promise<string> {
 // ---------- stock helpers ----------
 
 async function stockAvail(tx: Tx, itemId: string, warehouseId?: string): Promise<number> {
+  // OWN stock only — JOBWORK_IN rows are customer-owned material (rate 0) and
+  // must never satisfy a manufacturing consumption requirement.
   const rows = await tx.stockLedger.findMany({
-    where: warehouseId ? { itemId, warehouseId, isCancelled: false } : { itemId, isCancelled: false },
+    where: warehouseId
+      ? { itemId, warehouseId, isCancelled: false, voucherType: { not: 'JOBWORK_IN' } }
+      : { itemId, isCancelled: false, voucherType: { not: 'JOBWORK_IN' } },
     select: { qtyIn: true, qtyOut: true },
   })
   return r2(rows.reduce((s, r) => s + r.qtyIn - r.qtyOut, 0))
 }
 
 async function avgCost(tx: Tx, itemId: string, warehouseId: string): Promise<number> {
+  // Weighted average over OWN receipts only (JW customer material is rate 0
+  // and would dilute the issue valuation).
   const rows = await tx.stockLedger.findMany({
-    where: { itemId, warehouseId, isCancelled: false },
+    where: { itemId, warehouseId, isCancelled: false, voucherType: { not: 'JOBWORK_IN' } },
     select: { qtyIn: true, rate: true },
   })
   let qty = 0
@@ -313,6 +319,11 @@ export async function createProject(input: ProjectInput) {
     if (!party.types.includes('CUSTOMER')) {
       throw new BusinessError(`Party "${party.name}" is not flagged as a CUSTOMER — pick a customer party`)
     }
+    const start = iso(input.startDate)
+    const end = input.endDate ? iso(input.endDate) : null
+    if (end && end.getTime() < start.getTime()) {
+      throw new BusinessError('Planned end date cannot be before the start date')
+    }
     const projectNo = await nextProjectNo(tx)
     return tx.project.create({
       data: {
@@ -321,8 +332,8 @@ export async function createProject(input: ProjectInput) {
         partyId: party.id,
         manager: input.manager ?? null,
         location: input.location ?? null,
-        startDate: iso(input.startDate),
-        endDate: input.endDate ? iso(input.endDate) : null,
+        startDate: start,
+        endDate: end,
         budget: r2(input.budget ?? 0),
         documents: input.documents ?? null,
         notes: input.notes ?? null,
@@ -342,6 +353,11 @@ export async function updateProject(id: string, input: Partial<ProjectInput> & {
     if (input.location !== undefined) data.location = input.location
     if (input.startDate !== undefined) data.startDate = iso(input.startDate)
     if (input.endDate !== undefined) data.endDate = input.endDate ? iso(input.endDate) : null
+    const start = (data.startDate as Date | undefined) ?? p.startDate
+    const end = (data.endDate as Date | undefined) ?? p.endDate
+    if (start && end && (end as Date).getTime() < (start as Date).getTime()) {
+      throw new BusinessError('Planned end date cannot be before the start date')
+    }
     if (input.budget !== undefined) data.budget = r2(input.budget)
     if (input.documents !== undefined) data.documents = input.documents
     if (input.notes !== undefined) data.notes = input.notes
@@ -566,13 +582,21 @@ export async function updateBom(id: string, input: Partial<BomInput> & { lines: 
   })
 }
 
-/** DRAFT → APPROVED. Approval recalculates the project's estimated cost. */
+/** DRAFT → APPROVED. Approval recalculates the project's estimated cost.
+ *  A BOM cannot be approved on a terminal project (COMPLETED/CANCELLED) —
+ *  its estimate would never feed a work order. */
 export async function approveBom(id: string) {
   return db.$transaction(async (tx) => {
-    const bom = await tx.bom.findUnique({ where: { id }, include: { items: { select: { estCost: true } } } })
+    const bom = await tx.bom.findUnique({
+      where: { id },
+      include: { items: { select: { estCost: true } }, project: { select: { status: true } } },
+    })
     if (!bom) throw new BusinessError('BOM not found', 404)
     if (bom.status !== 'DRAFT') throw new BusinessError(`Only DRAFT BOMs can be approved (current: ${bom.status})`)
     if (bom.items.length === 0) throw new BusinessError('Cannot approve an empty BOM')
+    if (bom.project.status === 'COMPLETED' || bom.project.status === 'CANCELLED') {
+      throw new BusinessError(`Project is ${bom.project.status} — its BOMs can no longer be approved`)
+    }
     const est = r2(bom.items.reduce((s, i) => s + i.estCost, 0))
     const updated = await tx.bom.update({ where: { id }, data: { status: 'APPROVED', approvedAt: new Date() } })
     await refreshProjectEstCost(tx, bom.projectId)
@@ -1023,11 +1047,15 @@ export async function pendingTasksReport() {
       },
     },
   })
-  const now = Date.now()
+  // Date-only comparison: due dates are date-only values stored at UTC
+  // midnight, so a task due TODAY must not flag overdue at 00:00 UTC (05:30
+  // IST) — it becomes overdue only from the NEXT day onwards.
+  const todayUtc = new Date().toISOString().slice(0, 10)
+  const dayOf = (d: Date | null) => (d ? d.toISOString().slice(0, 10) : null)
   const rows = tasks.map((t) => ({
     ...t,
-    overdue: !!t.dueDate && new Date(t.dueDate).getTime() < now,
-    woOverdue: !!t.workOrder.endDate && new Date(t.workOrder.endDate).getTime() < now,
+    overdue: dayOf(t.dueDate) !== null && dayOf(t.dueDate)! < todayUtc,
+    woOverdue: dayOf(t.workOrder.endDate) !== null && dayOf(t.workOrder.endDate)! < todayUtc,
   }))
   return {
     rows,

@@ -21,7 +21,7 @@ export async function POST(req: Request) {
       await assertCompanyAccess()
     }
     const res = await seedDatabase(force)
-    await logAudit('SEED', 'Database', undefined, `demo data seeded (force=${force})`)
+    await logAudit('SEED', 'Database', undefined, `demo data seeded (force=${force})`, force ? 'platform-admin' : 'setup')
     return ok(res)
   } catch (e) {
     return handleError(e)

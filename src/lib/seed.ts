@@ -587,7 +587,7 @@ export async function seedDatabase(force = false) {
     seeded: true,
     company: company.name,
     counts: {
-      parties: 7, items: 10, processes: 6, warehouses: 2,
+      parties: 6, items: 10, processes: 6, warehouses: 2,
       purchaseInvoices: 2, salesInvoices: 4, payments: 3,
       jobworkInwards: 2, jobCards: 2, certificates: 1,
       employees: 6, projects: 3, boms: 3, workOrders: 2, productionTasks: 12,

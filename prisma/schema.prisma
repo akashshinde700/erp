@@ -146,10 +146,12 @@ model AuditLog {
   entity    String // SalesInvoice | Party | Plan | …
   entityId  String?
   details   String? // short human summary
+  actor     String? // acting user's email (or 'platform-admin' / 'setup') — who did it
   createdAt DateTime @default(now())
 
   @@index([createdAt])
   @@index([entity])
+  @@index([actor])
 }
 
 // ---------- Masters ----------
@@ -262,6 +264,7 @@ model StockLedger {
 
   @@index([itemId, warehouseId, postingDate])
   @@index([voucherNo])
+  @@index([postingDate])
 }
 
 model AccountLedger {
@@ -280,6 +283,8 @@ model AccountLedger {
 
   @@index([account, date])
   @@index([voucherNo])
+  @@index([partyId, isCancelled])
+  @@index([voucherType, partyId])
 }
 
 // ---------- Sales ----------
@@ -646,6 +651,9 @@ model Payment {
   createdAt  DateTime @default(now())
 
   allocations PaymentAllocation[]
+
+  @@index([partyId])
+  @@index([date])
 }
 
 model PaymentAllocation {
@@ -656,4 +664,7 @@ model PaymentAllocation {
   invoiceId   String?
   invoiceNo   String
   amount      Float
+
+  @@index([paymentId])
+  @@index([invoiceNo])
 }

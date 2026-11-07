@@ -1,7 +1,12 @@
 {
-  "total": 49,
+  "total": 48,
   "failed": 0,
   "results": [
+    {
+      "name": "Org login (demo owner)",
+      "ok": true,
+      "note": 200
+    },
     {
       "name": "App title",
       "ok": true,
@@ -68,16 +73,6 @@
       "note": "Audit Trail"
     },
     {
-      "name": "Module: Platform Admin",
-      "ok": true,
-      "note": "Platform Admin"
-    },
-    {
-      "name": "Module: Docs",
-      "ok": true,
-      "note": "Reverse-Engineering Intelligence"
-    },
-    {
       "name": "Sales list has rows",
       "ok": true,
       "note": "6 invoices"
@@ -130,17 +125,17 @@
     {
       "name": "e-Invoice IRP JSON download",
       "ok": true,
-      "note": "INV-2627-006_einvoice.json (1814 bytes)"
+      "note": "INV-2627-006_einvoice.json (1159 bytes)"
     },
     {
       "name": "Bulk e-Invoice JSON (Version/BulkInvList)",
       "ok": true,
-      "note": "forge-einvoice_2026-10-01_2026-11-30.json (10774 bytes)"
+      "note": "forge-einvoice_2026-10-01_2026-11-30.json (8613 bytes)"
     },
     {
       "name": "e-Invoice preview validation",
       "ok": true,
-      "note": "docNo=INV-2627-006 totInvVal=36698"
+      "note": "docNo=INV-2627-006 totInvVal=129"
     },
     {
       "name": "Tally voucher XML",
@@ -165,7 +160,7 @@
     {
       "name": "GET /api/jobwork/inwards",
       "ok": true,
-      "note": "2 inwards"
+      "note": "3 inwards"
     },
     {
       "name": "Stock summary report",
@@ -195,10 +190,10 @@
     {
       "name": "Payment for INV-2627-005 recorded",
       "ok": true,
-      "note": "4 payments"
+      "note": "grand=2006 paid=2006; 4 payments"
     },
     {
-      "name": "New party CUST-004 Nashik Steel Traders exists",
+      "name": "Seeded customer CUST-001 exists",
       "ok": true,
       "note": "7 parties"
     },
@@ -218,12 +213,12 @@
       "note": ""
     },
     {
-      "name": "Key gate present",
+      "name": "Platform gate present",
       "ok": true,
       "note": ""
     },
     {
-      "name": "Console unlocks with key",
+      "name": "Console unlocks (SUPER_ADMIN)",
       "ok": true,
       "note": ""
     },

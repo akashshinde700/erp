@@ -22,7 +22,7 @@ import {
  */
 export async function GET(req: Request) {
   try {
-    await assertCompanyAccess()
+    const actor = await assertCompanyAccess()
     await assertFeature('exportData')
     const sp = new URL(req.url).searchParams
     const id = sp.get('id') ?? ''
@@ -50,7 +50,7 @@ export async function GET(req: Request) {
           { status: 409 },
         )
       }
-      await logAudit('EXPORT', 'EInvoice', id, `${inv.invoiceNo} — IRP JSON v1.1 (₹${built.json.ValDtls.TotInvVal.toFixed(2)}, ${built.json.ItemList.length} items)`)
+      await logAudit('EXPORT', 'EInvoice', id, `${inv.invoiceNo} — IRP JSON v1.1 (₹${built.json.ValDtls.TotInvVal.toFixed(2)}, ${built.json.ItemList.length} items)`, actor?.email)
       return new NextResponse(JSON.stringify(built.json, null, 2), {
         status: 200,
         headers: {
@@ -90,7 +90,7 @@ export async function GET(req: Request) {
       null,
       2,
     )
-    await logAudit('EXPORT', 'EInvoice', undefined, `Bulk IRP JSON ${from || '…'}→${to || '…'} — ${eligible.length} invoices (skipped ${skipped.length})`)
+    await logAudit('EXPORT', 'EInvoice', undefined, `Bulk IRP JSON ${from || '…'}→${to || '…'} — ${eligible.length} invoices (skipped ${skipped.length})`, actor?.email)
     return new NextResponse(body, {
       status: 200,
       headers: {

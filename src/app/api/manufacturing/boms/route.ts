@@ -38,10 +38,10 @@ const bomSchema = z.object({
 
 export async function POST(req: Request) {
   try {
-    await assertMutationAccess()
+    const actor = await assertMutationAccess()
     const body = bomSchema.parse(await req.json())
     const bom = await createBom(body)
-    await logAudit('CREATE', 'Bom', bom.id, `${bom.bomNo} — ${bom.productName} (${body.lines.length} lines)`)
+    await logAudit('CREATE', 'Bom', bom.id, `${bom.bomNo} — ${bom.productName} (${body.lines.length} lines)`, actor?.email)
     return ok(bom)
   } catch (e) {
     return handleError(e)

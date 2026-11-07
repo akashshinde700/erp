@@ -37,17 +37,17 @@ const bodySchema = z.union([assignSchema, startSchema, completeSchema, cancelSch
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
-    await assertMutationAccess()
+    const actor = await assertMutationAccess()
     const body = bodySchema.parse(await req.json())
 
     if (body.action === 'assign') {
       const task = await assignTask(id, body)
-      await logAudit('UPDATE', 'ProductionTask', id, `${task.taskNo} assigned`)
+      await logAudit('UPDATE', 'ProductionTask', id, `${task.taskNo} assigned`, actor?.email)
       return ok(task)
     }
     if (body.action === 'start') {
       const task = await startTask(id)
-      await logAudit('POST', 'ProductionTask', id, `${task.taskNo} started`)
+      await logAudit('POST', 'ProductionTask', id, `${task.taskNo} started`, actor?.email)
       return ok(task)
     }
     if (body.action === 'complete') {
@@ -56,13 +56,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
         'POST',
         'ProductionTask',
         id,
-        `${task.taskNo} COMPLETED — qty ${task.actualQty}${task.rejectionQty ? `, rej ${task.rejectionQty}` : ''}, labour ₹${task.labourCost}, material ₹${task.materialCost}`
+        `${task.taskNo} COMPLETED — qty ${task.actualQty}${task.rejectionQty ? `, rej ${task.rejectionQty}` : ''}, labour ₹${task.labourCost}, material ₹${task.materialCost}`,
+        actor?.email
       )
       return ok(task)
     }
     if (body.action === 'cancel') {
       const task = await cancelTask(id)
-      await logAudit('CANCEL', 'ProductionTask', id, `${task.taskNo} cancelled`)
+      await logAudit('CANCEL', 'ProductionTask', id, `${task.taskNo} cancelled`, actor?.email)
       return ok(task)
     }
     return fail('Unknown action', 400)

@@ -65,13 +65,15 @@ export async function PUT(req: Request) {
     // signed-in OWNER/ACCOUNTANT session is required (VIEWER is read-only).
     const existing = await db.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } })
     const logins = await orgLoginCount()
+    let actorEmail: string | null = null
     if (logins > 0) {
-      await assertMutationAccess()
+      const actor = await assertMutationAccess()
+      actorEmail = actor?.email ?? null
     }
     const company = existing
       ? await db.company.update({ where: { id: existing.id }, data: body })
       : await db.company.create({ data: body })
-    await logAudit(existing ? 'UPDATE' : 'CREATE', 'Company', company.id, company.name)
+    await logAudit(existing ? 'UPDATE' : 'CREATE', 'Company', company.id, company.name, actorEmail ?? 'setup')
     return ok(company)
   } catch (e) {
     return handleError(e)

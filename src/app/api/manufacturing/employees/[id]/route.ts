@@ -19,10 +19,10 @@ const employeeUpdateSchema = z.object({
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
-    await assertMutationAccess()
+    const actor = await assertMutationAccess()
     const body = employeeUpdateSchema.parse(await req.json())
     const emp = await updateEmployee(id, body)
-    await logAudit('UPDATE', 'Employee', id, `${emp.code} — ${emp.name}`)
+    await logAudit('UPDATE', 'Employee', id, `${emp.code} — ${emp.name}`, actor?.email)
     return ok(emp)
   } catch (e) {
     return handleError(e)
@@ -32,9 +32,9 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
-    await assertMutationAccess()
+    const actor = await assertMutationAccess()
     const res = await deleteEmployee(id)
-    await logAudit('DELETE', 'Employee', id, `Employee removed`)
+    await logAudit('DELETE', 'Employee', id, `Employee removed`, actor?.email)
     return ok(res)
   } catch (e) {
     return handleError(e)

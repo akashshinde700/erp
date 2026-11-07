@@ -12,7 +12,7 @@ import { getCompany, mastersXml } from '@/lib/tally'
  */
 export async function GET(req: Request) {
   try {
-    await assertCompanyAccess()
+    const actor = await assertCompanyAccess()
     await assertFeature('exportData')
     const withParties = new URL(req.url).searchParams.get('parties') !== '0'
     const company = await getCompany()
@@ -22,7 +22,7 @@ export async function GET(req: Request) {
       : []
     const items = await db.item.findMany({ select: { uom: true } })
     const xml = mastersXml(company, parties, items)
-    await logAudit('EXPORT', 'TallyMasters', undefined, `${parties.length} parties, ${items.length} items, withParties=${withParties}`)
+    await logAudit('EXPORT', 'TallyMasters', undefined, `${parties.length} parties, ${items.length} items, withParties=${withParties}`, actor?.email)
     const slug = company.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '') || 'company'
     return new NextResponse(xml, {
       status: 200,

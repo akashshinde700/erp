@@ -14,10 +14,10 @@ const woUpdateSchema = z.object({
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
-    await assertMutationAccess()
+    const actor = await assertMutationAccess()
     const body = woUpdateSchema.parse(await req.json())
     const wo = await updateWorkOrder(id, body)
-    await logAudit('UPDATE', 'WorkOrder', id, `${wo.woNo} schedule updated`)
+    await logAudit('UPDATE', 'WorkOrder', id, `${wo.woNo} schedule updated`, actor?.email)
     return ok(wo)
   } catch (e) {
     return handleError(e)

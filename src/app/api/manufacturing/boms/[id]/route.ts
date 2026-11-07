@@ -28,10 +28,10 @@ const bomUpdateSchema = z.object({
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
-    await assertMutationAccess()
+    const actor = await assertMutationAccess()
     const body = bomUpdateSchema.parse(await req.json())
     const bom = await updateBom(id, body)
-    await logAudit('UPDATE', 'Bom', id, `${bom.bomNo} revised (${body.lines.length} lines)`)
+    await logAudit('UPDATE', 'Bom', id, `${bom.bomNo} revised (${body.lines.length} lines)`, actor?.email)
     return ok(bom)
   } catch (e) {
     return handleError(e)

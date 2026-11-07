@@ -21,9 +21,9 @@ const postSchema = z.object({
 
 export async function POST(req: Request) {
   try {
-    await assertMutationAccess()
+    const actor = await assertMutationAccess()
     const res = await postOpeningStock(postSchema.parse(await req.json()))
-    await logAudit('POST', 'OpeningStock', undefined, `${res.rows} row(s) posted — ${res.voucherNo}`)
+    await logAudit('POST', 'OpeningStock', undefined, `${res.rows} row(s) posted — ${res.voucherNo}`, actor?.email)
     return ok(res)
   } catch (e) {
     return handleError(e)

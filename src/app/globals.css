@@ -186,6 +186,18 @@ the rows actually scroll. */
     font-size: 9.5px;
     min-width: 0 !important;
   }
+  /* Multi-page tables: repeat the header row on every page and never split a
+     row across a page break (prevents clipped/orphaned line items + missing
+     column headers on page 2+). */
+  .print-area thead {
+    display: table-header-group;
+  }
+  .print-area tr,
+  .print-area tfoot,
+  .print-area .avoid-break {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
   .print-area .overflow-x-auto {
     overflow: visible !important;
   }

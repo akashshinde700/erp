@@ -49,8 +49,12 @@ async function nextDocNo(tx: Tx, prefix: string, date: Date): Promise<string> {
 interface StockStats { avail: number; avgCost: number }
 
 async function stockStats(tx: Tx, itemId: string, warehouseId: string): Promise<StockStats> {
+  // OWN stock only: JOBWORK_IN rows carry customer-owned material at rate 0 —
+  // including them would (a) let sales consume material we do not own and
+  // (b) dilute the moving-average cost to ~0 (inventory-integrity invariant).
+  // Traceability of JW material stays intact in the stock LEDGER report.
   const rows = await tx.stockLedger.findMany({
-    where: { itemId, warehouseId, isCancelled: false },
+    where: { itemId, warehouseId, isCancelled: false, voucherType: { not: 'JOBWORK_IN' } },
     select: { qtyIn: true, qtyOut: true, rate: true },
   })
   let qtyIn = 0
@@ -1099,8 +1103,20 @@ export async function syncPartyOpeningBalance(partyId: string) {
   return db.$transaction(async (tx) => {
     const party = await tx.party.findUnique({ where: { id: partyId } })
     if (!party) throw new BusinessError('Party not found', 404)
-    const voucherNo = `OPENING-PARTY-${party.code}`
-    await cancelGlForVoucher(tx, 'OPENING', voucherNo, new Date())
+    // Cancel EVERY live OPENING GL row for this party, whatever voucherNo it
+    // was posted under. Legacy rows keyed by `OPENING-PARTY-<code>` broke when
+    // the party code was renamed (the old voucherNo was never cancelled and a
+    // second live opening was posted → double-counted opening in the trial
+    // balance). Keying by the immutable partyId + cancelling by partyId makes
+    // re-posting idempotent regardless of code edits.
+    const live = await tx.accountLedger.findMany({
+      where: { voucherType: 'OPENING', partyId, isCancelled: false },
+      select: { voucherNo: true },
+    })
+    for (const v of new Set(live.map((r) => r.voucherNo))) {
+      await cancelGlForVoucher(tx, 'OPENING', v, new Date())
+    }
+    const voucherNo = `OPENING-PARTY-${party.id}`
     const bal = r2(party.openingBal)
     if (Math.abs(bal) < 0.004) return { synced: true, amount: 0 }
     // + balance = customer owes us → Dr DEBT ; − balance = we owe supplier → Cr CRED

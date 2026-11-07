@@ -21,11 +21,11 @@ const warehouseSchema = z.object({
 
 export async function POST(req: Request) {
   try {
-    await assertMutationAccess()
+    const actor = await assertMutationAccess()
     await assertLimit('warehouses')
     const body = warehouseSchema.parse(await req.json())
     const wh = await db.warehouse.create({ data: { ...body, location: body.location || null } })
-    await logAudit('CREATE', 'Warehouse', wh.id, `${wh.code} — ${wh.name}`)
+    await logAudit('CREATE', 'Warehouse', wh.id, `${wh.code} — ${wh.name}`, actor?.email)
     return ok(wh)
   } catch (e) {
     return handleError(e)

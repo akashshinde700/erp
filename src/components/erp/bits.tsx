@@ -7,8 +7,9 @@
  */
 
 import type { LucideIcon } from 'lucide-react'
-import { FileText, Inbox, Wrench } from 'lucide-react'
+import { FileText, Inbox, RotateCw, TriangleAlert, Wrench } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { money, qty as qtyFmt } from '@/lib/erp'
@@ -211,6 +212,44 @@ export function EmptyState({
       <p className="text-sm font-medium">{title}</p>
       {hint ? <p className="max-w-sm text-xs text-muted-foreground">{hint}</p> : null}
       {action}
+    </div>
+  )
+}
+
+// ---------- error state ----------
+
+/**
+ * Honest failure surface for list views. Without it a failed API call renders
+ * the EMPTY state ("No records 🎉") — masking data outages as good news. Every
+ * list that checks `loading ? skeleton : rows.length === 0 ? empty : table`
+ * must branch on `error` FIRST.
+ */
+export function ErrorState({
+  error,
+  onRetry,
+  entity = 'records',
+}: {
+  error: string | null | undefined
+  onRetry?: () => void
+  entity?: string
+}) {
+  if (!error) return null
+  return (
+    <div
+      role="alert"
+      className="flex flex-col items-center justify-center gap-2 rounded-lg border border-destructive/40 bg-destructive/5 p-8 text-center"
+    >
+      <span className="flex size-10 items-center justify-center rounded-full bg-destructive/10 text-destructive">
+        <TriangleAlert className="size-5" aria-hidden />
+      </span>
+      <p className="text-sm font-medium text-destructive">Could not load {entity}</p>
+      <p className="max-w-sm text-xs text-muted-foreground">{error}</p>
+      {onRetry ? (
+        <Button variant="outline" size="sm" onClick={onRetry} className="mt-1">
+          <RotateCw className="size-3.5" aria-hidden />
+          Retry
+        </Button>
+      ) : null}
     </div>
   )
 }

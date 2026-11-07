@@ -35,13 +35,13 @@ const itemSchema = z.object({
 
 export async function POST(req: Request) {
   try {
-    await assertMutationAccess()
+    const actor = await assertMutationAccess()
     await assertLimit('items')
     const body = itemSchema.parse(await req.json())
     const item = await db.item.create({
       data: { ...body, hsn: body.hsn || null, isStockItem: body.isService ? false : body.isStockItem },
     })
-    await logAudit('CREATE', 'Item', item.id, `${item.code} — ${item.name}`)
+    await logAudit('CREATE', 'Item', item.id, `${item.code} — ${item.name}`, actor?.email)
     return ok(item)
   } catch (e) {
     return handleError(e)

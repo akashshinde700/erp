@@ -312,7 +312,8 @@ export function buildEInvoice(inv: IrpInvoiceRow, company: IrpCompany): BuiltEIn
 // ---------- data loading + file name ----------
 
 export async function loadSalesInvoiceForIrp(id: string): Promise<{ inv: IrpInvoiceRow; company: IrpCompany }> {
-  const company = await db.company.findFirst({ orderBy: { createdAt: 'asc' } })
+  // OPERATING org only — see services.getCompany (platform company is older).
+  const company = await db.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } })
   if (!company) throw new Error('Company not set up')
   const inv = await db.salesInvoice.findUnique({
     where: { id },
@@ -326,7 +327,8 @@ export async function loadSalesInvoiceForIrp(id: string): Promise<{ inv: IrpInvo
 }
 
 export async function loadSalesInvoicesForIrp(from?: string, to?: string): Promise<{ invs: IrpInvoiceRow[]; company: IrpCompany }> {
-  const company = await db.company.findFirst({ orderBy: { createdAt: 'asc' } })
+  // OPERATING org only — see services.getCompany (platform company is older).
+  const company = await db.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } })
   if (!company) throw new Error('Company not set up')
   const where: { date?: { gte?: Date; lte?: Date } } = {}
   if (from || to) {

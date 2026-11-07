@@ -2,6 +2,7 @@ import { ok, fail, handleError } from '@/lib/api'
 import { db } from '@/lib/db'
 import { z } from 'zod'
 import { assertCompanyAccess, assertMutationAccess } from '@/lib/platform'
+import { logAudit } from '@/lib/audit'
 
 /** GET ?partyId=… → full rate grid for a party (process defaults included). */
 export async function GET(req: Request) {
@@ -54,7 +55,7 @@ const bulkSchema = z.object({
 /** PUT — full-list upsert: sets the party's rate grid exactly as submitted. */
 export async function PUT(req: Request) {
   try {
-    await assertMutationAccess()
+    const actor = await assertMutationAccess()
     const body = bulkSchema.parse(await req.json())
     const party = await db.party.findUnique({ where: { id: body.partyId } })
     if (!party) return fail('Party not found', 404)
@@ -66,6 +67,9 @@ export async function PUT(req: Request) {
         })
       }
     })
+    // Rate grids drive job-card billing (frozen at post time) — a silent
+    // change must be attributable.
+    await logAudit('UPDATE', 'PartyProcessRate', body.partyId, `${party.code} — ${body.rates.length} rate row(s) set`, actor?.email)
     return ok({ partyId: body.partyId, count: body.rates.length })
   } catch (e) {
     return handleError(e)

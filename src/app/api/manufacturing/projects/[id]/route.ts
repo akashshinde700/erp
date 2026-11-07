@@ -28,10 +28,10 @@ const projectUpdateSchema = z.object({
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
-    await assertMutationAccess()
+    const actor = await assertMutationAccess()
     const body = projectUpdateSchema.parse(await req.json())
     const p = await updateProject(id, body)
-    await logAudit('UPDATE', 'Project', id, `${p.projectNo} — ${p.name}`)
+    await logAudit('UPDATE', 'Project', id, `${p.projectNo} — ${p.name}`, actor?.email)
     return ok(p)
   } catch (e) {
     return handleError(e)

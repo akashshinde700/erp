@@ -24,9 +24,9 @@ const processSchema = z.object({
 
 export async function POST(req: Request) {
   try {
-    await assertMutationAccess()
+    const actor = await assertMutationAccess()
     const proc = await db.process.create({ data: processSchema.parse(await req.json()) })
-    await logAudit('CREATE', 'Process', proc.id, `${proc.code} — ${proc.name}`)
+    await logAudit('CREATE', 'Process', proc.id, `${proc.code} — ${proc.name}`, actor?.email)
     return ok(proc)
   } catch (e) {
     return handleError(e)

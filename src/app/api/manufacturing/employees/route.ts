@@ -27,10 +27,10 @@ const employeeSchema = z.object({
 
 export async function POST(req: Request) {
   try {
-    await assertMutationAccess()
+    const actor = await assertMutationAccess()
     const body = employeeSchema.parse(await req.json())
     const emp = await createEmployee(body)
-    await logAudit('CREATE', 'Employee', emp.id, `${emp.code} — ${emp.name}`)
+    await logAudit('CREATE', 'Employee', emp.id, `${emp.code} — ${emp.name}`, actor?.email)
     return ok(emp)
   } catch (e) {
     return handleError(e)

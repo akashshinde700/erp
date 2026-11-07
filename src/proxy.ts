@@ -84,6 +84,18 @@ export async function proxy(req: NextRequest) {
   if (PUBLIC_API.some((p) => path === p || path.startsWith(`${p}/`))) {
     return NextResponse.next()
   }
+  // Request-size guard (defense against memory-exhaustion DoS): all business
+  // APIs are small JSON documents. Restore payloads (snapshot import) get a
+  // larger budget. Chunked requests without Content-Length are rare for this
+  // app's fetch clients and are let through — route-level JSON parsing still
+  // bounds practical size.
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    const len = Number(req.headers.get('content-length') ?? '0')
+    const limit = path.startsWith('/api/backup/restore') ? 26_214_400 : 1_048_576 // 25 MB : 1 MB
+    if (len && Number.isFinite(len) && len > limit) {
+      return NextResponse.json({ success: false, error: 'Request body too large' }, { status: 413 })
+    }
+  }
   const token = req.cookies.get(SESSION_COOKIE)?.value
   if (!token) {
     return NextResponse.json({ success: false, error: 'Sign in to your organization first' }, { status: 401 })

@@ -29,9 +29,9 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
 export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
-    await assertMutationAccess()
+    const actor = await assertMutationAccess()
     const res = await cancelJobworkInward(id)
-    await logAudit('CANCEL', 'JobworkInward', id, `${res.inwardNo} cancelled`)
+    await logAudit('CANCEL', 'JobworkInward', id, `${res.inwardNo} cancelled`, actor?.email)
     return ok(res)
   } catch (e) {
     return handleError(e)

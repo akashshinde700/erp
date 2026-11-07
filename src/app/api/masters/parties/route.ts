@@ -47,7 +47,7 @@ const partySchema = z.object({
 
 export async function POST(req: Request) {
   try {
-    await assertMutationAccess()
+    const actor = await assertMutationAccess()
     await assertLimit('parties')
     const body = partySchema.parse(await req.json())
     if (body.gstin && !gstinChecksumValid(body.gstin)) {
@@ -60,11 +60,14 @@ export async function POST(req: Request) {
     if (Math.abs(body.openingBal ?? 0) > 0.004) {
       try {
         await syncPartyOpeningBalance(party.id)
-      } catch {
-        /* GL mirror is best-effort on create; the party row stays honest */
+      } catch (e) {
+        // GL mirror is best-effort on create (the party row stays honest and
+        // outstanding falls back to the column value) — but never SILENT:
+        // an un-mirrored opening is a reconciliation drift worth knowing.
+        console.warn('[parties] opening-balance GL sync failed for', party.code, e)
       }
     }
-    await logAudit('CREATE', 'Party', party.id, `${party.code} — ${party.name}`)
+    await logAudit('CREATE', 'Party', party.id, `${party.code} — ${party.name}`, actor?.email)
     return ok(party)
   } catch (e) {
     return handleError(e)

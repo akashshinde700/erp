@@ -17,9 +17,9 @@ const processSchema = z.object({
 export async function PUT(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
-    await assertMutationAccess()
+    const actor = await assertMutationAccess()
     const proc = await db.process.update({ where: { id }, data: processSchema.parse(await req.json()) })
-    await logAudit('UPDATE', 'Process', id, `${proc.code} — ${proc.name}`)
+    await logAudit('UPDATE', 'Process', id, `${proc.code} — ${proc.name}`, actor?.email)
     return ok(proc)
   } catch (e) {
     return handleError(e)
@@ -29,11 +29,11 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params
-    await assertMutationAccess()
+    const actor = await assertMutationAccess()
     const url = new URL(req.url)
     const activate = url.searchParams.get('activate') === '1'
     const proc = await db.process.update({ where: { id }, data: { active: activate } })
-    await logAudit('UPDATE', 'Process', id, `${proc.code} ${activate ? 'reactivated' : 'deactivated'}`)
+    await logAudit('UPDATE', 'Process', id, `${proc.code} ${activate ? 'reactivated' : 'deactivated'}`, actor?.email)
     return ok(proc)
   } catch (e) {
     return handleError(e)

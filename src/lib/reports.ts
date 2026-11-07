@@ -6,6 +6,15 @@
 import { db } from './db'
 import { r2 } from './erp'
 
+// ---------- shared UTC day-range helper ----------
+
+/** Voucher dates arrive as date-only strings and are STORED at UTC midnight
+ *  (`new Date('YYYY-MM-DD')`). Every report filter therefore must use UTC day
+ *  boundaries too — local-time bounds (T23:59:59 without Z) shift by the
+ *  server's offset and include/exclude wrong days on non-UTC hosts. */
+const utcDayStart = (ymd: string): Date => new Date(`${ymd}T00:00:00.000Z`)
+const utcDayEnd = (ymd: string): Date => new Date(`${ymd}T23:59:59.999Z`)
+
 // ---------- Stock ledger with running balance ----------
 
 export async function stockLedgerReport(filter: {
@@ -19,8 +28,8 @@ export async function stockLedgerReport(filter: {
   if (filter.warehouseId) where.warehouseId = filter.warehouseId
   if (filter.from || filter.to) {
     where.postingDate = {}
-    if (filter.from) where.postingDate.gte = new Date(filter.from)
-    if (filter.to) where.postingDate.lte = new Date(`${filter.to}T23:59:59`)
+    if (filter.from) where.postingDate.gte = utcDayStart(filter.from)
+    if (filter.to) where.postingDate.lte = utcDayEnd(filter.to)
   }
   const rows = await db.stockLedger.findMany({
     where,
@@ -44,7 +53,13 @@ export async function stockSummaryReport() {
   const items = await db.item.findMany({ where: { isStockItem: true }, orderBy: { code: 'asc' } })
   const warehouses = await db.warehouse.findMany({ orderBy: { code: 'asc' } })
   const whCode = new Map(warehouses.map((w) => [w.id, w.code]))
-  const led = await db.stockLedger.findMany({ where: { isCancelled: false } })
+  // OWN stock only: JOBWORK_IN rows carry customer-owned material at rate 0.
+  // Including them (a) inflates closing quantities with stock we do not own,
+  // (b) dilutes avgCost toward 0 and distorts closingValue/lowStock. JW
+  // movements remain fully visible in the stock LEDGER report.
+  const led = await db.stockLedger.findMany({
+    where: { isCancelled: false, voucherType: { not: 'JOBWORK_IN' } },
+  })
   const byItem = new Map<
     string,
     { inQty: number; outQty: number; inValue: number; byWh: Map<string, number> }
@@ -84,9 +99,14 @@ export async function stockSummaryReport() {
 // ---------- GSTR-1 summary (B2B / B2C, rate-wise) ----------
 
 export async function gstr1Report(month: string) {
-  // month = 'YYYY-MM'
-  const from = new Date(`${month}-01T00:00:00`)
-  const to = new Date(from.getFullYear(), from.getMonth() + 1, 0, 23, 59, 59)
+  // month = 'YYYY-MM' — invoice dates are stored at UTC midnight, so the
+  // month window must be UTC-bounded (local bounds drop day-1 / pick up
+  // next-month rows on non-UTC servers).
+  const from = new Date(`${month}-01T00:00:00.000Z`)
+  const nextMonth = month.endsWith('-12')
+    ? `${Number(month.slice(0, 4)) + 1}-01`
+    : `${month.slice(0, 5)}${String(Number(month.slice(5)) + 1).padStart(2, '0')}`
+  const to = new Date(new Date(`${nextMonth}T00:00:00.000Z`).getTime() - 1)
   const invoices = await db.salesInvoice.findMany({
     where: { date: { gte: from, lte: to }, status: 'POSTED' },
     include: { items: true, party: true },
@@ -151,8 +171,8 @@ export async function trialBalanceReport(from?: string, to?: string) {
   const where: any = { isCancelled: false }
   if (from || to) {
     where.date = {}
-    if (from) where.date.gte = new Date(from)
-    if (to) where.date.lte = new Date(`${to}T23:59:59`)
+    if (from) where.date.gte = utcDayStart(from)
+    if (to) where.date.lte = utcDayEnd(to)
   }
   const rows = await db.accountLedger.findMany({ where })
   const byAcc = new Map<string, { account: string; accountName: string; debit: number; credit: number }>()
@@ -207,6 +227,24 @@ export async function outstandingReport() {
   for (const s of sales) bySales.set(s.partyId, r2((bySales.get(s.partyId) ?? 0) + s.grandTotal - s.paidAmount))
   const byPurch = new Map<string, number>()
   for (const p of purchases) byPurch.set(p.partyId, r2((byPurch.get(p.partyId) ?? 0) + p.grandTotal - p.paidAmount))
+  // Unallocated payments (advances / on-account): a RECEIPT posts Cr DEBT and
+  // a PAYMENT posts Dr CRED in the GL whether or not it settles a specific
+  // invoice, so the party sub-ledger nets them immediately. The outstanding
+  // report must do the same or it drifts from the GL control accounts — an
+  // unallocated advance reduces what the party overall owes, exactly like its
+  // GL mirror does (party-ledger ≡ outstanding invariant).
+  const payments = await db.payment.findMany({
+    where: { status: 'POSTED' },
+    include: { allocations: { select: { amount: true } } },
+  })
+  const advanceByParty = new Map<string, number>() // + = customer advance (RECEIPT), − = supplier advance (PAYMENT)
+  for (const p of payments) {
+    const allocated = r2(p.allocations.reduce((s, a) => s + a.amount, 0))
+    const unallocated = r2(p.amount - allocated)
+    if (Math.abs(unallocated) < 0.004) continue
+    const sign = p.type === 'RECEIPT' ? 1 : -1
+    advanceByParty.set(p.partyId, r2((advanceByParty.get(p.partyId) ?? 0) + sign * unallocated))
+  }
   // Opening contribution — counted exactly ONCE: the GL-posted amount when
   // it exists, else the legacy column value. (The voucher sums above are
   // computed from invoice/payment tables and never include GL opening rows.)
@@ -219,16 +257,18 @@ export async function outstandingReport() {
     .filter((p) => p.types.includes('CUSTOMER'))
     .map((p) => ({
       party: { id: p.id, code: p.code, name: p.name, stateCode: p.stateCode, openingBal: p.openingBal },
-      amount: r2((bySales.get(p.id) ?? 0) + Math.max(0, openingFor(p))),
+      advance: r2(Math.max(0, advanceByParty.get(p.id) ?? 0)),
+      amount: r2((bySales.get(p.id) ?? 0) + Math.max(0, openingFor(p)) - Math.max(0, advanceByParty.get(p.id) ?? 0)),
     }))
-    .filter((r) => r.amount > 0.004)
+    .filter((r) => r.amount > 0.004 || r.advance > 0.004)
   const suppliers = parties
     .filter((p) => p.types.includes('SUPPLIER'))
     .map((p) => ({
       party: { id: p.id, code: p.code, name: p.name, stateCode: p.stateCode, openingBal: p.openingBal },
-      amount: r2((byPurch.get(p.id) ?? 0) + Math.max(0, -openingFor(p))),
+      advance: r2(Math.max(0, -(advanceByParty.get(p.id) ?? 0))),
+      amount: r2((byPurch.get(p.id) ?? 0) + Math.max(0, -openingFor(p)) - Math.max(0, -(advanceByParty.get(p.id) ?? 0))),
     }))
-    .filter((r) => r.amount > 0.004)
+    .filter((r) => r.amount > 0.004 || r.advance > 0.004)
   return {
     customers,
     suppliers,
@@ -240,8 +280,8 @@ export async function outstandingReport() {
 // ---------- P&L (period) ----------
 
 export async function pnlReport(from: string, to: string) {
-  const fromDate = new Date(from)
-  const toDate = new Date(`${to}T23:59:59`)
+  const fromDate = utcDayStart(from)
+  const toDate = utcDayEnd(to)
   const led = await db.accountLedger.findMany({
     where: { isCancelled: false, date: { gte: fromDate, lte: toDate } },
   })
@@ -340,15 +380,17 @@ export async function jobworkPendingReport() {
 
 export async function dashboardData() {
   const now = new Date()
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
-  const monthKey = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+  // Invoice dates are stored at UTC midnight, so month bucketing uses UTC
+  // month keys/starts (local keys mis-bucket month-1st rows on non-UTC hosts).
+  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
+  const monthKey = (d: Date) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`
 
   const [salesMonth, purchaseMonth, salesAll, purchaseAll, parties, stockSummary, jobwork, recent, projAgg, taskAgg] =
     await Promise.all([
       db.salesInvoice.aggregate({ where: { status: 'POSTED', date: { gte: monthStart } }, _sum: { grandTotal: true } }),
       db.purchaseInvoice.aggregate({ where: { status: 'POSTED', date: { gte: monthStart } }, _sum: { grandTotal: true } }),
-      db.salesInvoice.findMany({ where: { status: 'POSTED' }, select: { date: true, grandTotal: true } }),
-      db.purchaseInvoice.findMany({ where: { status: 'POSTED' }, select: { date: true, grandTotal: true } }),
+      db.salesInvoice.findMany({ where: { status: 'POSTED' }, select: { date: true, grandTotal: true, paidAmount: true, partyId: true } }),
+      db.purchaseInvoice.findMany({ where: { status: 'POSTED' }, select: { date: true, grandTotal: true, paidAmount: true, partyId: true } }),
       db.party.findMany({ where: { active: true } }),
       stockSummaryReport(),
       db.jobworkInward.findMany({
@@ -365,26 +407,77 @@ export async function dashboardData() {
       db.productionTask.groupBy({ by: ['status'], _count: true }),
     ])
 
-  // outstanding from live invoices
-  const salesPaid = await db.salesInvoice.aggregate({ where: { status: 'POSTED' }, _sum: { paidAmount: true } })
-  const purchPaid = await db.purchaseInvoice.aggregate({ where: { status: 'POSTED' }, _sum: { paidAmount: true } })
+  // Outstanding — computed with the SAME semantics as outstandingReport()
+  // (GL-backed opening counted once + unallocated advances netted) so the
+  // dashboard KPIs can never contradict the receivables/payables report.
+  const [paymentsAll, glOpening] = await Promise.all([
+    db.payment.findMany({ where: { status: 'POSTED' }, include: { allocations: { select: { amount: true } } } }),
+    glOpeningForParties(),
+  ])
+  const salesDueByParty = new Map<string, number>()
+  const salesPaidByParty = new Map<string, number>()
+  for (const s of salesAll) salesDueByParty.set(s.partyId, r2((salesDueByParty.get(s.partyId) ?? 0) + s.grandTotal))
+  for (const s of salesAll) if (s.paidAmount > 0) salesPaidByParty.set(s.partyId, r2((salesPaidByParty.get(s.partyId) ?? 0) + s.paidAmount))
+  const purchDueByParty = new Map<string, number>()
+  const purchPaidByParty = new Map<string, number>()
+  for (const p of purchaseAll) purchDueByParty.set(p.partyId, r2((purchDueByParty.get(p.partyId) ?? 0) + p.grandTotal))
+  for (const p of purchaseAll) if (p.paidAmount > 0) purchPaidByParty.set(p.partyId, r2((purchPaidByParty.get(p.partyId) ?? 0) + p.paidAmount))
+  const advanceByParty = new Map<string, number>() // + = customer advance (RECEIPT), − = supplier advance (PAYMENT)
+  for (const p of paymentsAll) {
+    const allocated = r2(p.allocations.reduce((s, a) => s + a.amount, 0))
+    const unallocated = r2(p.amount - allocated)
+    if (Math.abs(unallocated) < 0.004) continue
+    const sign = p.type === 'RECEIPT' ? 1 : -1
+    advanceByParty.set(p.partyId, r2((advanceByParty.get(p.partyId) ?? 0) + sign * unallocated))
+  }
+  const openingFor = (p: { id: string; openingBal: number }): number => {
+    const gl = glOpening.get(p.id)
+    if (gl !== undefined && Math.abs(gl) > 0.004) return gl
+    return p.openingBal
+  }
   const receivables = r2(
-    (salesAll.reduce((s, i) => s + i.grandTotal, 0) - (salesPaid._sum.paidAmount ?? 0)) +
-      parties.filter((p) => p.types.includes('CUSTOMER')).reduce((s, p) => s + Math.max(0, p.openingBal), 0)
+    parties
+      .filter((p) => p.types.includes('CUSTOMER'))
+      .reduce(
+        (s, p) =>
+          s +
+          Math.max(
+            0,
+            r2(
+              (salesDueByParty.get(p.id) ?? 0) - (salesPaidByParty.get(p.id) ?? 0) +
+                Math.max(0, openingFor(p)) -
+                Math.max(0, advanceByParty.get(p.id) ?? 0)
+            )
+          ),
+        0
+      )
   )
   const payables = r2(
-    (purchaseAll.reduce((s, i) => s + i.grandTotal, 0) - (purchPaid._sum.paidAmount ?? 0)) +
-      parties.filter((p) => p.types.includes('SUPPLIER')).reduce((s, p) => s + Math.max(0, -p.openingBal), 0)
+    parties
+      .filter((p) => p.types.includes('SUPPLIER'))
+      .reduce(
+        (s, p) =>
+          s +
+          Math.max(
+            0,
+            r2(
+              (purchDueByParty.get(p.id) ?? 0) - (purchPaidByParty.get(p.id) ?? 0) +
+                Math.max(0, -openingFor(p)) -
+                Math.max(0, -(advanceByParty.get(p.id) ?? 0))
+            )
+          ),
+        0
+      )
   )
 
   // 6-month trend
   const trend: { month: string; label: string; sales: number; purchase: number }[] = []
   for (let i = 5; i >= 0; i--) {
-    const d = new Date(now.getFullYear(), now.getMonth() - i, 1)
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1))
     const key = monthKey(d)
     trend.push({
       month: key,
-      label: d.toLocaleDateString('en-IN', { month: 'short' }),
+      label: d.toLocaleDateString('en-IN', { month: 'short', timeZone: 'UTC' }),
       sales: r2(salesAll.filter((s) => monthKey(new Date(s.date)) === key).reduce((s, x) => s + x.grandTotal, 0)),
       purchase: r2(purchaseAll.filter((p) => monthKey(new Date(p.date)) === key).reduce((s, x) => s + x.grandTotal, 0)),
     })

@@ -55,11 +55,13 @@ export class BusinessError extends Error {
   }
 }
 
-/** Throws if the entry set does not balance — callers never persist unbalanced GL. */
+/** Throws if the entry set does not balance — callers never persist unbalanced GL.
+ *  Sums the PERSISTED precision (per-row r2) so what is checked is exactly
+ *  what is written: Σ r2(row.debit) must equal Σ r2(row.credit). */
 export function assertBalanced(rows: GlRowInput[]): void {
-  const dr = rows.reduce((s, r) => s + (r.debit ?? 0), 0)
-  const cr = rows.reduce((s, r) => s + (r.credit ?? 0), 0)
-  if (Math.abs(r2(dr) - r2(cr)) > 0.005) {
+  const dr = r2(rows.reduce((s, r) => s + r2(r.debit ?? 0), 0))
+  const cr = r2(rows.reduce((s, r) => s + r2(r.credit ?? 0), 0))
+  if (Math.abs(dr - cr) > 0.005) {
     throw new BusinessError(
       `GL entry does not balance (Dr ${dr.toFixed(2)} vs Cr ${cr.toFixed(2)}) — refused to post`
     )

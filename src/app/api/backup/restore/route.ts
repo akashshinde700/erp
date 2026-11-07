@@ -25,6 +25,16 @@ export async function POST(req: Request) {
     if (!snap || (snap.version !== 1 && snap.version !== 2) || !snap.data) {
       return fail('Invalid snapshot — export a backup first', 400)
     }
+    // A restore that would leave ZERO org logins re-opens the anonymous
+    // first-boot window on every business route (assertCompanyAccess returns
+    // null when orgLoginCount()==0) — anyone could then read/write all data
+    // and re-run the owner bootstrap. Refuse it instead.
+    if (!snap.data.orgUsers?.length) {
+      return fail(
+        'Snapshot contains no organization logins — restoring it would re-open anonymous access. Include orgUsers in the backup or re-bootstrap after restore.',
+        400
+      )
+    }
 
     await db.$transaction(
       async (tx) => {
@@ -97,7 +107,7 @@ export async function POST(req: Request) {
       // Full-database restore is heavier than the 5s interactive default.
       { timeout: 60_000 }
     )
-    await logAudit('BACKUP', 'Restore', undefined, 'snapshot restored (typed RESTORE confirm)')
+    await logAudit('BACKUP', 'Restore', undefined, 'snapshot restored (typed RESTORE confirm)', 'platform-admin')
     return ok({ restored: true })
   } catch (e) {
     return handleError(e)

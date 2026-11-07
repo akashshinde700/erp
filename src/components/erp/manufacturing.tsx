@@ -19,6 +19,7 @@ import {
   ListTodo,
   Loader2,
   PackageSearch,
+  Pencil,
   PlayCircle,
   Plus,
   Trash2,
@@ -63,7 +64,7 @@ import {
   type ProjectDetail,
   type WorkOrder,
 } from './api'
-import { EmptyState, KpiCard, Money, ProgressBar, SectionHeading, StatusBadge, TableSkeleton } from './bits'
+import { EmptyState, ErrorState, KpiCard, Money, ProgressBar, SectionHeading, StatusBadge, TableSkeleton } from './bits'
 import { useErpUi } from './store'
 import { dateStr, money, qty as qtyFmt, r2 } from '@/lib/erp'
 import { cn } from '@/lib/utils'
@@ -156,13 +157,13 @@ export function ManufacturingView() {
         </TabsList>
 
         <TabsContent value="projects" className="mt-4">
-          <ProjectsTab />
+          <ProjectsTab onChanged={() => stats.reload()} />
         </TabsContent>
         <TabsContent value="boms" className="mt-4">
-          <BomsTab />
+          <BomsTab onChanged={() => stats.reload()} />
         </TabsContent>
         <TabsContent value="work-orders" className="mt-4">
-          <WorkOrdersTab onViewTasks={gotoTasks} />
+          <WorkOrdersTab onViewTasks={gotoTasks} onChanged={() => stats.reload()} />
         </TabsContent>
         <TabsContent value="tasks" className="mt-4">
           <TasksTab woFilter={taskWoFilter} onWoFilterChange={setTaskWoFilter} onChanged={() => stats.reload()} />
@@ -171,7 +172,7 @@ export function ManufacturingView() {
           <PendingTab onGoTasks={gotoTasks} onChanged={() => stats.reload()} />
         </TabsContent>
         <TabsContent value="employees" className="mt-4">
-          <EmployeesTab />
+          <EmployeesTab onChanged={() => stats.reload()} />
         </TabsContent>
       </Tabs>
     </div>
@@ -205,17 +206,24 @@ function DueCell({ due, overdue }: { due: string | null; overdue?: boolean }) {
 }
 
 function isOverdue(due: string | null): boolean {
-  return !!due && new Date(due).getTime() < Date.now()
+  // Date-only comparison: due dates are date-only values (UTC midnight in
+  // JSON). A task due TODAY must not flag overdue at 00:00 UTC (05:30 IST) —
+  // it is overdue only from the NEXT day. Matches the server's
+  // pendingTasksReport logic exactly.
+  if (!due) return false
+  const day = due.slice(0, 10)
+  return day < todayISO()
 }
 
 // ===========================================================================
 // Projects tab
 // ===========================================================================
 
-function ProjectsTab() {
+function ProjectsTab({ onChanged }: { onChanged?: () => void }) {
   const setView = useErpUi((s) => s.setView)
   const list = useApi<Project[]>('/api/manufacturing/projects')
   const [createOpen, setCreateOpen] = useState(false)
+  const [editProject, setEditProject] = useState<Project | null>(null)
   const rows = list.data ?? []
 
   return (
@@ -235,6 +243,10 @@ function ProjectsTab() {
         <CardContent className="p-0">
           {list.loading ? (
             <TableSkeleton rows={5} cols={7} />
+          ) : list.error ? (
+            <div className="p-6">
+              <ErrorState error={list.error} onRetry={() => list.reload()} entity="projects" />
+            </div>
           ) : rows.length === 0 ? (
             <div className="p-6">
               <EmptyState
@@ -304,7 +316,24 @@ function ProjectsTab() {
                         </div>
                       </TableCell>
                       <TableCell>
-                        <StatusBadge status={p.status} />
+                        <div className="flex items-center gap-2">
+                          <StatusBadge status={p.status} />
+                          {p.status === 'PENDING' || p.status === 'RUNNING' ? (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-8"
+                              aria-label={`Edit ${p.projectNo}`}
+                              title="Edit project details"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setEditProject(p)
+                              }}
+                            >
+                              <Pencil className="size-3.5" aria-hidden />
+                            </Button>
+                          ) : null}
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))}
@@ -315,35 +344,55 @@ function ProjectsTab() {
         </CardContent>
       </Card>
 
-      <NewProjectDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={() => list.reload()} />
+      <NewProjectDialog open={createOpen} onOpenChange={setCreateOpen} onCreated={() => { list.reload(); onChanged?.() }} />
+      {editProject ? (
+        <NewProjectDialog
+          open={!!editProject}
+          onOpenChange={(o) => !o && setEditProject(null)}
+          project={editProject}
+          onCreated={() => { list.reload(); onChanged?.() }}
+        />
+      ) : null}
     </div>
   )
 }
 
-// ---------- new project dialog ----------
+// ---------- new / edit project dialog ----------
 
-function NewProjectDialog({ open, onOpenChange, onCreated }: { open: boolean; onOpenChange: (o: boolean) => void; onCreated: () => void }) {
+function NewProjectDialog({
+  open,
+  onOpenChange,
+  onCreated,
+  project,
+}: {
+  open: boolean
+  onOpenChange: (o: boolean) => void
+  onCreated: () => void
+  /** Present = EDIT mode (PUT); absent = CREATE mode (POST). */
+  project?: Project
+}) {
   const masters = useMasters()
   const customers = masters.parties.filter((p) => p.active && partyTypes(p).includes('CUSTOMER'))
-  const [name, setName] = useState('')
-  const [partyId, setPartyId] = useState('')
-  const [manager, setManager] = useState('')
-  const [location, setLocation] = useState('')
-  const [startDate, setStartDate] = useState(todayISO())
-  const [endDate, setEndDate] = useState('')
-  const [budget, setBudget] = useState('')
-  const [documents, setDocuments] = useState('')
-  const [notes, setNotes] = useState('')
+  const editing = !!project
+  const [name, setName] = useState(project?.name ?? '')
+  const [partyId, setPartyId] = useState(project?.partyId ?? '')
+  const [manager, setManager] = useState(project?.manager ?? '')
+  const [location, setLocation] = useState(project?.location ?? '')
+  const [startDate, setStartDate] = useState(project?.startDate?.slice(0, 10) ?? todayISO())
+  const [endDate, setEndDate] = useState(project?.endDate?.slice(0, 10) ?? '')
+  const [budget, setBudget] = useState(project ? String(project.budget) : '')
+  const [documents, setDocuments] = useState(project?.documents ?? '')
+  const [notes, setNotes] = useState(project?.notes ?? '')
   const [saving, setSaving] = useState(false)
 
   const save = async () => {
     if (!name.trim()) return toast.error('Project name is required')
     if (!partyId) return toast.error('Pick the customer')
+    if (endDate && endDate < startDate) return toast.error('Planned end date cannot be before the start date')
     setSaving(true)
     try {
-      const res = await apiPost<Project>('/api/manufacturing/projects', {
+      const body = {
         name: name.trim(),
-        partyId,
         manager: manager.trim() || undefined,
         location: location.trim() || undefined,
         startDate,
@@ -351,11 +400,16 @@ function NewProjectDialog({ open, onOpenChange, onCreated }: { open: boolean; on
         budget: num(budget),
         documents: documents.trim() || undefined,
         notes: notes.trim() || undefined,
+      }
+      const res = editing
+        ? await apiPut<Project>(`/api/manufacturing/projects/${project!.id}`, body)
+        : await apiPost<Project>('/api/manufacturing/projects', { ...body, partyId })
+      toast.success(editing ? `${res.projectNo} updated` : `${res.projectNo} created`, {
+        description: editing ? 'Project details saved.' : `${res.name} — status PENDING. Add a BOM next.`,
       })
-      toast.success(`${res.projectNo} created`, { description: `${res.name} — status PENDING. Add a BOM next.` })
       onCreated()
       onOpenChange(false)
-      setName(''); setPartyId(''); setManager(''); setLocation(''); setEndDate(''); setBudget(''); setDocuments(''); setNotes('')
+      setName(''); setPartyId(''); setManager(''); setLocation(''); setStartDate(todayISO()); setEndDate(''); setBudget(''); setDocuments(''); setNotes('')
     } catch (e) {
       toastError(e)
     } finally {
@@ -367,9 +421,9 @@ function NewProjectDialog({ open, onOpenChange, onCreated }: { open: boolean; on
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[92dvh] flex-col overflow-hidden sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>New Fabrication Project</DialogTitle>
+          <DialogTitle>{editing ? `Edit ${project!.projectNo}` : 'New Fabrication Project'}</DialogTitle>
           <DialogDescription>
-            One project per customer job — budget, manager, drawings reference and dates.
+            {editing ? 'Correct the plan — budget, manager, dates, drawing references.' : 'One project per customer job — budget, manager, drawings reference and dates.'}
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto erp-scroll-y pr-1">
@@ -380,7 +434,9 @@ function NewProjectDialog({ open, onOpenChange, onCreated }: { open: boolean; on
             </div>
             <div className="space-y-1.5">
               <Label>Customer</Label>
-              <Select value={partyId || undefined} onValueChange={setPartyId}>
+              {/* The customer link is immutable after creation (estimates, WOs
+                  and invoices hang off it) — edit mode locks the field. */}
+              <Select value={partyId || undefined} onValueChange={setPartyId} disabled={editing}>
                 <SelectTrigger className="h-11 w-full">
                   <SelectValue placeholder="Select customer…" />
                 </SelectTrigger>
@@ -427,8 +483,8 @@ function NewProjectDialog({ open, onOpenChange, onCreated }: { open: boolean; on
         <DialogFooter className="gap-2 sm:flex-row">
           <Button variant="outline" onClick={() => onOpenChange(false)} className="h-11">Cancel</Button>
           <Button onClick={save} disabled={saving} className="h-11 min-w-32">
-            {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Plus className="size-4" aria-hidden />}
-            Create Project
+            {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : editing ? <Pencil className="size-4" aria-hidden /> : <Plus className="size-4" aria-hidden />}
+            {editing ? 'Save Changes' : 'Create Project'}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -447,6 +503,7 @@ export function ProjectDetailView({ id }: { id: string }) {
   const [bomCreateOpen, setBomCreateOpen] = useState(false)
   const [woFromBom, setWoFromBom] = useState<Bom | null>(null)
   const [taskWo, setTaskWo] = useState<WorkOrder | null>(null)
+  const [editProject, setEditProject] = useState<ProjectDetail | null>(null)
 
   const p = detail.data
   const reload = detail.reload
@@ -499,6 +556,11 @@ export function ProjectDetailView({ id }: { id: string }) {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {(p.status === 'PENDING' || p.status === 'RUNNING') ? (
+            <Button variant="outline" onClick={() => setEditProject(p)} disabled={busy} className="h-11 gap-2">
+              <Pencil className="size-4" aria-hidden /> Edit
+            </Button>
+          ) : null}
           {p.status === 'PENDING' ? (
             <Button onClick={() => action('start')} disabled={busy} className="h-11 gap-2">
               <PlayCircle className="size-4" aria-hidden /> Start Project
@@ -700,7 +762,10 @@ export function ProjectDetailView({ id }: { id: string }) {
                         <TableCell><StatusBadge status={b.status} /></TableCell>
                         <TableCell className="text-right">
                           <div className="flex justify-end gap-1">
-                            {b.status === 'DRAFT' ? (
+                            {/* Terminal projects cannot approve BOMs — the
+                                estimate would never feed a work order (server
+                                guard mirrors this check). */}
+                            {b.status === 'DRAFT' && p.status !== 'COMPLETED' && p.status !== 'CANCELLED' ? (
                               <Button
                                 variant="outline"
                                 size="sm"
@@ -892,6 +957,14 @@ export function ProjectDetailView({ id }: { id: string }) {
           onCreated={reload}
         />
       ) : null}
+      {editProject ? (
+        <NewProjectDialog
+          open={!!editProject}
+          onOpenChange={(o) => !o && setEditProject(null)}
+          project={editProject}
+          onCreated={reload}
+        />
+      ) : null}
     </div>
   )
 }
@@ -900,7 +973,7 @@ export function ProjectDetailView({ id }: { id: string }) {
 // BOMs tab
 // ===========================================================================
 
-function BomsTab() {
+function BomsTab({ onChanged }: { onChanged?: () => void }) {
   const setView = useErpUi((s) => s.setView)
   const list = useApi<Bom[]>('/api/manufacturing/boms')
   const [createOpen, setCreateOpen] = useState(false)
@@ -915,6 +988,7 @@ function BomsTab() {
       await apiPost(`/api/manufacturing/boms/${b.id}/actions`, { action: 'approve' })
       toast.success(`${b.bomNo} approved`, { description: 'Project estimated cost recalculated.' })
       list.reload()
+      onChanged?.()
     } catch (e) {
       toastError(e)
     } finally {
@@ -928,6 +1002,7 @@ function BomsTab() {
       await apiPost(`/api/manufacturing/boms/${b.id}/actions`, { action: 'cancel' })
       toast.success(`${b.bomNo} cancelled`)
       list.reload()
+      onChanged?.()
     } catch (e) {
       toastError(e)
     } finally {
@@ -950,6 +1025,10 @@ function BomsTab() {
         <CardContent className="p-0">
           {list.loading ? (
             <TableSkeleton rows={5} cols={6} />
+          ) : list.error ? (
+            <div className="p-6">
+              <ErrorState error={list.error} onRetry={() => list.reload()} entity="BOMs" />
+            </div>
           ) : rows.length === 0 ? (
             <div className="p-6">
               <EmptyState title="No BOMs yet" hint="Pick a project and list the materials it needs." icon={PackageSearch} />
@@ -1009,9 +1088,33 @@ function BomsTab() {
                               </Button>
                             ) : null}
                             {b.status !== 'CANCELLED' ? (
-                              <Button variant="ghost" size="sm" className="h-9 gap-1 text-destructive hover:text-destructive" disabled={busy} onClick={() => cancelBom(b)}>
-                                <XCircle className="size-3.5" aria-hidden /> Cancel
-                              </Button>
+                              <AlertDialog>
+                                <AlertDialogTrigger asChild>
+                                  <Button variant="ghost" size="sm" className="h-9 gap-1 text-destructive hover:text-destructive" disabled={busy}>
+                                    <XCircle className="size-3.5" aria-hidden /> Cancel
+                                  </Button>
+                                </AlertDialogTrigger>
+                                <AlertDialogContent>
+                                  <AlertDialogHeader>
+                                    <AlertDialogTitle>Cancel {b.bomNo}?</AlertDialogTitle>
+                                    <AlertDialogDescription>
+                                      The BOM will be voided and its estimate removed from the project cost. Active work orders generated from it must be cancelled first. This cannot be undone.
+                                    </AlertDialogDescription>
+                                  </AlertDialogHeader>
+                                  <AlertDialogFooter>
+                                    <AlertDialogCancel className="h-11">Keep it</AlertDialogCancel>
+                                    <AlertDialogAction
+                                      onClick={(e) => {
+                                        e.preventDefault()
+                                        void cancelBom(b)
+                                      }}
+                                      className="h-11"
+                                    >
+                                      Cancel BOM
+                                    </AlertDialogAction>
+                                  </AlertDialogFooter>
+                                </AlertDialogContent>
+                              </AlertDialog>
                             ) : null}
                           </div>
                         </TableCell>
@@ -1026,13 +1129,13 @@ function BomsTab() {
       </Card>
 
       {createOpen ? (
-        <NewBomDialog open={createOpen} onOpenChange={setCreateOpen} onApproved={() => { list.reload(); setView('manufacturing') }} />
+        <NewBomDialog open={createOpen} onOpenChange={setCreateOpen} onApproved={() => { list.reload(); onChanged?.(); setView('manufacturing') }} />
       ) : null}
       {viewBom ? (
         <BomLinesDialog bom={viewBom} open={!!viewBom} onOpenChange={(o) => !o && setViewBom(null)} />
       ) : null}
       {woFromBom ? (
-        <GenerateWoDialog bom={woFromBom} open={!!woFromBom} onOpenChange={(o) => !o && setWoFromBom(null)} onCreated={() => setView('manufacturing')} />
+        <GenerateWoDialog bom={woFromBom} open={!!woFromBom} onOpenChange={(o) => !o && setWoFromBom(null)} onCreated={() => { setView('manufacturing'); onChanged?.() }} />
       ) : null}
     </div>
   )
@@ -1518,7 +1621,7 @@ function GenerateWoDialog({ bom, open, onOpenChange, onCreated }: { bom: Bom; op
 // Work orders tab
 // ===========================================================================
 
-function WorkOrdersTab({ onViewTasks }: { onViewTasks: (woId?: string) => void }) {
+function WorkOrdersTab({ onViewTasks, onChanged }: { onViewTasks: (woId?: string) => void; onChanged?: () => void }) {
   const list = useApi<WorkOrder[]>('/api/manufacturing/work-orders')
   const [busy, setBusy] = useState(false)
   const rows = list.data ?? []
@@ -1530,6 +1633,7 @@ function WorkOrdersTab({ onViewTasks }: { onViewTasks: (woId?: string) => void }
       await apiPost(`/api/manufacturing/work-orders/${w.id}/actions`, { action })
       toast.success(action === 'complete' ? `${w.woNo} COMPLETED` : `${w.woNo} cancelled`)
       list.reload()
+      onChanged?.()
     } catch (e) {
       toastError(e)
     } finally {
@@ -1552,6 +1656,10 @@ function WorkOrdersTab({ onViewTasks }: { onViewTasks: (woId?: string) => void }
         <CardContent className="p-0">
           {list.loading ? (
             <TableSkeleton rows={5} cols={6} />
+          ) : list.error ? (
+            <div className="p-6">
+              <ErrorState error={list.error} onRetry={() => list.reload()} entity="work orders" />
+            </div>
           ) : rows.length === 0 ? (
             <div className="p-6">
               <EmptyState title="No work orders yet" hint="Approve a BOM in a project and generate the first work order." icon={ClipboardList} />
@@ -1621,16 +1729,39 @@ function WorkOrdersTab({ onViewTasks }: { onViewTasks: (woId?: string) => void }
                               >
                                 <BadgeCheck className="size-3.5" aria-hidden /> Close
                               </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-9 gap-1 text-destructive hover:text-destructive"
-                                disabled={busy || w.stats.taskDone > 0}
-                                title={w.stats.taskDone > 0 ? 'Completed tasks exist — cannot cancel' : 'Cancel work order'}
-                                onClick={() => woAction(w, 'cancel')}
-                              >
-                                <XCircle className="size-3.5" aria-hidden />
-                              </Button>
+                              <AlertDialog>
+                                <AlertDialogTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-9 gap-1 text-destructive hover:text-destructive"
+                                    disabled={busy || w.stats.taskDone > 0}
+                                    aria-label={`Cancel ${w.woNo}`}
+                                  >
+                                    <XCircle className="size-3.5" aria-hidden />
+                                  </Button>
+                                </AlertDialogTrigger>
+                                <AlertDialogContent>
+                                  <AlertDialogHeader>
+                                    <AlertDialogTitle>Cancel {w.woNo}?</AlertDialogTitle>
+                                    <AlertDialogDescription>
+                                      The work order and its pending tasks will be cancelled. Completed tasks (if any) block cancellation — this cannot be undone.
+                                    </AlertDialogDescription>
+                                  </AlertDialogHeader>
+                                  <AlertDialogFooter>
+                                    <AlertDialogCancel className="h-11">Keep it</AlertDialogCancel>
+                                    <AlertDialogAction
+                                      onClick={(e) => {
+                                        e.preventDefault()
+                                        void woAction(w, 'cancel')
+                                      }}
+                                      className="h-11"
+                                    >
+                                      Cancel WO
+                                    </AlertDialogAction>
+                                  </AlertDialogFooter>
+                                </AlertDialogContent>
+                              </AlertDialog>
                             </>
                           ) : null}
                         </div>
@@ -1653,7 +1784,6 @@ function WorkOrdersTab({ onViewTasks }: { onViewTasks: (woId?: string) => void }
 
 function TasksTab({ woFilter, onWoFilterChange, onChanged }: { woFilter: string; onWoFilterChange: (v: string) => void; onChanged?: () => void }) {
   const wos = useApi<WorkOrder[]>('/api/manufacturing/work-orders')
-  const employees = useApi<Employee[]>('/api/manufacturing/employees')
   const [statusFilter, setStatusFilter] = useState<string>('active')
   const [createOpen, setCreateOpen] = useState(false)
   const [assignTask, setAssignTask] = useState<ProductionTask | null>(null)
@@ -1728,6 +1858,10 @@ function TasksTab({ woFilter, onWoFilterChange, onChanged }: { woFilter: string;
         <CardContent className="p-0">
           {list.loading ? (
             <TableSkeleton rows={6} cols={7} />
+          ) : list.error ? (
+            <div className="p-6">
+              <ErrorState error={list.error} onRetry={() => list.reload()} entity="tasks" />
+            </div>
           ) : rows.length === 0 ? (
             <div className="p-6">
               <EmptyState
@@ -1811,16 +1945,39 @@ function TasksTab({ woFilter, onWoFilterChange, onChanged }: { woFilter: string;
                               </Button>
                             ) : null}
                             {active ? (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-9 text-destructive hover:text-destructive"
-                                disabled={busy}
-                                onClick={() => taskAction(t, 'cancel')}
-                                aria-label={`Cancel ${t.taskNo}`}
-                              >
-                                <XCircle className="size-3.5" aria-hidden />
-                              </Button>
+                              <AlertDialog>
+                                <AlertDialogTrigger asChild>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-9 text-destructive hover:text-destructive"
+                                    disabled={busy}
+                                    aria-label={`Cancel ${t.taskNo}`}
+                                  >
+                                    <XCircle className="size-3.5" aria-hidden />
+                                  </Button>
+                                </AlertDialogTrigger>
+                                <AlertDialogContent>
+                                  <AlertDialogHeader>
+                                    <AlertDialogTitle>Cancel {t.taskNo}?</AlertDialogTitle>
+                                    <AlertDialogDescription>
+                                      {operationLabel(t.operation)} will be cancelled. Completed tasks are final and cannot be cancelled — this cannot be undone.
+                                    </AlertDialogDescription>
+                                  </AlertDialogHeader>
+                                  <AlertDialogFooter>
+                                    <AlertDialogCancel className="h-11">Keep it</AlertDialogCancel>
+                                    <AlertDialogAction
+                                      onClick={(e) => {
+                                        e.preventDefault()
+                                        void taskAction(t, 'cancel')
+                                      }}
+                                      className="h-11"
+                                    >
+                                      Cancel Task
+                                    </AlertDialogAction>
+                                  </AlertDialogFooter>
+                                </AlertDialogContent>
+                              </AlertDialog>
                             ) : null}
                           </div>
                         </TableCell>
@@ -2115,6 +2272,10 @@ function CompleteTaskDialog({ task, open, onOpenChange, onCompleted }: { task: P
   const save = async () => {
     if (!(num(actualQty) > 0)) return toast.error('Actual quantity must be positive')
     if (over) return toast.error('Actual + rejection exceeds planned by more than 10%')
+    // Material pair validation: picking an item without a positive qty (or
+    // vice versa) would 400 on the server — catch it before the round-trip.
+    if (materialItemId && !(num(materialQty) > 0)) return toast.error('Enter the consumed quantity for the picked material')
+    if (!materialItemId && num(materialQty) > 0) return toast.error('Pick which material was consumed')
     setSaving(true)
     try {
       await apiPost(`/api/manufacturing/tasks/${task.id}/actions`, {
@@ -2263,6 +2424,12 @@ function PendingTab({ onGoTasks, onChanged }: { onGoTasks: (woId?: string) => vo
 
       {report.loading ? (
         <TableSkeleton rows={6} cols={5} />
+      ) : report.error ? (
+        <Card className="p-0">
+          <CardContent className="p-6">
+            <ErrorState error={report.error} onRetry={() => report.reload()} entity="the pending board" />
+          </CardContent>
+        </Card>
       ) : !r || r.rows.length === 0 ? (
         <Card className="p-0">
           <CardContent className="p-6">
@@ -2362,7 +2529,7 @@ function PendingTab({ onGoTasks, onChanged }: { onGoTasks: (woId?: string) => vo
 // Employees tab
 // ===========================================================================
 
-function EmployeesTab() {
+function EmployeesTab({ onChanged }: { onChanged?: () => void }) {
   const list = useApi<Employee[]>('/api/manufacturing/employees')
   const [createOpen, setCreateOpen] = useState(false)
   const [editEmp, setEditEmp] = useState<Employee | null>(null)
@@ -2410,6 +2577,10 @@ function EmployeesTab() {
         <CardContent className="p-0">
           {list.loading ? (
             <TableSkeleton rows={5} cols={6} />
+          ) : list.error ? (
+            <div className="p-6">
+              <ErrorState error={list.error} onRetry={() => list.reload()} entity="employees" />
+            </div>
           ) : rows.length === 0 ? (
             <div className="p-6">
               <EmptyState title="No employees yet" hint="Add your workers — welders, CNC operators, fitters — for task assignment." icon={Users} />
@@ -2452,19 +2623,49 @@ function EmployeesTab() {
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
                           <Button variant="outline" size="sm" className="h-9" onClick={() => setEditEmp(e)}>Edit</Button>
-                          <Button variant="outline" size="sm" className="h-9" disabled={busy} onClick={() => toggleActive(e)}>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-9"
+                            disabled={busy}
+                            onClick={() => toggleActive(e)}
+                          >
                             {e.active ? 'Deactivate' : 'Reactivate'}
                           </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-9 text-destructive hover:text-destructive"
-                            disabled={busy || (e._count?.tasks ?? 0) > 0}
-                            title={(e._count?.tasks ?? 0) > 0 ? 'Has task history — deactivate instead' : 'Delete employee'}
-                            onClick={() => remove(e)}
-                          >
-                            <Trash2 className="size-3.5" aria-hidden />
-                          </Button>
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-9 text-destructive hover:text-destructive"
+                                disabled={busy || (e._count?.tasks ?? 0) > 0}
+                                title={(e._count?.tasks ?? 0) > 0 ? 'Has task history — deactivate instead' : 'Delete employee'}
+                                aria-label={`Delete ${e.name}`}
+                              >
+                                <Trash2 className="size-3.5" aria-hidden />
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Delete {e.name}?</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  This permanently removes the employee record. Employees with task history cannot be deleted — deactivate them instead (history stays attributed).
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel className="h-11">Keep</AlertDialogCancel>
+                                <AlertDialogAction
+                                  onClick={(ev) => {
+                                    ev.preventDefault()
+                                    void remove(e)
+                                  }}
+                                  className="h-11"
+                                >
+                                  Delete Employee
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
                         </div>
                       </TableCell>
                     </TableRow>
@@ -2477,10 +2678,10 @@ function EmployeesTab() {
       </Card>
 
       {createOpen ? (
-        <EmployeeDialog open={createOpen} onOpenChange={setCreateOpen} onSaved={() => list.reload()} />
+        <EmployeeDialog open={createOpen} onOpenChange={setCreateOpen} onSaved={() => { list.reload(); onChanged?.() }} />
       ) : null}
       {editEmp ? (
-        <EmployeeDialog open={!!editEmp} onOpenChange={(o) => !o && setEditEmp(null)} employee={editEmp} onSaved={() => list.reload()} />
+        <EmployeeDialog open={!!editEmp} onOpenChange={(o) => !o && setEditEmp(null)} employee={editEmp} onSaved={() => { list.reload(); onChanged?.() }} />
       ) : null}
     </div>
   )

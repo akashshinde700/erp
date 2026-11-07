@@ -9,7 +9,7 @@
  *  5. Tally-Import.bat — the manual, human-approved importer
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react'
 import { toast } from 'sonner'
 import {
   Download,
@@ -46,6 +46,7 @@ import {
 } from './api'
 import { useCompany } from './company'
 import { SectionHeading } from './bits'
+import { useResetOnChange } from '@/hooks/use-reset-on-change'
 
 const LEDGER_FIELDS: { key: keyof Company; label: string; placeholder: string }[] = [
   { key: 'tallyCompanyName', label: 'Tally company name (SVCURRENTCOMPANY)', placeholder: 'Shree Forge Industries' },
@@ -296,11 +297,14 @@ function EInvoiceBulkCard() {
   )
 }
 
+const noopSubscribe = () => () => {}
+
 function ConnectorCard() {
   const [status, setStatus] = useState<TallyConnectorStatus | null>(null)
   const [loading, setLoading] = useState(true)
   const [code, setCode] = useState<{ code: string; expiresAt: string } | null>(null)
-  const [origin, setOrigin] = useState('')
+  // window.location.origin read as an external store: '' on the server, real value on the client.
+  const origin = useSyncExternalStore(noopSubscribe, () => window.location.origin, () => '')
 
   const reload = useCallback(async () => {
     try {
@@ -313,8 +317,7 @@ function ConnectorCard() {
   }, [])
 
   useEffect(() => {
-    setOrigin(window.location.origin)
-    void reload()
+    void Promise.resolve().then(reload) // first poll from a callback, like the interval
     const t = setInterval(() => void reload(), 10000)
     return () => clearInterval(t)
   }, [reload])
@@ -479,15 +482,13 @@ function LedgerSettingsCard() {
   const company = useCompany()
   const [values, setValues] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
-  const [loadedFor, setLoadedFor] = useState('')
 
-  useEffect(() => {
-    if (!company || loadedFor === company.id) return
-    setLoadedFor(company.id)
+  useResetOnChange(!!company, [company?.id], () => {
+    if (!company) return
     const v: Record<string, string> = {}
     for (const f of LEDGER_FIELDS) v[f.key] = (company[f.key] as string | null) ?? ''
     setValues(v)
-  }, [company, loadedFor])
+  })
 
   if (!company) return null
 

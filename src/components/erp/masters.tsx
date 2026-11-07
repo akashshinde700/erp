@@ -57,6 +57,7 @@ import { EmptyState, Money, SectionHeading, TableSkeleton } from './bits'
 import { useErpUi } from './store'
 import { setCreatePreset } from './nav'
 import { INDIAN_STATES, stateName, gstinChecksumValid, dateStr, money, PARTY_TYPES, UOMS } from '@/lib/erp'
+import { useResetOnChange } from '@/hooks/use-reset-on-change'
 
 const GST_RATES = [0, 5, 12, 18, 28]
 
@@ -543,8 +544,7 @@ function PartyDialog({
   const [creditLimit, setCreditLimit] = useState('')
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => {
-    if (!open) return
+  useResetOnChange(open, [party], () => {
     setCode(party?.code ?? '')
     setName(party?.name ?? '')
     const t: Record<string, boolean> = {}
@@ -559,7 +559,7 @@ function PartyDialog({
     setEmail(party?.email ?? '')
     setOpeningBal(party ? String(party.openingBal) : '')
     setCreditLimit(party ? String(party.creditLimit ?? 0) : '')
-  }, [open, party])
+  })
 
   const chosenTypes = PARTY_TYPES.filter((t) => types[t])
 
@@ -659,7 +659,7 @@ function PartyDialog({
           <div className="space-y-1.5">
             <Label>State</Label>
             <Select value={stateCode} onValueChange={setStateCode}>
-              <SelectTrigger className="h-11 w-full">
+              <SelectTrigger className="h-11 data-[size=default]:h-11 w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent className="max-h-64">
@@ -889,8 +889,7 @@ function ItemDialog({
   const [reorderLevel, setReorderLevel] = useState('')
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => {
-    if (!open) return
+  useResetOnChange(open, [item], () => {
     setCode(item?.code ?? '')
     setName(item?.name ?? '')
     setGroupName(item?.groupName ?? '')
@@ -902,7 +901,7 @@ function ItemDialog({
     setSaleRate(item ? String(item.saleRate) : '')
     setCostRate(item ? String(item.costRate) : '')
     setReorderLevel(item ? String(item.reorderLevel) : '')
-  }, [open, item])
+  })
 
   const submit = async () => {
     if (!code.trim() || !name.trim()) {
@@ -967,7 +966,7 @@ function ItemDialog({
           <div className="space-y-1.5">
             <Label>UOM</Label>
             <Select value={uom} onValueChange={setUom}>
-              <SelectTrigger className="h-11 w-full">
+              <SelectTrigger className="h-11 data-[size=default]:h-11 w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -982,7 +981,7 @@ function ItemDialog({
           <div className="space-y-1.5">
             <Label>GST Rate</Label>
             <Select value={gstRate} onValueChange={setGstRate}>
-              <SelectTrigger className="h-11 w-full">
+              <SelectTrigger className="h-11 data-[size=default]:h-11 w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -1158,12 +1157,11 @@ function WarehouseDialog({
   const [location, setLocation] = useState('')
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => {
-    if (!open) return
+  useResetOnChange(open, [warehouse], () => {
     setCode(warehouse?.code ?? '')
     setName(warehouse?.name ?? '')
     setLocation(warehouse?.location ?? '')
-  }, [open, warehouse])
+  })
 
   const submit = async () => {
     if (!code.trim() || !name.trim()) {
@@ -1351,15 +1349,14 @@ function ProcessDialog({
   const [lotCharge, setLotCharge] = useState('')
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => {
-    if (!open) return
+  useResetOnChange(open, [process], () => {
     setCode(process?.code ?? '')
     setName(process?.name ?? '')
     setSeq(process ? String(process.seq) : '')
     setBasis((process?.basis as 'WEIGHT' | 'QTY') ?? 'WEIGHT')
     setRate(process ? String(process.rate) : '')
     setLotCharge(process ? String(process.lotCharge) : '')
-  }, [open, process])
+  })
 
   const submit = async () => {
     if (!code.trim() || !name.trim()) {
@@ -1416,7 +1413,7 @@ function ProcessDialog({
           <div className="space-y-1.5">
             <Label>Basis</Label>
             <Select value={basis} onValueChange={(v) => setBasis(v as 'WEIGHT' | 'QTY')}>
-              <SelectTrigger className="h-11 w-full">
+              <SelectTrigger className="h-11 data-[size=default]:h-11 w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -1465,9 +1462,9 @@ function PartyRatesTab() {
   const [rows, setRows] = useState<PartyRateRow[]>([])
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => {
+  useResetOnChange(true, [grid.data], () => {
     setRows((grid.data?.rows ?? []).map((r) => ({ ...r })))
-  }, [grid.data])
+  })
 
   const sortedParties = useMemo(() => [...parties].sort((a, b) => a.name.localeCompare(b.name)), [parties])
 
@@ -1501,7 +1498,7 @@ function PartyRatesTab() {
       <div className="grid gap-2 sm:max-w-md">
         <Label>Party</Label>
         <Select value={partyId || undefined} onValueChange={setPartyId}>
-          <SelectTrigger className="h-11 w-full">
+          <SelectTrigger className="h-11 data-[size=default]:h-11 w-full">
             <SelectValue placeholder="Select party…" />
           </SelectTrigger>
           <SelectContent className="max-h-64">
@@ -1635,25 +1632,23 @@ function CompanyTab() {
   const [saving, setSaving] = useState(false)
   const [initialized, setInitialized] = useState(false)
 
-  useEffect(() => {
-    if (!initialized && !comp.loading) {
-      const c = comp.data
-      setName(c?.name ?? '')
-      setLegalName(c?.legalName ?? '')
-      setGstin(c?.gstin ?? '')
-      setStateCode(c?.stateCode ?? '27')
-      setAddress(c?.address ?? '')
-      setCity(c?.city ?? '')
-      setPincode(c?.pincode ?? '')
-      setPhone(c?.phone ?? '')
-      setEmail(c?.email ?? '')
-      setBankName(c?.bankName ?? '')
-      setBankAcct(c?.bankAcct ?? '')
-      setBankIfsc(c?.bankIfsc ?? '')
-      setUpiId(c?.upiId ?? '')
-      setInitialized(true)
-    }
-  }, [comp.data, comp.loading, initialized])
+  useResetOnChange(!initialized && !comp.loading, [comp.data], () => {
+    const c = comp.data
+    setName(c?.name ?? '')
+    setLegalName(c?.legalName ?? '')
+    setGstin(c?.gstin ?? '')
+    setStateCode(c?.stateCode ?? '27')
+    setAddress(c?.address ?? '')
+    setCity(c?.city ?? '')
+    setPincode(c?.pincode ?? '')
+    setPhone(c?.phone ?? '')
+    setEmail(c?.email ?? '')
+    setBankName(c?.bankName ?? '')
+    setBankAcct(c?.bankAcct ?? '')
+    setBankIfsc(c?.bankIfsc ?? '')
+    setUpiId(c?.upiId ?? '')
+    setInitialized(true)
+  })
 
   const submit = async () => {
     if (!name.trim()) {
@@ -1728,7 +1723,7 @@ function CompanyTab() {
         <div className="space-y-1.5">
           <Label>State (Place of Business)</Label>
           <Select value={stateCode} onValueChange={setStateCode}>
-            <SelectTrigger className="h-11 w-full">
+            <SelectTrigger className="h-11 data-[size=default]:h-11 w-full">
               <SelectValue />
             </SelectTrigger>
             <SelectContent className="max-h-64">

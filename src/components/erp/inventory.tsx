@@ -206,7 +206,7 @@ function StockLedgerTab() {
       <div className="space-y-1">
         <Label className="text-xs">Item</Label>
         <Select value={itemId || 'ALL'} onValueChange={(v) => setItemId(v === 'ALL' ? '' : v)}>
-          <SelectTrigger className="h-11 w-full">
+          <SelectTrigger className="h-11 data-[size=default]:h-11 w-full">
             <SelectValue />
           </SelectTrigger>
           <SelectContent className="max-h-64">
@@ -222,7 +222,7 @@ function StockLedgerTab() {
       <div className="space-y-1">
         <Label className="text-xs">Warehouse</Label>
         <Select value={warehouseId || 'ALL'} onValueChange={(v) => setWarehouseId(v === 'ALL' ? '' : v)}>
-          <SelectTrigger className="h-11 w-full">
+          <SelectTrigger className="h-11 data-[size=default]:h-11 w-full">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -381,7 +381,7 @@ function OpeningStockTab() {
         <div className="space-y-1">
           <Label>Warehouse</Label>
           <Select value={warehouseId} onValueChange={setWarehouseId}>
-            <SelectTrigger className="h-11 w-full">
+            <SelectTrigger className="h-11 data-[size=default]:h-11 w-full">
               <SelectValue placeholder="Select warehouse…" />
             </SelectTrigger>
             <SelectContent>
@@ -408,7 +408,7 @@ function OpeningStockTab() {
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0 flex-1">
                 <Select value={r.itemId} onValueChange={(v) => onItemPick(r.key, v)}>
-                  <SelectTrigger className="h-11 w-full" aria-label={`Item for row ${r.key}`}>
+                  <SelectTrigger className="h-11 data-[size=default]:h-11 w-full" aria-label={`Item for row ${r.key}`}>
                     <SelectValue placeholder="Pick stock item…" />
                   </SelectTrigger>
                   <SelectContent className="max-h-64">
@@ -487,7 +487,7 @@ function OpeningStockTab() {
               <TableRow key={r.key}>
                 <TableCell>
                   <Select value={r.itemId} onValueChange={(v) => onItemPick(r.key, v)}>
-                    <SelectTrigger className="h-11 w-full min-w-40">
+                    <SelectTrigger className="h-11 data-[size=default]:h-11 w-full min-w-40">
                       <SelectValue placeholder="Pick stock item…" />
                     </SelectTrigger>
                     <SelectContent className="max-h-64">

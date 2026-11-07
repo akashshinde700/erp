@@ -46,6 +46,7 @@ import {
 import { EmptyState, Money, SectionHeading, StatusBadge, TableSkeleton } from './bits'
 import { onPreset, takeCreatePreset, type CreatePreset } from './nav'
 import { dateStr, money, PAYMENT_MODES } from '@/lib/erp'
+import { useResetOnChange } from '@/hooks/use-reset-on-change'
 
 type AnyInvoice = SalesInvoice | PurchaseInvoice
 
@@ -327,8 +328,8 @@ function NewPaymentDialog({
 
   // Preset from an invoice's "Receive/Make Payment" button: party + type +
   // amount + allocation pre-ticked for that invoice.
-  useEffect(() => {
-    if (!open || !preset) return
+  useResetOnChange(open && !!preset, [preset], () => {
+    if (!preset) return
     if (preset.paymentType) {
       setType(preset.paymentType)
     }
@@ -343,7 +344,7 @@ function NewPaymentDialog({
       for (const alloc of preset.allocations) a[alloc.invoiceNo] = String(alloc.amount)
       setAllocs(a)
     }
-  }, [open, preset])
+  })
 
   const submit = async () => {
     if (!partyId) {
@@ -428,7 +429,7 @@ function NewPaymentDialog({
             <div className="space-y-1.5">
               <Label>{type === 'RECEIPT' ? 'Customer' : 'Supplier'}</Label>
               <Select value={partyId} onValueChange={(v) => { setPartyId(v); setAllocs({}) }}>
-                <SelectTrigger className="h-11 w-full">
+                <SelectTrigger className="h-11 data-[size=default]:h-11 w-full">
                   <SelectValue placeholder="Select party…" />
                 </SelectTrigger>
                 <SelectContent>
@@ -461,7 +462,7 @@ function NewPaymentDialog({
             <div className="space-y-1.5">
               <Label>Mode</Label>
               <Select value={mode} onValueChange={setMode}>
-                <SelectTrigger className="h-11 w-full">
+                <SelectTrigger className="h-11 data-[size=default]:h-11 w-full">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -583,7 +584,7 @@ function PartyLedgerTab({ presetPartyId }: { presetPartyId?: string }) {
       <div className="grid gap-2 sm:max-w-md">
         <Label>Party</Label>
         <Select value={partyId} onValueChange={setPartyId}>
-          <SelectTrigger className="h-11 w-full">
+          <SelectTrigger className="h-11 data-[size=default]:h-11 w-full">
             <SelectValue placeholder="Select party…" />
           </SelectTrigger>
           <SelectContent className="max-h-64">

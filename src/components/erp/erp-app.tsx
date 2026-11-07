@@ -570,7 +570,7 @@ export function ErpApp() {
             <button
               type="button"
               onClick={() => setView('dashboard')}
-              className="flex min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left"
+              className="flex min-h-11 min-w-11 items-center gap-2 rounded-md px-1 py-1 text-left"
               aria-label="ForgeERP home"
             >
               <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">

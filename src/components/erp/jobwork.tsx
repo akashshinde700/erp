@@ -54,6 +54,7 @@ import {
 import { EmptyState, Money, ProgressBar, SectionHeading, StatusBadge, TableSkeleton } from './bits'
 import { useErpUi, useOpenNewParam } from './store'
 import { dateStr, money, qty as qtyFmt } from '@/lib/erp'
+import { useResetOnChange } from '@/hooks/use-reset-on-change'
 
 // ===========================================================================
 // Module view (tabs: inwards | pending)
@@ -273,7 +274,7 @@ function NewInwardDialog({
             <div className="space-y-1.5">
               <Label>Customer</Label>
               <Select value={partyId || undefined} onValueChange={setPartyId}>
-                <SelectTrigger className="h-11 w-full">
+                <SelectTrigger className="h-11 data-[size=default]:h-11 w-full">
                   <SelectValue placeholder="Select customer…" />
                 </SelectTrigger>
                 <SelectContent>
@@ -296,7 +297,7 @@ function NewInwardDialog({
             <div className="space-y-1.5">
               <Label>Warehouse</Label>
               <Select value={warehouseId || undefined} onValueChange={(v) => setWarehouseId(v === 'none' ? '' : v)}>
-                <SelectTrigger className="h-11 w-full">
+                <SelectTrigger className="h-11 data-[size=default]:h-11 w-full">
                   <SelectValue placeholder="Optional — jobwork store" />
                 </SelectTrigger>
                 <SelectContent>
@@ -318,7 +319,7 @@ function NewInwardDialog({
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
                     <Select value={r.itemId || undefined} onValueChange={(v) => setRow(r.key, { itemId: v })}>
-                      <SelectTrigger className="h-11 w-full" aria-label={`Item for row ${r.key}`}>
+                      <SelectTrigger className="h-11 data-[size=default]:h-11 w-full" aria-label={`Item for row ${r.key}`}>
                         <SelectValue placeholder="Pick item…" />
                       </SelectTrigger>
                       <SelectContent className="max-h-64">
@@ -406,7 +407,7 @@ function NewInwardDialog({
                   <TableRow key={r.key}>
                     <TableCell>
                       <Select value={r.itemId || undefined} onValueChange={(v) => setRow(r.key, { itemId: v })}>
-                        <SelectTrigger className="h-11 w-full min-w-40">
+                        <SelectTrigger className="h-11 data-[size=default]:h-11 w-full min-w-40">
                           <SelectValue placeholder="Pick item…" />
                         </SelectTrigger>
                         <SelectContent className="max-h-64">
@@ -1026,8 +1027,7 @@ function NewJobCardDialog({
   const [selected, setSelected] = useState<Record<string, boolean>>({})
 
   // reset when re-opened, from the latest inward state
-  useEffect(() => {
-    if (!open) return
+  useResetOnChange(open, [inward], () => {
     const fresh: Record<string, JcLineState> = {}
     for (const it of inward.items) {
       const remQ = Math.max(0, it.qty - it.processedQty)
@@ -1038,7 +1038,7 @@ function NewJobCardDialog({
     setSelected({})
     setDate(todayISO())
     setNotes('')
-  }, [open, inward])
+  })
 
   const activeProcesses = processes.filter((p) => p.active)
   const selectedIds = activeProcesses.filter((p) => selected[p.id]).map((p) => p.id)

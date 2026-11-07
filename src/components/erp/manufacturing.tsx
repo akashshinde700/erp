@@ -414,7 +414,7 @@ function ProjectsTab({ onChanged }: { onChanged?: () => void }) {
                             <Button
                               variant="ghost"
                               size="sm"
-                              className="h-8"
+                              className="size-11 sm:h-8 sm:w-auto"
                               aria-label={`Edit ${p.projectNo}`}
                               title="Edit project details"
                               onClick={(e) => {
@@ -529,7 +529,7 @@ function NewProjectDialog({
               {/* The customer link is immutable after creation (estimates, WOs
                   and invoices hang off it) — edit mode locks the field. */}
               <Select value={partyId || undefined} onValueChange={setPartyId} disabled={editing}>
-                <SelectTrigger className="h-11 w-full">
+                <SelectTrigger className="h-11 data-[size=default]:h-11 w-full">
                   <SelectValue placeholder="Select customer…" />
                 </SelectTrigger>
                 <SelectContent className="max-h-64">
@@ -1345,7 +1345,7 @@ function NewBomDialog({
               <div className="space-y-1.5">
                 <Label>Project</Label>
                 <Select value={pid || undefined} onValueChange={setPid}>
-                  <SelectTrigger className="h-11 w-full">
+                  <SelectTrigger className="h-11 data-[size=default]:h-11 w-full">
                     <SelectValue placeholder="Select project…" />
                   </SelectTrigger>
                   <SelectContent className="max-h-64">
@@ -1377,7 +1377,7 @@ function NewBomDialog({
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0 flex-1">
                       <Select value={r.itemId || undefined} onValueChange={(v) => setRow(r.key, { itemId: v, rate: r.rate || String(itemMap.get(v)?.costRate ?? '') })}>
-                        <SelectTrigger className="h-11 w-full" aria-label={`Material for line ${r.key}`}>
+                        <SelectTrigger className="h-11 data-[size=default]:h-11 w-full" aria-label={`Material for line ${r.key}`}>
                           <SelectValue placeholder="Pick material…" />
                         </SelectTrigger>
                         <SelectContent className="max-h-64">
@@ -1455,7 +1455,7 @@ function NewBomDialog({
                     <TableRow key={r.key}>
                       <TableCell>
                         <Select value={r.itemId || undefined} onValueChange={(v) => setRow(r.key, { itemId: v, rate: r.rate || String(itemMap.get(v)?.costRate ?? '') })}>
-                          <SelectTrigger className="h-11 w-full min-w-40">
+                          <SelectTrigger className="h-11 data-[size=default]:h-11 w-full min-w-40">
                             <SelectValue placeholder="Pick material…" />
                           </SelectTrigger>
                           <SelectContent className="max-h-64">
@@ -1675,7 +1675,7 @@ function GenerateWoDialog({ bom, open, onOpenChange, onCreated }: { bom: Bom; op
             <div className="space-y-1.5">
               <Label>Priority</Label>
               <Select value={priority} onValueChange={setPriority}>
-                <SelectTrigger className="h-11 w-full"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="h-11 data-[size=default]:h-11 w-full"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {WO_PRIORITIES.map((p) => (
                     <SelectItem key={p} value={p}>{p}</SelectItem>
@@ -2173,7 +2173,7 @@ function NewTaskDialog({
               <div className="space-y-1.5 sm:col-span-2">
                 <Label>Work Order</Label>
                 <Select value={workOrderId || undefined} onValueChange={setWorkOrderId}>
-                  <SelectTrigger className="h-11 w-full">
+                  <SelectTrigger className="h-11 data-[size=default]:h-11 w-full">
                     <SelectValue placeholder="Pick work order…" />
                   </SelectTrigger>
                   <SelectContent className="max-h-64">
@@ -2194,7 +2194,7 @@ function NewTaskDialog({
             <div className="space-y-1.5">
               <Label>Operation</Label>
               <Select value={operation} onValueChange={setOperation}>
-                <SelectTrigger className="h-11 w-full"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="h-11 data-[size=default]:h-11 w-full"><SelectValue /></SelectTrigger>
                 <SelectContent className="max-h-64">
                   {MANUFACTURING_OPERATIONS.map((o) => (
                     <SelectItem key={o.key} value={o.key}>{o.label}</SelectItem>
@@ -2217,7 +2217,7 @@ function NewTaskDialog({
             <div className="space-y-1.5">
               <Label>Assign Worker (optional)</Label>
               <Select value={employeeId || undefined} onValueChange={setEmployeeId}>
-                <SelectTrigger className="h-11 w-full">
+                <SelectTrigger className="h-11 data-[size=default]:h-11 w-full">
                   <SelectValue placeholder="Leave unassigned…" />
                 </SelectTrigger>
                 <SelectContent className="max-h-64">
@@ -2303,7 +2303,7 @@ function AssignDialog({ task, open, onOpenChange, onAssigned }: { task: Producti
               const e = activeEmps.find((x) => x.id === v)
               if (e && !machineNo && e.machineNo) setMachineNo(e.machineNo)
             }}>
-              <SelectTrigger className="h-11 w-full">
+              <SelectTrigger className="h-11 data-[size=default]:h-11 w-full">
                 <SelectValue placeholder="Pick worker…" />
               </SelectTrigger>
               <SelectContent className="max-h-64">
@@ -2436,7 +2436,7 @@ function CompleteTaskDialog({ task, open, onOpenChange, onCompleted }: { task: P
               <div className="space-y-1.5">
                 <Label>Material</Label>
                 <Select value={materialItemId || undefined} onValueChange={(v) => setMaterialItemId(v === 'none' ? '' : v)}>
-                  <SelectTrigger className="h-11 w-full">
+                  <SelectTrigger className="h-11 data-[size=default]:h-11 w-full">
                     <SelectValue placeholder="No material issue" />
                   </SelectTrigger>
                   <SelectContent className="max-h-64">
@@ -2849,7 +2849,7 @@ function EmployeeDialog({
             <div className="space-y-1.5">
               <Label>Role</Label>
               <Select value={role} onValueChange={setRole}>
-                <SelectTrigger className="h-11 w-full"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="h-11 data-[size=default]:h-11 w-full"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="WORKER">Worker</SelectItem>
                   <SelectItem value="SUPERVISOR">Supervisor</SelectItem>
@@ -2868,7 +2868,7 @@ function EmployeeDialog({
             <div className="space-y-1.5">
               <Label>Shift</Label>
               <Select value={shift} onValueChange={setShift}>
-                <SelectTrigger className="h-11 w-full"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="h-11 data-[size=default]:h-11 w-full"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="GENERAL">General</SelectItem>
                   <SelectItem value="DAY">Day</SelectItem>

@@ -6,7 +6,7 @@
  * banner), Outstanding, and P&L statement.
  */
 
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { BarChart3, CheckCircle2, FileSpreadsheet, PackageSearch, Scale, TrendingDown, TrendingUp, XCircle } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -25,6 +25,8 @@ import {
   type Outstanding,
   type Pnl,
   type ProductionCostVarianceReport,
+  type ProductionEfficiencyMetric,
+  type ProductionEfficiencyReport,
   type SupplierPerformanceReport,
   type TrialBalance,
 } from './api'
@@ -47,6 +49,7 @@ export function ReportsView() {
           <TabsTrigger value="customers" className="h-11 sm:h-9">Customers</TabsTrigger>
           <TabsTrigger value="suppliers" className="h-11 sm:h-9">Suppliers</TabsTrigger>
           <TabsTrigger value="production-cost" className="h-11 sm:h-9">Production Cost</TabsTrigger>
+          <TabsTrigger value="efficiency" className="h-11 sm:h-9">Efficiency</TabsTrigger>
           <TabsTrigger value="inventory" className="h-11 sm:h-9">Inventory Planning</TabsTrigger>
           <TabsTrigger value="pnl" className="h-11 sm:h-9">P&amp;L</TabsTrigger>
         </TabsList>
@@ -70,6 +73,9 @@ export function ReportsView() {
         </TabsContent>
         <TabsContent value="production-cost" className="mt-4">
           <ProductionCostTab />
+        </TabsContent>
+        <TabsContent value="efficiency" className="mt-4">
+          <ProductionEfficiencyTab />
         </TabsContent>
         <TabsContent value="inventory" className="mt-4">
           <InventoryPlanningTab />
@@ -531,6 +537,38 @@ function ProductionCostTab() {
           </TableRow>)}</TableBody>
         </Table></div>
       </CardContent></Card>
+    </div>
+  )
+}
+
+// ---------- production efficiency ----------
+
+function ProductionEfficiencyTab() {
+  const { data, loading } = useApi<ProductionEfficiencyReport>('/api/reports?type=production-efficiency')
+  if (loading) return <TableSkeleton rows={8} cols={8} />
+  if (!data) return <EmptyState title="No production efficiency data" hint="Create and complete production tasks to build operation metrics." icon={BarChart3} />
+
+  const metricTable = <T extends ProductionEfficiencyMetric>(title: string, rows: T[], label: (row: T) => ReactNode) => (
+    <Card className="p-0"><CardHeader className="border-b py-3"><CardTitle className="text-sm">{title}</CardTitle></CardHeader><CardContent className="p-0">
+      {rows.length === 0 ? <p className="p-6 text-center text-sm text-muted-foreground">No recorded data.</p> : <div className="overflow-auto"><Table>
+        <TableHeader><TableRow><TableHead>{title.replace(' Performance', '')}</TableHead><TableHead className="text-right">Tasks</TableHead><TableHead className="text-right">Planned</TableHead><TableHead className="text-right">Good Output</TableHead><TableHead className="text-right">Rejected</TableHead><TableHead className="text-right">Yield</TableHead><TableHead className="text-right">Attainment</TableHead><TableHead className="text-right">Hours</TableHead><TableHead className="text-right">Output/Hr</TableHead><TableHead className="text-right">Cost</TableHead></TableRow></TableHeader>
+        <TableBody>{rows.map((row, index) => <TableRow key={index}><TableCell className="font-medium">{label(row)}</TableCell><TableCell className="text-right tabular-nums">{row.taskDone}/{row.taskTotal}</TableCell><TableCell className="text-right tabular-nums">{row.plannedQty}</TableCell><TableCell className="text-right tabular-nums">{row.actualQty}</TableCell><TableCell className={`text-right tabular-nums ${row.rejectionQty > 0 ? 'text-destructive' : ''}`}>{row.rejectionQty}</TableCell><TableCell className={`text-right font-medium tabular-nums ${row.yieldPct < 95 ? 'text-destructive' : 'text-primary'}`}>{row.yieldPct}%</TableCell><TableCell className="text-right tabular-nums">{row.attainmentPct}%</TableCell><TableCell className="text-right tabular-nums">{row.hours}</TableCell><TableCell className="text-right tabular-nums">{row.outputPerHour}</TableCell><TableCell className="text-right tabular-nums"><Money value={row.totalCost} plain /></TableCell></TableRow>)}</TableBody>
+      </Table></div>}
+    </CardContent></Card>
+  )
+
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Card className="p-4"><p className="text-xs text-muted-foreground">Tasks Completed</p><p className="mt-1 text-lg font-semibold">{data.summary.taskDone}/{data.summary.taskTotal}</p></Card>
+        <Card className="p-4"><p className="text-xs text-muted-foreground">Good Output / Rejected</p><p className="mt-1 text-lg font-semibold">{data.summary.actualQty} / <span className="text-destructive">{data.summary.rejectionQty}</span></p></Card>
+        <Card className="p-4"><p className="text-xs text-muted-foreground">Overall Yield</p><p className={`mt-1 text-lg font-semibold ${data.summary.yieldPct < 95 ? 'text-destructive' : 'text-primary'}`}>{data.summary.yieldPct}%</p><p className="text-xs text-muted-foreground">Attainment {data.summary.attainmentPct}%</p></Card>
+        <Card className="p-4"><p className="text-xs text-muted-foreground">Production Hours / Cost</p><p className="mt-1 text-lg font-semibold">{data.summary.hours} h</p><p className="text-xs text-muted-foreground">₹{money(data.summary.totalCost)} · {data.summary.outputPerHour}/h</p></Card>
+      </div>
+      <Card className="border-amber-500/30 bg-amber-500/5 p-4"><p className="text-sm font-medium">Efficiency, not OEE</p><p className="mt-1 text-xs text-muted-foreground">{data.note}</p></Card>
+      {metricTable('Operation Performance', data.operations, (row) => row.operation.replaceAll('_', ' '))}
+      {metricTable('Machine Performance', data.machines, (row) => row.machineNo)}
+      {metricTable('Operator Performance', data.operators, (row) => <><span className="block">{row.employee.name}</span><span className="text-xs text-muted-foreground">{row.employee.code}</span></>)}
     </div>
   )
 }

@@ -37,6 +37,7 @@ These modules are **not duplicates**, but the old labels/navigation made them lo
 | BOM revision/ECO/effective dates/Where-Used/phantom | Missing (P1) | Versioned immutable approved BOMs; no in-place mutation |
 | QC templates and inward/production/outward gates | Missing (P0) | Parameter/tolerance templates; accepted qty alone posts stock |
 | Lot/serial genealogy and FIFO | Missing/very thin | General lot ledger, traceability and valuation required |
+| Operator/machine/operation efficiency | Improved/partial | Throughput, yield, attainment, hours, output/hour and posted cost now reported; true OEE awaits calendars/downtime reasons |
 | Work centers, calendars, OEE and maintenance | Missing (P1) | Add only after routing and production posting are correct |
 | MPS/ATP and forecast demand | Missing (P1) | Build on SO + MRP supply/demand foundation |
 | Customer sales history / analysis | Improved | Auditable sales, collections, invoice outstanding, jobwork share, average invoice, last sale and top items/services |

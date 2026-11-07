@@ -346,16 +346,32 @@ async function main() {
       name: 'Concurrency Audit Project', partyId: customer.id, startDate: '2026-11-01', budget: 10000,
     })
     const p = data(proj)
+    await req('POST', `/api/manufacturing/projects/${p.id}/actions`, { action: 'start' })
+    const emptyProjectClose = await req('POST', `/api/manufacturing/projects/${p.id}/actions`, { action: 'complete' })
+    check('project completion requires at least one completed work order', emptyProjectClose.status === 400, `status=${emptyProjectClose.status}`)
+
     const wo = await req('POST', '/api/manufacturing/work-orders', {
       projectId: p.id,
       lines: [{ itemId: materialItemId, plannedQty: 10, uom: stockedItemRow?.item?.uom ?? stockItem.uom }],
     })
     const w = data(wo)
+    const emptyWoClose = await req('POST', `/api/manufacturing/work-orders/${w.id}/actions`, { action: 'complete' })
+    check('work-order completion requires a production task', emptyWoClose.status === 400, `status=${emptyWoClose.status}`)
+
     const task = await req('POST', '/api/manufacturing/tasks', {
-      workOrderId: w.id, operation: 'CUTTING', plannedQty: 10, employeeId: emp?.id,
+      workOrderId: w.id, operation: 'CUTTING', seq: 10, plannedQty: 10, employeeId: emp?.id,
     })
     const t = data(task)
     if (t?.id) {
+      const bypassStart = await req('POST', `/api/manufacturing/tasks/${t.id}/actions`, { action: 'complete', actualQty: 10 })
+      check('assigned task cannot bypass start before completion', bypassStart.status === 400, `status=${bypassStart.status}`)
+
+      const successor = await req('POST', '/api/manufacturing/tasks', {
+        workOrderId: w.id, operation: 'WELDING', seq: 20, plannedQty: 10, employeeId: emp?.id,
+      })
+      const successorStart = await req('POST', `/api/manufacturing/tasks/${data(successor)?.id}/actions`, { action: 'start' })
+      check('routing sequence blocks successor before predecessor completes', successorStart.status === 409, `status=${successorStart.status}`)
+
       await req('POST', `/api/manufacturing/tasks/${t.id}/actions`, { action: 'start' })
       const completeBody = { action: 'complete', actualQty: 10, materialItemId, materialQty: 1 }
       const [a, b] = await Promise.all([

@@ -45,7 +45,7 @@ const nestedChildren = { salesInvoices: ['items', 'SalesInvoiceItem'], purchaseI
 const model2table = (m) => m[0].toUpperCase() + m.slice(1)
 
 async function tableCounts() {
-  const tables = (await db.all("SELECT table_name t FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name <> '_prisma_migrations'")).map((r) => r.t)
+  const tables = (await db.all("SELECT table_name t FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name NOT IN ('_prisma_migrations', 'IdempotencyKey')")).map((r) => r.t)
   const out = {}
   for (const t of tables) out[t] = Number((await db.get(`SELECT COUNT(*) c FROM \`${t}\``)).c)
   return out

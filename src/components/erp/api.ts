@@ -710,6 +710,17 @@ export interface CashBankBook {
   totalClosing: number
 }
 
+export interface Gstr3bReport {
+  month: string
+  salesInvoiceCount: number
+  purchaseInvoiceCount: number
+  outward: { taxable: number; cgst: number; sgst: number; igst: number; grandTotal: number }
+  eligibleItcFromBooks: { taxable: number; cgst: number; sgst: number; igst: number; grandTotal: number }
+  netTaxBeforeCrossUtilisation: { cgst: number; sgst: number; igst: number; total: number }
+  excessItcBeforeCrossUtilisation: { cgst: number; sgst: number; igst: number; total: number }
+  limitations: string[]
+}
+
 export interface Gstr1Bucket {
   rate: number
   count: number

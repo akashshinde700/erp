@@ -560,17 +560,23 @@ export async function workflowActionCenterReport() {
   }
 }
 
+// ---------- GST monthly period helper ----------
+
+function utcMonthRange(month: string) {
+  const from = new Date(`${month}-01T00:00:00.000Z`)
+  const nextMonth = month.endsWith('-12')
+    ? `${Number(month.slice(0, 4)) + 1}-01`
+    : `${month.slice(0, 5)}${String(Number(month.slice(5)) + 1).padStart(2, '0')}`
+  return { from, to: new Date(new Date(`${nextMonth}T00:00:00.000Z`).getTime() - 1) }
+}
+
 // ---------- GSTR-1 summary (B2B / B2C, rate-wise) ----------
 
 export async function gstr1Report(month: string) {
   // month = 'YYYY-MM' — invoice dates are stored at UTC midnight, so the
   // month window must be UTC-bounded (local bounds drop day-1 / pick up
   // next-month rows on non-UTC servers).
-  const from = new Date(`${month}-01T00:00:00.000Z`)
-  const nextMonth = month.endsWith('-12')
-    ? `${Number(month.slice(0, 4)) + 1}-01`
-    : `${month.slice(0, 5)}${String(Number(month.slice(5)) + 1).padStart(2, '0')}`
-  const to = new Date(new Date(`${nextMonth}T00:00:00.000Z`).getTime() - 1)
+  const { from, to } = utcMonthRange(month)
   const invoices = await db.salesInvoice.findMany({
     where: { date: { gte: from, lte: to }, status: 'POSTED' },
     include: { items: true, party: true },
@@ -626,6 +632,54 @@ export async function gstr1Report(month: string) {
     b2c: [...b2c.entries()].map(([rate, b]) => ({ rate, ...b })).sort((a, b) => a.rate - b.rate),
     b2bTotal: total(b2b),
     b2cTotal: total(b2c),
+  }
+}
+
+// ---------- GSTR-3B internal liability / ITC summary ----------
+
+/**
+ * Books-based GSTR-3B working summary. It is intentionally not labelled a
+ * portal-ready return: reverse charge, exempt/nil/non-GST supplies and blocked
+ * ITC are not represented by the current invoice schema.
+ */
+export async function gstr3bReport(month: string) {
+  const { from, to } = utcMonthRange(month)
+  const [sales, purchases] = await Promise.all([
+    db.salesInvoice.findMany({ where: { status: 'POSTED', date: { gte: from, lte: to } }, select: { taxable: true, cgst: true, sgst: true, igst: true, grandTotal: true } }),
+    db.purchaseInvoice.findMany({ where: { status: 'POSTED', date: { gte: from, lte: to } }, select: { taxable: true, cgst: true, sgst: true, igst: true, grandTotal: true } }),
+  ])
+  const total = (rows: { taxable: number; cgst: number; sgst: number; igst: number; grandTotal: number }[]) => ({
+    taxable: r2(rows.reduce((sum, row) => sum + row.taxable, 0)),
+    cgst: r2(rows.reduce((sum, row) => sum + row.cgst, 0)),
+    sgst: r2(rows.reduce((sum, row) => sum + row.sgst, 0)),
+    igst: r2(rows.reduce((sum, row) => sum + row.igst, 0)),
+    grandTotal: r2(rows.reduce((sum, row) => sum + row.grandTotal, 0)),
+  })
+  const outward = total(sales)
+  const inward = total(purchases)
+  const net = {
+    cgst: r2(Math.max(0, outward.cgst - inward.cgst)),
+    sgst: r2(Math.max(0, outward.sgst - inward.sgst)),
+    igst: r2(Math.max(0, outward.igst - inward.igst)),
+  }
+  const excessItc = {
+    cgst: r2(Math.max(0, inward.cgst - outward.cgst)),
+    sgst: r2(Math.max(0, inward.sgst - outward.sgst)),
+    igst: r2(Math.max(0, inward.igst - outward.igst)),
+  }
+  return {
+    month,
+    salesInvoiceCount: sales.length,
+    purchaseInvoiceCount: purchases.length,
+    outward,
+    eligibleItcFromBooks: inward,
+    netTaxBeforeCrossUtilisation: { ...net, total: r2(net.cgst + net.sgst + net.igst) },
+    excessItcBeforeCrossUtilisation: { ...excessItc, total: r2(excessItc.cgst + excessItc.sgst + excessItc.igst) },
+    limitations: [
+      'Books summary only — not a filed GSTR-3B or portal acknowledgement',
+      'No reverse-charge, exempt/nil/non-GST or blocked-ITC classification in the current schema',
+      'Cross-utilisation of CGST/SGST/IGST credit is not applied',
+    ],
   }
 }
 

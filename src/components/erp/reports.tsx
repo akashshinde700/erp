@@ -21,6 +21,7 @@ import {
   type CashBankBook,
   type CustomerPerformanceReport,
   type Gstr1Report,
+  type Gstr3bReport,
   type InventoryPlanningReport,
   type Outstanding,
   type Pnl,
@@ -46,6 +47,7 @@ export function ReportsView() {
         <TabsList className="h-11 w-full justify-start overflow-x-auto sm:w-auto">
           <TabsTrigger value="action-center" className="h-11 sm:h-9">Action Center</TabsTrigger>
           <TabsTrigger value="gstr1" className="h-11 sm:h-9">GSTR-1</TabsTrigger>
+          <TabsTrigger value="gstr3b" className="h-11 sm:h-9">GSTR-3B</TabsTrigger>
           <TabsTrigger value="trial" className="h-11 sm:h-9">Trial Balance</TabsTrigger>
           <TabsTrigger value="outstanding" className="h-11 sm:h-9">Outstanding</TabsTrigger>
           <TabsTrigger value="cashbook" className="h-11 sm:h-9">Cash &amp; Bank</TabsTrigger>
@@ -61,6 +63,9 @@ export function ReportsView() {
         </TabsContent>
         <TabsContent value="gstr1" className="mt-4">
           <Gstr1Tab />
+        </TabsContent>
+        <TabsContent value="gstr3b" className="mt-4">
+          <Gstr3bTab />
         </TabsContent>
         <TabsContent value="trial" className="mt-4">
           <TrialBalanceTab />
@@ -241,6 +246,34 @@ function Gstr1Tab() {
           {bucketTable('B2C', data.b2c, data.b2cTotal)}
         </>
       )}
+    </div>
+  )
+}
+
+// ---------- GSTR-3B books working ----------
+
+function Gstr3bTab() {
+  const [month, setMonth] = useState(currentMonth())
+  const [applied, setApplied] = useState(currentMonth())
+  const { data, loading } = useApi<Gstr3bReport>(`/api/reports?type=gstr3b&month=${applied}`)
+  const taxRows = data ? [
+    { label: 'CGST', output: data.outward.cgst, input: data.eligibleItcFromBooks.cgst, net: data.netTaxBeforeCrossUtilisation.cgst, excess: data.excessItcBeforeCrossUtilisation.cgst },
+    { label: 'SGST', output: data.outward.sgst, input: data.eligibleItcFromBooks.sgst, net: data.netTaxBeforeCrossUtilisation.sgst, excess: data.excessItcBeforeCrossUtilisation.sgst },
+    { label: 'IGST', output: data.outward.igst, input: data.eligibleItcFromBooks.igst, net: data.netTaxBeforeCrossUtilisation.igst, excess: data.excessItcBeforeCrossUtilisation.igst },
+  ] : []
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-2 sm:max-w-md sm:grid-cols-[1fr_auto] sm:items-end"><div className="space-y-1"><Label htmlFor="gstr3b-month">Return month</Label><Input id="gstr3b-month" type="month" value={month} onChange={(e) => setMonth(e.target.value)} className="h-11" /></div><Button onClick={() => setApplied(month)} className="h-11">Run summary</Button></div>
+      {loading ? <TableSkeleton rows={6} cols={5} /> : !data ? <EmptyState title="No data" hint="Run the books summary for a month." icon={BarChart3} /> : <>
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <Card className="p-4"><p className="text-xs text-muted-foreground">Outward Taxable</p><p className="mt-1 text-lg font-semibold"><Money value={data.outward.taxable} plain /></p><p className="text-xs text-muted-foreground">{data.salesInvoiceCount} sales invoices</p></Card>
+          <Card className="p-4"><p className="text-xs text-muted-foreground">Purchase Taxable</p><p className="mt-1 text-lg font-semibold"><Money value={data.eligibleItcFromBooks.taxable} plain /></p><p className="text-xs text-muted-foreground">{data.purchaseInvoiceCount} purchase invoices</p></Card>
+          <Card className="p-4"><p className="text-xs text-muted-foreground">Net Tax Before Utilisation</p><p className="mt-1 text-lg font-semibold text-destructive"><Money value={data.netTaxBeforeCrossUtilisation.total} plain /></p></Card>
+          <Card className="p-4"><p className="text-xs text-muted-foreground">Excess ITC</p><p className="mt-1 text-lg font-semibold text-primary"><Money value={data.excessItcBeforeCrossUtilisation.total} plain /></p></Card>
+        </div>
+        <Card className="p-0"><CardContent className="p-0"><Table><TableHeader><TableRow><TableHead>Tax Head</TableHead><TableHead className="text-right">Output Liability</TableHead><TableHead className="text-right">Input ITC (Books)</TableHead><TableHead className="text-right">Net Before Cross-Utilisation</TableHead><TableHead className="text-right">Excess ITC</TableHead></TableRow></TableHeader><TableBody>{taxRows.map((row) => <TableRow key={row.label}><TableCell className="font-medium">{row.label}</TableCell><TableCell className="text-right"><Money value={row.output} plain /></TableCell><TableCell className="text-right"><Money value={row.input} plain /></TableCell><TableCell className="text-right font-semibold text-destructive"><Money value={row.net} plain /></TableCell><TableCell className="text-right font-semibold text-primary"><Money value={row.excess} plain /></TableCell></TableRow>)}</TableBody></Table></CardContent></Card>
+        <Card className="border-amber-500/30 bg-amber-500/5 p-4"><p className="text-sm font-medium">Books working — not a filed return</p><ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-muted-foreground">{data.limitations.map((item) => <li key={item}>{item}</li>)}</ul></Card>
+      </>}
     </div>
   )
 }

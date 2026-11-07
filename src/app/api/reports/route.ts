@@ -11,6 +11,7 @@ import {
   productionEfficiencyReport,
   workflowActionCenterReport,
   gstr1Report,
+  gstr3bReport,
   trialBalanceReport,
   outstandingReport,
   cashBankBookReport,
@@ -57,6 +58,12 @@ export async function GET(req: Request) {
         if (!monthString.safeParse(month).success) return fail('month must be YYYY-MM (01–12)')
         return ok(await gstr1Report(month))
       }
+      case 'gstr3b': {
+        const d = new Date()
+        const month = sp.get('month') ?? `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
+        if (!monthString.safeParse(month).success) return fail('month must be YYYY-MM (01–12)')
+        return ok(await gstr3bReport(month))
+      }
       case 'trial-balance': {
         const rangeErr = dateRangeError(sp.get('from'), sp.get('to'))
         if (rangeErr) return fail(rangeErr)
@@ -90,7 +97,7 @@ export async function GET(req: Request) {
       case 'jobwork-pending':
         return ok(await jobworkPendingReport())
       default:
-        return fail('Unknown report type. Use: stock-ledger, stock-summary, inventory-planning, supplier-performance, customer-performance, production-cost-variance, production-efficiency, action-center, gstr1, trial-balance, outstanding, cash-bank-book, pnl, party-ledger, jobwork-pending')
+        return fail('Unknown report type. Use: stock-ledger, stock-summary, inventory-planning, supplier-performance, customer-performance, production-cost-variance, production-efficiency, action-center, gstr1, gstr3b, trial-balance, outstanding, cash-bank-book, pnl, party-ledger, jobwork-pending')
     }
   } catch (e) {
     return handleError(e)

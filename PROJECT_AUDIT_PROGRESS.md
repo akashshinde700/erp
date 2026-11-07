@@ -3,6 +3,8 @@
 **Branch:** `arena/c87300cc-erp` · **Base commit:** `cf7a911` · **Checkpoint:** 2026-11-07 (Asia/Kolkata)
 **Status:** ACTIVE WORK IN PROGRESS — this is a saved checkpoint, **not** a final production sign-off.
 
+> **2026-11-07 GSTR-3B continuation (branch `arena/81f22c2f-erp`):** added a monthly books-based GSTR-3B working from posted sales/purchase GST: outward taxable/liability, input ITC, per-head net before cross-utilisation and excess ITC. It is explicitly not presented as a filed/portal-ready return because RCM, exempt/nil/non-GST, blocked ITC and statutory cross-utilisation are not represented. Added API/UI, shared UTC month boundaries and reconciliation assertions.
+
 > **2026-11-07 Action Center continuation (branch `arena/81f22c2f-erp`):** implemented a cross-module operational action center derived from source states rather than duplicate notification records: overdue/unassigned production tasks, stock-out/reorder suggestions, jobwork processing→certificate→invoice next actions, and receivable/payable exposure. Reports now opens on Action Center with direct module navigation. Added API/UI and priority-total reconciliation assertions.
 
 > **2026-11-07 Production Efficiency continuation (branch `arena/93e00504-erp`):** implemented operation-, machine- and operator-level throughput from posted production tasks: planned/good/rejected quantity, yield, attainment, hours, output/hour, labour/material/total cost and completion counts. It is honestly labelled efficiency rather than OEE because calendars, availability and downtime loss reasons are not captured. Added API/UI and yield/cost reconciliation assertions.

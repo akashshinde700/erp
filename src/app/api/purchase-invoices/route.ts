@@ -1,4 +1,5 @@
 import { ok, fail, handleError } from '@/lib/api'
+import { withIdempotency } from '@/lib/idempotency'
 import { db } from '@/lib/db'
 import { z } from 'zod'
 import { optionalDate, dateRangeError } from '@/lib/validation'
@@ -56,7 +57,7 @@ const postSchema = z.object({
   lines: z.array(lineSchema).min(1, 'Add at least one line item').max(200, 'Too many line items'),
 })
 
-export async function POST(req: Request) {
+async function handlePost(req: Request) {
   try {
     const actor = await assertMutationAccess()
     const res = await postPurchaseInvoice(postSchema.parse(await req.json()))
@@ -65,4 +66,8 @@ export async function POST(req: Request) {
   } catch (e) {
     return handleError(e)
   }
+}
+
+export async function POST(req: Request) {
+  return withIdempotency(req, 'purchase-invoices', () => handlePost(req))
 }

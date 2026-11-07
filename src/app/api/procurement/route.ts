@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { withIdempotency } from '@/lib/idempotency'
 import { handleError, ok, fail } from '@/lib/api'
 import { assertCompanyAccess, assertMutationAccess } from '@/lib/platform'
 import { approvePurchaseOrder, cancelGoodsReceipt, createGoodsReceipt, createPurchaseOrder, createPurchaseRequisition, inspectGoodsReceipt, invoiceAcceptedReceipt, procurementDashboard, transitionRequisition } from '@/lib/procurement'
@@ -13,7 +14,7 @@ export async function GET() {
   } catch (error) { return handleError(error) }
 }
 
-export async function POST(req: Request) {
+async function handlePost(req: Request) {
   try {
     const actor = await assertMutationAccess()
     const body = await req.json()
@@ -60,4 +61,8 @@ export async function POST(req: Request) {
     }
     return fail('Unknown procurement action')
   } catch (error) { return handleError(error) }
+}
+
+export async function POST(req: Request) {
+  return withIdempotency(req, 'procurement', () => handlePost(req))
 }

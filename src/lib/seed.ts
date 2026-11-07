@@ -44,6 +44,7 @@ export async function seedDatabase(force = false) {
       async (tx) => {
         // Workflow tables first (children before parents) — one shared list with
         // backup/restore, so a new model is added in exactly one place.
+        await tx.idempotencyKey.deleteMany({}) // replays would point at wiped documents
         for (const model of WORKFLOW_MODELS_CHILDREN_FIRST) await delegate(tx, model).deleteMany({})
         await tx.productionTask.deleteMany({})
         await tx.workOrderLine.deleteMany({})

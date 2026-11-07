@@ -67,6 +67,9 @@ model Company {
   qualityInspections   QualityInspection[]
   itemVendors          ItemVendor[]
   returnDocuments      ReturnDocument[]
+  quotations           SalesQuotation[]
+  salesOrders          SalesOrder[]
+  deliveryChallans     DeliveryChallan[]
 }
 
 // ---------- Organization logins (SaaS) ----------
@@ -188,6 +191,8 @@ model Party {
   purchaseOrders   PurchaseOrder[] @relation("PurchaseOrderSupplier")
   itemVendors      ItemVendor[]
   returnDocuments  ReturnDocument[]
+  quotations       SalesQuotation[]
+  salesOrders      SalesOrder[]
 
   @@index([types])
 }
@@ -220,6 +225,9 @@ model Item {
   goodsReceiptLines GoodsReceiptLine[]
   itemVendors ItemVendor[]
   returnLines ReturnDocumentLine[]
+  quotationLines SalesQuotationLine[]
+  salesOrderLines SalesOrderLine[]
+  deliveryLines DeliveryChallanLine[]
 }
 
 model Warehouse {
@@ -233,6 +241,7 @@ model Warehouse {
   stockRows StockLedger[]
   goodsReceipts GoodsReceipt[]
   returnDocuments ReturnDocument[]
+  deliveryChallans DeliveryChallan[]
 }
 
 model Process {
@@ -840,6 +849,153 @@ model ItemVendor {
 
   @@unique([companyId, itemId, supplierId])
   @@index([supplierId])
+}
+
+// ---------- Quote-to-Cash (Quotation → SO → Dispatch/QC → Invoice) ----------
+
+model SalesQuotation {
+  id             String @id @default(cuid())
+  companyId      String
+  company        Company @relation(fields: [companyId], references: [id])
+  quotationNo    String
+  revisionNo     Int @default(1)
+  supersedesId   String?
+  date           DateTime
+  validUntil     DateTime
+  partyId        String
+  party          Party @relation(fields: [partyId], references: [id])
+  status         String @default("DRAFT") // DRAFT | SUBMITTED | APPROVED | REJECTED | ACCEPTED | EXPIRED | SUPERSEDED | CANCELLED
+  taxable        Float @default(0)
+  cgst           Float @default(0)
+  sgst           Float @default(0)
+  igst           Float @default(0)
+  grandTotal     Float @default(0)
+  terms          String? @db.Text
+  approvedBy     String?
+  approvedAt     DateTime?
+  createdBy      String?
+  createdAt      DateTime @default(now())
+  lines          SalesQuotationLine[]
+  salesOrders    SalesOrder[]
+
+  @@unique([companyId, quotationNo, revisionNo])
+  @@index([companyId, status, date])
+  @@index([partyId])
+}
+
+model SalesQuotationLine {
+  id            String @id @default(cuid())
+  quotationId   String
+  quotation     SalesQuotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  itemId        String
+  item          Item @relation(fields: [itemId], references: [id])
+  qty           Float
+  uom           String
+  rate          Float
+  discountPct   Float @default(0)
+  gstRate       Float
+  taxable       Float
+  total         Float
+  remarks       String? @db.Text
+
+  @@index([quotationId])
+}
+
+model SalesOrder {
+  id             String @id @default(cuid())
+  companyId      String
+  company        Company @relation(fields: [companyId], references: [id])
+  orderNo        String
+  date           DateTime
+  deliveryDate   DateTime?
+  partyId        String
+  party          Party @relation(fields: [partyId], references: [id])
+  quotationId    String?
+  quotation      SalesQuotation? @relation(fields: [quotationId], references: [id])
+  customerPoNo   String?
+  status         String @default("DRAFT") // DRAFT | APPROVED | PART_DISPATCHED | DISPATCHED | CLOSED | CANCELLED
+  taxable        Float @default(0)
+  taxAmount      Float @default(0)
+  grandTotal     Float @default(0)
+  creditApproved Boolean @default(false)
+  approvedBy     String?
+  approvedAt     DateTime?
+  notes          String? @db.Text
+  createdBy      String?
+  createdAt      DateTime @default(now())
+  lines          SalesOrderLine[]
+  challans       DeliveryChallan[]
+
+  @@unique([companyId, orderNo])
+  @@index([companyId, status, date])
+  @@index([partyId])
+}
+
+model SalesOrderLine {
+  id            String @id @default(cuid())
+  salesOrderId  String
+  salesOrder    SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  itemId        String
+  item          Item @relation(fields: [itemId], references: [id])
+  qty           Float
+  reservedQty   Float @default(0)
+  dispatchedQty Float @default(0)
+  invoicedQty   Float @default(0)
+  uom           String
+  rate          Float
+  gstRate       Float
+  taxable       Float
+  total         Float
+  remarks       String? @db.Text
+  challanLines  DeliveryChallanLine[]
+
+  @@index([salesOrderId])
+  @@index([itemId])
+}
+
+model DeliveryChallan {
+  id             String @id @default(cuid())
+  companyId      String
+  company        Company @relation(fields: [companyId], references: [id])
+  challanNo      String
+  date           DateTime
+  salesOrderId   String
+  salesOrder     SalesOrder @relation(fields: [salesOrderId], references: [id])
+  warehouseId    String
+  warehouse      Warehouse @relation(fields: [warehouseId], references: [id])
+  status         String @default("PENDING_QC") // PENDING_QC | READY | DISPATCHED | INVOICED | CANCELLED
+  vehicleNo      String?
+  transporter    String?
+  remarks        String? @db.Text
+  dispatchedAt   DateTime?
+  cancelledAt    DateTime?
+  createdBy      String?
+  createdAt      DateTime @default(now())
+  lines          DeliveryChallanLine[]
+
+  @@unique([companyId, challanNo])
+  @@index([companyId, status, date])
+  @@index([salesOrderId])
+}
+
+model DeliveryChallanLine {
+  id               String @id @default(cuid())
+  deliveryChallanId String
+  deliveryChallan   DeliveryChallan @relation(fields: [deliveryChallanId], references: [id], onDelete: Cascade)
+  salesOrderLineId  String
+  salesOrderLine    SalesOrderLine @relation(fields: [salesOrderLineId], references: [id])
+  itemId            String
+  item              Item @relation(fields: [itemId], references: [id])
+  plannedQty        Float
+  acceptedQty       Float @default(0)
+  rejectedQty       Float @default(0)
+  invoicedQty       Float @default(0)
+  qcStatus          String @default("PENDING") // PENDING | PASSED | PARTIAL | FAILED
+  batchNo           String?
+  qcNotes           String? @db.Text
+
+  @@unique([deliveryChallanId, salesOrderLineId])
+  @@index([salesOrderLineId])
 }
 
 // ---------- Commercial returns and tax adjustment notes ----------

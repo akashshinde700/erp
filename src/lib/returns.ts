@@ -2,6 +2,7 @@ import { Prisma } from '@prisma/client'
 import { db } from './db'
 import { BusinessError, postGl, cancelGlForVoucher, AccountCode } from './accounting'
 import { computeInvoiceTotals, EPS, fyCode, r2 } from './erp'
+import { cancelLotMovementsTx, consumeLotsFefoTx } from './traceability'
 
 type Tx = Prisma.TransactionClient
 
@@ -84,6 +85,7 @@ export async function postReturn(input: ReturnInput) {
     }, include: { lines: { include: { item: true } }, party: true } })
     for (const { request, source, effectiveRate } of accepted) {
       if (source.item.isService || !source.item.isStockItem) continue
+      if (!isSales) await consumeLotsFefoTx(tx, { itemId: source.itemId, warehouseId: warehouse.id, qty: request.acceptedQty, voucherType: input.returnType, voucherNo: returnNo })
       await tx.stockLedger.create({ data: { postingDate: date, voucherType: input.returnType, voucherNo: returnNo, itemId: source.itemId, warehouseId: warehouse.id,
         qtyIn: isSales && (request.disposition ?? 'RESTOCK') === 'RESTOCK' ? request.acceptedQty : 0,
         qtyOut: !isSales ? request.acceptedQty : 0, rate: effectiveRate, remarks: `${input.returnType} against ${invoice.invoiceNo}` } })
@@ -110,6 +112,7 @@ export async function cancelReturn(id: string) {
     const doc = await tx.returnDocument.findFirst({ where: { id, companyId: org.id }, include: { lines: { include: { item: true } } } })
     if (!doc) throw new BusinessError('Return document not found', 404)
     if (doc.status !== 'POSTED') throw new BusinessError(`Return document is already ${doc.status}`)
+    if (doc.refundedAmount > EPS) throw new BusinessError(`${r2(doc.refundedAmount)} has been refunded against ${doc.adjustmentNo} — cancel those refunds first`, 409)
     const isSales = doc.returnType === 'SALES_RETURN'
     if (isSales) for (const line of doc.lines) {
       if (line.acceptedQty <= EPS || line.disposition !== 'RESTOCK' || line.item.isService || !line.item.isStockItem) continue
@@ -119,6 +122,7 @@ export async function cancelReturn(id: string) {
     const rows = await tx.stockLedger.findMany({ where: { voucherType: doc.returnType, voucherNo: doc.returnNo, isCancelled: false } })
     for (const row of rows) await tx.stockLedger.create({ data: { postingDate: new Date(), voucherType: doc.returnType, voucherNo: doc.returnNo, itemId: row.itemId, warehouseId: row.warehouseId, qtyIn: row.qtyOut, qtyOut: row.qtyIn, rate: row.rate, remarks: `Reversal of ${doc.returnNo}`, isCancelled: true } })
     await tx.stockLedger.updateMany({ where: { voucherType: doc.returnType, voucherNo: doc.returnNo, isCancelled: false }, data: { isCancelled: true } })
+    await cancelLotMovementsTx(tx, doc.returnType, doc.returnNo)
     await cancelGlForVoucher(tx, isSales ? 'CREDIT_NOTE' : 'DEBIT_NOTE', doc.adjustmentNo!, new Date())
     return tx.returnDocument.update({ where: { id: doc.id }, data: { status: 'CANCELLED', cancelledAt: new Date() } })
   })

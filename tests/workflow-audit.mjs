@@ -24,7 +24,8 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const BASE = process.env.AUDIT_BASE_URL ?? 'http://127.0.0.1:3000'
 const DB_URL = process.env.AUDIT_DB_URL
 if (!DB_URL || !/^mysql:\/\//.test(DB_URL)) throw new Error('AUDIT_DB_URL=mysql://... (disposable database) is required')
-if (!/audit|test|mig|disposable|tmp/i.test(new URL(DB_URL).pathname)) throw new Error('Refusing to run: database name must look disposable (audit/test/mig/tmp)')
+const DB_NAME = new URL(DB_URL).pathname.slice(1)
+if (!/audit|test|mig|disposable|tmp/i.test(DB_NAME) && process.env.AUDIT_CONFIRM_DISPOSABLE !== DB_NAME) throw new Error(`Refusing to run: '${DB_NAME}' does not look disposable — set AUDIT_CONFIRM_DISPOSABLE=${DB_NAME} to confirm`)
 const KEY = readFileSync(process.env.AUDIT_PLATFORM_KEY ?? join(ROOT, 'db', 'platform-key.key'), 'utf8').trim()
 const OUT = process.env.WORKFLOW_RESULTS ?? join(ROOT, 'tests', 'workflow-audit-results.json')
 const db = openAuditDb({ url: DB_URL })

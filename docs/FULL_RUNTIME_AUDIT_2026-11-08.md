@@ -223,6 +223,9 @@ through plain invoices left 9 units in lots with 0 in stock).
 
 ## 13. Tenant isolation — critical, not fixed
 
+> **Update:** closed on branch `feature/tenant-isolation-and-gaps`; see
+> `docs/GAP_CLOSURE_REPORT_2026-11-08.md`.
+
 37 business tables have no `companyId` (AccountLedger, AuditLog, Bom, BomItem,
 Counter, DeliveryChallanLine, Employee, GoodsReceiptLine, Item, JobCard,
 JobCardProcess, JobworkCertificate, Party, Payment, PurchaseInvoice,
@@ -294,6 +297,10 @@ in this audit.
 | `GET /api/reports?type=gstr3b` | adds `outwardInvoices`, `creditNotes`, `inwardInvoices`, `debitNotes`; `outward` / `eligibleItcFromBooks` are now net | notes in liability and ITC |
 
 ## 17. Remaining blockers
+
+> **Update:** items 1 and 3–5 are closed, and print/PDF is tested. Item 2 is
+> rehearsed on a simulated dump; the real-dump run is still open. See
+> `docs/GAP_CLOSURE_REPORT_2026-11-08.md`.
 
 1. Multi-company isolation (§13).
 2. Apply the three migrations to a staging copy of the live database and run

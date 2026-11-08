@@ -285,3 +285,30 @@ These are **candidates**, not a mandate to copy: the sibling repo proves the own
 6. Decide, with the owner, which §9 gaps to implement first (recommended: MRP/low-stock + purchase/sales order lifecycle + QC + production costing), preferring a deliberate merge from `erpnashilk` over a rewrite.
 7. Complete Mapsoft read-only login check if a POST-capable browser session becomes available; finish docs↔code reconciliation. Both YouTube reviews (`YOUTUBE_PLAYLIST_RESEARCH.md` batch 1, `YOUTUBE_ERP_COURSES_RESEARCH.md` batch 2) and the full GitHub repo-by-repo code comparison (`GITHUB_REPOS_RESEARCH.md`) are **done** — use their P0/P1/P2 concept lists (now sharpened in §9) when choosing §9 gaps. `laserp` stays 404; do not re-plan work around that repo.
 8. Only then produce the final sign-off report with total modules audited, issue counts by severity, fixes, remaining issues, improvements, test results, build status, DB changes, security and performance findings.
+
+---
+
+## 13. 2026-11-08 — open audit items closed (branch `feature/tenant-isolation-and-gaps`)
+
+Full detail is in `docs/GAP_CLOSURE_REPORT_2026-11-08.md`.
+
+- **Done:**
+  - multi-company isolation, with migration, scoped client and 68 isolation checks;
+  - payment-milestone allocation;
+  - server-side paging and aggregated stock summary;
+  - FG receipt wizard and readiness;
+  - advances, refunds and schedules workspace;
+  - RFQ and supplier comparison, with backend, migration and UI;
+  - print and PDF verification, which found and fixed the blank refund acknowledgement.
+- **Final gate on a fresh MySQL database:**
+  - 68/68 tenant;
+  - 72/72 legacy;
+  - 462/462 workflow;
+  - 18/18 backup drill;
+  - 96/96 browser;
+  - typecheck, lint and build clean, with no drift.
+- **Open:**
+  - run `scripts/staging-rehearsal.mjs` on the real predeploy dump on the server;
+  - confirm which operating company owns the legacy rows;
+  - pilot on staging;
+  - untrack `.env`.

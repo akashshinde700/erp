@@ -1,12 +1,13 @@
 import { ok, fail, handleError } from '@/lib/api'
 import { z } from 'zod'
-import { assertMutationAccess } from '@/lib/platform'
+import { assertMutationAccess, assertCompanyAccess } from '@/lib/platform'
 import { logAudit } from '@/lib/audit'
 import { deleteWorkCenter, getCalendar, updateWorkCenter } from '@/lib/routing'
 
 /** Calendar read lives here so one URL describes one centre. */
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
+    await assertCompanyAccess()
     const { id } = await params
     return ok(await getCalendar(id))
   } catch (e) {

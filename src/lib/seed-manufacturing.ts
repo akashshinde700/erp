@@ -83,9 +83,12 @@ export async function seedManufacturingDemo(deps: ManufacturingSeedDeps) {
   // costing view shows a real standard-vs-actual comparison instead of zeros.
   // Every operation completed below therefore absorbs 18 % of its material +
   // labour into WIP, credited to Factory Overhead Absorbed (OVHA).
-  const company = await db.company.findFirst({ select: { id: true, overheadRatePct: true } })
+  const company = await tenantCompany(db)
   if (company && company.overheadRatePct === 0) {
-    await db.company.update({ where: { id: company.id }, data: { overheadRatePct: 18 } })
+    await db.company.update({
+      where: { id: company.id },
+      data: { overheadRatePct: 18, overheadRateSetAt: new Date(), overheadRateSetBy: 'demo seed', overheadRateReason: 'Demo fabrication-shop rate (seed data)' },
+    })
   }
 
   // ---------- Work centres + shift calendars (capacity, routing, OEE) ----------

@@ -1,11 +1,12 @@
 import { ok, fail, handleError } from '@/lib/api'
-import { assertMutationAccess } from '@/lib/platform'
+import { assertCompanyAccess, assertMutationAccess } from '@/lib/platform'
 import { logAudit } from '@/lib/audit'
 import { workOrderCost, workOrderCostVariance, trueUpWorkOrderOverhead } from '@/lib/costing'
 
 /** GET — cost roll-up (material / labour / absorbed overhead) for one work order. */
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
+    await assertCompanyAccess()
     const { id } = await params
     const [rollUp, variance] = await Promise.all([workOrderCost(id), workOrderCostVariance(id)])
     return ok({ ...variance, rollUp })

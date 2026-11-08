@@ -76,13 +76,25 @@ export async function PUT(req: Request) {
     const existing = await tenantCompany(db)
     const logins = await orgLoginCount()
     let actorEmail: string | null = null
+    let actorRole: string | null = null
     if (logins > 0) {
       const actor = await assertMutationAccess()
       actorEmail = actor?.email ?? null
+      actorRole = actor?.role ?? null
     }
+    // The absorption rate is accounting policy: once logins exist only the
+    // OWNER may change it, and who/when is recorded (the overhead advisor
+    // also asks for a reason).
+    const rateChanged = body.overheadRatePct !== undefined && body.overheadRatePct !== (existing?.overheadRatePct ?? 0)
+    if (rateChanged && logins > 0 && actorRole !== 'OWNER') {
+      return fail('Only the OWNER can change the overhead absorption rate', 403)
+    }
+    const data = rateChanged
+      ? { ...body, overheadRateSetAt: new Date(), overheadRateSetBy: actorEmail ?? 'setup', overheadRateReason: 'Changed from the company profile' }
+      : body
     const company = existing
-      ? await db.company.update({ where: { id: existing.id }, data: body })
-      : await db.company.create({ data: body })
+      ? await db.company.update({ where: { id: existing.id }, data })
+      : await db.company.create({ data })
     const detail =
       body.overheadRatePct !== undefined && body.overheadRatePct !== (existing?.overheadRatePct ?? 0)
         ? `${body.overheadRatePct}% overhead absorption (was ${existing?.overheadRatePct ?? 0}%) — already-completed operations keep their absorbed amount until a true-up is run`

@@ -353,7 +353,7 @@ function ConnectorCard() {
           <div>
             <p className="text-sm font-semibold">Tally connector (PoC)</p>
             <p className="text-xs text-muted-foreground">
-              Run a tiny script on the Tally machine; it polls ForgeERP and imports queued vouchers automatically. In-memory state — restart resets pairing.
+              Run a tiny script on the Tally machine; it polls ForgeERP and imports queued vouchers automatically. Pairing and the queue are saved per organisation, so a server restart keeps the connector paired.
             </p>
           </div>
           <div className="flex items-center gap-2">

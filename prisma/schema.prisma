@@ -123,6 +123,8 @@ model Company {
   shiftCalendars            ShiftCalendar[]
   routingOperations         RoutingOperation[]
   machineDowntimes          MachineDowntime[]
+  tallyConnector            TallyConnector?
+  tallyConnectorJobs        TallyConnectorJob[]
 }
 
 // ---------- Organization logins (SaaS) ----------
@@ -2068,4 +2070,43 @@ model ServiceCall {
   @@unique([companyId, callNo])
   @@index([companyId, status])
   @@index([partyId])
+}
+
+/// Tally connector pairing for one organisation (one connector per org).
+/// Only SHA-256 hashes of the pairing code and bearer token are stored.
+/// Included in backups (hashes only cannot authenticate); a restore keeps it paired.
+model TallyConnector {
+  id               String    @id @default(cuid())
+  companyId        String    @unique
+  company          Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  codeHash         String?   @unique
+  codeExpiresAt    DateTime?
+  tokenHash        String?   @unique
+  connectorVersion String?
+  pairedAt         DateTime?
+  lastSeenAt       DateTime?
+  updatedAt        DateTime  @updatedAt
+}
+
+/// A voucher queued for the organisation's Tally connector. Transient: rows
+/// older than the job TTL are trimmed.
+model TallyConnectorJob {
+  id        String    @id
+  companyId String
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  doc       String // SALES | PURCHASE | PAYMENT
+  docId     String
+  docNo     String
+  xml       String    @db.LongText
+  queuedAt  DateTime  @default(now())
+  startedAt DateTime?
+  doneAt    DateTime?
+  ok        Boolean?
+  created   Int?
+  altered   Int?
+  errors    Int?
+  errorText String?   @db.VarChar(300)
+
+  @@index([companyId, doneAt])
+  @@index([companyId, queuedAt])
 }

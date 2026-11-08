@@ -7,82 +7,37 @@ import { BusinessError } from '@/lib/accounting'
 import { runAsTenant, tenantCompany } from '@/lib/tenant'
 
 /**
- * Tally connector (PoC — in-memory store on globalThis, state lost on restart).
+ * Tally connector — pairing, token and job queue persisted per organisation
+ * (TallyConnector / TallyConnectorJob), so a server restart or redeploy no
+ * longer unpairs the connector or drops queued vouchers.
  *
- * One connector per ORGANISATION: pairing code, token and job queue are keyed by
- * companyId. UI actions use the session's organisation; connector-side actions
- * (no cookie) are resolved to their organisation by the hash of the pairing
- * code / bearer token, so one org's vouchers can never reach another org's
- * Tally, and one org cannot see or revoke another org's connector.
- * Pattern from the erpnashilk audit: hashed single-use pairing codes, bearer
- * token returned once, one job per poll, results field-whitelisted.
+ * One connector per ORGANISATION. UI actions use the session's organisation;
+ * connector-side actions (no cookie) are resolved to their organisation by the
+ * SHA-256 hash of the pairing code / bearer token, so one org's vouchers can
+ * never reach another org's Tally, and one org cannot see or revoke another
+ * org's connector. Only hashes are stored. Pattern from the erpnashilk audit:
+ * hashed single-use pairing codes, bearer token returned once, one job per
+ * poll, results field-whitelisted.
  *
  *  POST {action:'new-code'}                 → {code, expiresAt}   (user UI)
  *  POST {action:'pair', code}               → {token}             (connector, once)
  *  POST {action:'queue', doc, id}           → {jobId}             (user UI)
  *  POST {action:'result', jobId, ok, ...}   + Bearer              (connector)
  *  GET  (Bearer, ?mode=pending)             → {job} | {empty}     (connector poll)
- *  GET  (no token)                          → status for the UI
+ *  GET  (Bearer, ?mode=status)              → {paired, online, pending} (connector CLI)
+ *  GET  (session)                           → status for the UI
  *  DELETE                                   → revoke connector
  */
 
 const CODE_TTL_MS = 10 * 60 * 1000
 const JOB_TTL_MS = 30 * 60 * 1000
 const ONLINE_WINDOW_MS = 90 * 1000
+/** A job handed out but never reported back is offered again after this. */
+const REDELIVER_AFTER_MS = 60 * 1000
 
 const CODE_CHARS = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789' // no 0/O/1/I/L
 
-interface Job {
-  id: string
-  doc: TallyDocKind
-  docId: string
-  docNo: string
-  xml: string
-  queuedAt: number
-  startedAt?: number
-  doneAt?: number
-  ok?: boolean
-  created?: number
-  altered?: number
-  errors?: number
-  errorText?: string
-}
-
-interface Store {
-  companyId: string
-  codeHash: string | null
-  codeExpiresAt: number
-  tokenHash: string | null
-  connectorVersion: string | null
-  pairedAt: number | null
-  lastSeenAt: number | null
-  jobs: Job[]
-}
-
-declare global {
-  var __forgeTallyConnectors: Map<string, Store> | undefined
-}
-
-function stores(): Map<string, Store> {
-  globalThis.__forgeTallyConnectors ??= new Map()
-  return globalThis.__forgeTallyConnectors
-}
-
-function storeFor(companyId: string): Store {
-  let s = stores().get(companyId)
-  if (!s) {
-    s = { companyId, codeHash: null, codeExpiresAt: 0, tokenHash: null, connectorVersion: null, pairedAt: null, lastSeenAt: null, jobs: [] }
-    stores().set(companyId, s)
-  }
-  return s
-}
-
-/** The signed-in organisation's connector (call after an assert*Access()). */
-async function sessionStore(): Promise<Store> {
-  const company = await tenantCompany(db)
-  if (!company) throw new BusinessError('Operating company is not configured', 409)
-  return storeFor(company.id)
-}
+type Connector = NonNullable<Awaited<ReturnType<typeof db.tallyConnector.findUnique>>>
 
 async function sha256(s: string): Promise<string> {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))
@@ -107,15 +62,26 @@ function randomToken(): string {
     .join('')}`
 }
 
-/** The connector store whose token matches the bearer, or null. */
-async function bearerStore(req: Request): Promise<Store | null> {
+/** The signed-in organisation's id (call after an assert*Access()). */
+async function sessionCompanyId(): Promise<string> {
+  const company = await tenantCompany(db)
+  if (!company) throw new BusinessError('Operating company is not configured', 409)
+  return company.id
+}
+
+/**
+ * The connector whose token matches the bearer, or null. Looked up unscoped
+ * (the connector has no session); everything after runs as that organisation.
+ */
+async function bearerConnector(req: Request): Promise<Connector | null> {
   const auth = req.headers.get('authorization') ?? ''
   const token = auth.replace(/^Bearer\s+/i, '').trim()
   if (!token) return null
-  const h = await sha256(token)
-  for (const s of stores().values()) if (s.tokenHash && s.tokenHash === h) return s
-  return null
+  const tokenHash = await sha256(token)
+  return runAsTenant(null, () => db.tallyConnector.findUnique({ where: { tokenHash } }))
 }
+
+const asOrg = <T,>(companyId: string, fn: () => Promise<T>) => runAsTenant(companyId, fn)
 
 // ---------- handlers ----------
 
@@ -125,43 +91,57 @@ export async function GET(req: Request) {
 
     // Connector poll: one pending job at a time (bearer-token gated, no cookie).
     if (mode === 'pending') {
-      const s = await bearerStore(req)
-      if (!s) return fail('Connector token invalid or revoked', 401)
-      s.lastSeenAt = Date.now()
-      const now = Date.now()
-      const job = s.jobs.find((j) => !j.doneAt && (j.startedAt ?? 0) < now - 60 * 1000) ?? s.jobs.find((j) => !j.doneAt && !j.startedAt)
-      if (!job) return ok({ empty: true, nextPollSec: 30 })
-      job.startedAt = now
-      return ok({ job: { jobId: job.id, doc: job.doc, docNo: job.docNo, xml: job.xml } })
+      const c = await bearerConnector(req)
+      if (!c) return fail('Connector token invalid or revoked', 401)
+      return await asOrg(c.companyId, async () => {
+        const now = new Date()
+        await db.tallyConnector.update({ where: { id: c.id }, data: { lastSeenAt: now } })
+        const stale = new Date(now.getTime() - REDELIVER_AFTER_MS)
+        // Never started first, then ones handed out but never reported back.
+        // Claimed with a conditional update so two polls cannot both take it.
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const job =
+            (await db.tallyConnectorJob.findFirst({ where: { companyId: c.companyId, doneAt: null, startedAt: null }, orderBy: { queuedAt: 'asc' } })) ??
+            (await db.tallyConnectorJob.findFirst({ where: { companyId: c.companyId, doneAt: null, startedAt: { lt: stale } }, orderBy: { queuedAt: 'asc' } }))
+          if (!job) return ok({ empty: true, nextPollSec: 30 })
+          const claimed = await db.tallyConnectorJob.updateMany({
+            where: { id: job.id, companyId: c.companyId, doneAt: null, startedAt: job.startedAt },
+            data: { startedAt: now },
+          })
+          if (claimed.count === 1) return ok({ job: { jobId: job.id, doc: job.doc, docNo: job.docNo, xml: job.xml } })
+        }
+        return ok({ empty: true, nextPollSec: 5 })
+      })
     }
 
     // Local CLI status uses the connector bearer; UI status uses the session.
     if (mode === 'status') {
-      const s = await bearerStore(req)
-      if (!s) return fail('Connector token invalid or revoked', 401)
-      const now = Date.now()
-      return ok({ paired: !!s.tokenHash, online: (s.lastSeenAt ?? 0) > now - ONLINE_WINDOW_MS, pending: s.jobs.filter((j) => !j.doneAt).length })
+      const c = await bearerConnector(req)
+      if (!c) return fail('Connector token invalid or revoked', 401)
+      const pending = await asOrg(c.companyId, () => db.tallyConnectorJob.count({ where: { companyId: c.companyId, doneAt: null } }))
+      return ok({ paired: !!c.tokenHash, online: (c.lastSeenAt?.getTime() ?? 0) > Date.now() - ONLINE_WINDOW_MS, pending })
     }
 
     // UI status
     await assertCompanyAccess()
-    const s = await sessionStore()
-    const now = Date.now()
-    const paired = !!s.tokenHash
-    const online = paired && (s.lastSeenAt ?? 0) > now - ONLINE_WINDOW_MS
-    const pending = s.jobs.filter((j) => !j.doneAt).length
-    const recent = s.jobs
-      .filter((j) => j.doneAt)
-      .slice(-10)
-      .reverse()
-      .map((j) => ({ docNo: j.docNo, ok: j.ok, created: j.created, altered: j.altered, errors: j.errors, errorText: j.errorText }))
+    const companyId = await sessionCompanyId()
+    const c = await db.tallyConnector.findUnique({ where: { companyId } })
+    const paired = !!c?.tokenHash
+    const online = paired && (c?.lastSeenAt?.getTime() ?? 0) > Date.now() - ONLINE_WINDOW_MS
+    const pending = await db.tallyConnectorJob.count({ where: { companyId, doneAt: null } })
+    const recent = await db.tallyConnectorJob.findMany({
+      where: { companyId, doneAt: { not: null } },
+      orderBy: { doneAt: 'desc' },
+      take: 10,
+      select: { docNo: true, ok: true, created: true, altered: true, errors: true, errorText: true },
+    })
     return ok({
       paired,
       online,
       pending,
-      lastSeenAt: s.lastSeenAt,
-      pairedAt: s.pairedAt,
-      connectorVersion: s.connectorVersion,
+      lastSeenAt: c?.lastSeenAt?.getTime() ?? null,
+      pairedAt: c?.pairedAt?.getTime() ?? null,
+      connectorVersion: c?.connectorVersion ?? null,
       recent,
     })
   } catch (e) {
@@ -191,33 +171,37 @@ export async function POST(req: Request) {
 
     if (action === 'new-code') {
       await assertMutationAccess()
-      const s = await sessionStore()
+      const companyId = await sessionCompanyId()
       const code = randomCode()
-      s.codeHash = await sha256(code)
-      s.codeExpiresAt = Date.now() + CODE_TTL_MS
+      const codeHash = await sha256(code)
+      const codeExpiresAt = new Date(Date.now() + CODE_TTL_MS)
+      await db.tallyConnector.upsert({ where: { companyId }, create: { companyId, codeHash, codeExpiresAt }, update: { codeHash, codeExpiresAt } })
       await logAudit('CREATE', 'TallyConnector', undefined, `pairing code issued (expires in 10 min)`)
-      return ok({ code, expiresAt: new Date(s.codeExpiresAt).toISOString() })
+      return ok({ code, expiresAt: codeExpiresAt.toISOString() })
     }
 
     if (action === 'pair') {
       const code = (body.code ?? '').trim().toUpperCase()
       if (!code) return fail('Pairing code is required', 400)
-      // The code identifies the organisation that issued it.
+      // The code identifies the organisation that issued it (unique hash).
       const codeHash = await sha256(code)
-      const s = [...stores().values()].find((x) => x.codeHash && x.codeHash === codeHash)
-      if (!s) return fail('Pairing code invalid', 400)
-      if (Date.now() > s.codeExpiresAt) {
-        s.codeHash = null // single-use: consumed even if expired
-        return fail('Pairing code expired — generate a new one', 400)
-      }
-      s.codeHash = null // single use
-      const token = randomToken()
-      s.tokenHash = await sha256(token)
-      s.pairedAt = Date.now()
-      s.lastSeenAt = Date.now()
-      s.connectorVersion = body.version ?? null
-      await runAsTenant(s.companyId, () => logAudit('CREATE', 'TallyConnector', undefined, `connector paired (v${body.version ?? '?'})`))
-      return ok({ token }) // shown once — never again
+      const c = await runAsTenant(null, () => db.tallyConnector.findUnique({ where: { codeHash } }))
+      if (!c) return fail('Pairing code invalid', 400)
+      return await asOrg(c.companyId, async () => {
+        // Single use: consume the code atomically (also when it has expired),
+        // so two connectors racing on one code cannot both get a token.
+        const consumed = await db.tallyConnector.updateMany({ where: { id: c.id, codeHash }, data: { codeHash: null, codeExpiresAt: null } })
+        if (consumed.count !== 1) return fail('Pairing code invalid', 400)
+        if (!c.codeExpiresAt || c.codeExpiresAt.getTime() < Date.now()) return fail('Pairing code expired — generate a new one', 400)
+        const token = randomToken()
+        const now = new Date()
+        await db.tallyConnector.update({
+          where: { id: c.id },
+          data: { tokenHash: await sha256(token), pairedAt: now, lastSeenAt: now, connectorVersion: body.version?.slice(0, 40) ?? null },
+        })
+        await logAudit('CREATE', 'TallyConnector', undefined, `connector paired (v${body.version?.slice(0, 40) ?? '?'})`)
+        return ok({ token }) // shown once — never again
+      })
     }
 
     if (action === 'queue') {
@@ -226,23 +210,25 @@ export async function POST(req: Request) {
       const doc = (body.doc ?? '').toUpperCase() as TallyDocKind
       const id = body.id ?? ''
       if (!id || !['SALES', 'PURCHASE', 'PAYMENT'].includes(doc)) return fail('doc and id are required', 400)
-      const s = await sessionStore()
-      if (s.jobs.some((j) => j.doc === doc && j.docId === id && !j.doneAt)) return ok({ duplicate: true })
+      const companyId = await sessionCompanyId()
+      const open = await db.tallyConnectorJob.findFirst({ where: { companyId, doc, docId: id, doneAt: null }, select: { id: true } })
+      if (open) return ok({ duplicate: true })
       const voucher =
         doc === 'SALES' ? await loadInvoiceVoucher('SALES', id) : doc === 'PURCHASE' ? await loadInvoiceVoucher('PURCHASE', id) : await loadPaymentVoucher(id)
       const company = await getCompany()
       const xml = vouchersToXml([voucher], company?.tallyCompanyName ?? null)
-      const job: Job = {
-        id: `job_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
-        doc,
-        docId: id,
-        docNo: voucher.voucherNumber,
-        xml,
-        queuedAt: Date.now(),
-      }
-      s.jobs.push(job)
+      const job = await db.tallyConnectorJob.create({
+        data: {
+          id: `job_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+          companyId,
+          doc,
+          docId: id,
+          docNo: voucher.voucherNumber,
+          xml,
+        },
+      })
       // retention trim
-      s.jobs = s.jobs.filter((j) => j.queuedAt > Date.now() - JOB_TTL_MS)
+      await db.tallyConnectorJob.deleteMany({ where: { companyId, queuedAt: { lt: new Date(Date.now() - JOB_TTL_MS) } } })
       // Exporting voucher XML to an external Tally instance is an outbound
       // data movement — it must be attributable at QUEUE time (not only when
       // the connector reports the result).
@@ -251,19 +237,28 @@ export async function POST(req: Request) {
     }
 
     if (action === 'result') {
-      const s = await bearerStore(req)
-      if (!s) return fail('Connector token invalid or revoked', 401)
-      s.lastSeenAt = Date.now()
-      const job = s.jobs.find((j) => j.id === body.jobId)
-      if (!job) return ok({ accepted: false })
-      job.doneAt = Date.now()
-      job.ok = !!body.ok
-      job.created = Math.max(0, Math.min(9999, Math.trunc(body.created ?? 0)))
-      job.altered = Math.max(0, Math.min(9999, Math.trunc(body.altered ?? 0)))
-      job.errors = Math.max(0, Math.min(9999, Math.trunc(body.errors ?? 0)))
-      job.errorText = String(body.errorText ?? '').slice(0, 300)
-      await runAsTenant(s.companyId, () => logAudit(body.ok ? 'EXPORT' : 'UPDATE', 'TallyConnector', job.docNo, body.ok ? `created ${job.created}, altered ${job.altered}` : job.errorText))
-      return ok({ accepted: true })
+      const c = await bearerConnector(req)
+      if (!c) return fail('Connector token invalid or revoked', 401)
+      return await asOrg(c.companyId, async () => {
+        await db.tallyConnector.update({ where: { id: c.id }, data: { lastSeenAt: new Date() } })
+        // Scoped to this connector's organisation: another org's job id is "not found".
+        const job = await db.tallyConnectorJob.findFirst({ where: { id: String(body.jobId ?? ''), companyId: c.companyId } })
+        if (!job) return ok({ accepted: false })
+        const clamp = (n?: number) => Math.max(0, Math.min(9999, Math.trunc(Number(n ?? 0)) || 0))
+        const done = await db.tallyConnectorJob.update({
+          where: { id: job.id },
+          data: {
+            doneAt: new Date(),
+            ok: !!body.ok,
+            created: clamp(body.created),
+            altered: clamp(body.altered),
+            errors: clamp(body.errors),
+            errorText: String(body.errorText ?? '').slice(0, 300),
+          },
+        })
+        await logAudit(body.ok ? 'EXPORT' : 'UPDATE', 'TallyConnector', done.docNo, body.ok ? `created ${done.created}, altered ${done.altered}` : (done.errorText ?? ''))
+        return ok({ accepted: true })
+      })
     }
 
     return fail('Unknown action', 400)
@@ -275,13 +270,12 @@ export async function POST(req: Request) {
 export async function DELETE() {
   try {
     await assertMutationAccess()
-    const s = await sessionStore()
-    s.tokenHash = null
-    s.codeHash = null
-    s.pairedAt = null
-    s.lastSeenAt = null
-    s.connectorVersion = null
-    s.jobs = []
+    const companyId = await sessionCompanyId()
+    await db.tallyConnector.updateMany({
+      where: { companyId },
+      data: { tokenHash: null, codeHash: null, codeExpiresAt: null, pairedAt: null, lastSeenAt: null, connectorVersion: null },
+    })
+    await db.tallyConnectorJob.deleteMany({ where: { companyId } })
     await logAudit('DELETE', 'TallyConnector', undefined, 'connector revoked')
     return ok({ revoked: true })
   } catch (e) {

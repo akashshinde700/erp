@@ -11,6 +11,9 @@
  * with P2003 — and a backup will silently drop its rows.
  */
 export const WORKFLOW_MODELS_CHILDREN_FIRST = [
+  // MRP snapshots (MrpLine cascades from MrpRun, but children still go first)
+  'mrpLine',
+  'mrpRun',
   // MapSoft-parity tables (books, stock adjustments, CRM, service calls)
   'serviceCall',
   'leadActivity',

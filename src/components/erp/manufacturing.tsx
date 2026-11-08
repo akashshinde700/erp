@@ -12,6 +12,7 @@ import { toast } from 'sonner'
 import {
   ArrowLeft,
   BadgeCheck,
+  Building2,
   CalendarClock,
   CheckCircle2,
   ClipboardList,
@@ -22,6 +23,7 @@ import {
   Pencil,
   PlayCircle,
   Plus,
+  RefreshCw,
   Trash2,
   UserCog,
   UserPlus,
@@ -56,7 +58,12 @@ import {
   MANUFACTURING_OPERATIONS,
   WO_PRIORITIES,
   type Bom,
+  type BomWhereUsed,
   type Employee,
+  type MrpDocumentResult,
+  type MrpLineRow,
+  type MrpRunDetail,
+  type MrpRunSummary,
   type ManufacturingStats,
   type MaterialPlanReport,
   type PendingReport,
@@ -77,7 +84,7 @@ import { ProductionReceiptsWorkspace } from './production-receipts'
 // Module shell
 // ===========================================================================
 
-type MfgTab = 'projects' | 'boms' | 'work-orders' | 'material-plan' | 'tasks' | 'pending' | 'employees' | 'quality'
+type MfgTab = 'projects' | 'boms' | 'work-orders' | 'mrp' | 'material-plan' | 'tasks' | 'pending' | 'employees' | 'quality'
 
 export function ManufacturingView() {
   const [tab, setTab] = useState<MfgTab>('projects')
@@ -149,6 +156,9 @@ export function ManufacturingView() {
           <TabsTrigger value="work-orders" className="h-11 gap-1.5 sm:h-9">
             <ClipboardList className="size-4" aria-hidden /> Work Orders
           </TabsTrigger>
+          <TabsTrigger value="mrp" className="h-11 gap-1.5 sm:h-9">
+            <CalendarClock className="size-4" aria-hidden /> MRP
+          </TabsTrigger>
           <TabsTrigger value="material-plan" className="h-11 gap-1.5 sm:h-9">
             <PackageSearch className="size-4" aria-hidden /> Material Plan
           </TabsTrigger>
@@ -177,6 +187,9 @@ export function ManufacturingView() {
         </TabsContent>
         <TabsContent value="work-orders" className="mt-4">
           <WorkOrdersTab onViewTasks={gotoTasks} onChanged={() => stats.reload()} />
+        </TabsContent>
+        <TabsContent value="mrp" className="mt-4">
+          <MrpTab onChanged={() => stats.reload()} />
         </TabsContent>
         <TabsContent value="material-plan" className="mt-4">
           <MaterialPlanTab />
@@ -235,6 +248,357 @@ function isOverdue(due: string | null): boolean {
   if (!due) return false
   const day = due.slice(0, 10)
   return day < todayISO()
+}
+
+// ===========================================================================
+// MRP — multi-level explosion through versioned BOMs, netting, suggestions
+// ===========================================================================
+
+/**
+ * Planner workspace. A run is a snapshot: it is recomputed on demand, never on
+ * read. Suggestions only become documents (DRAFT PR / OPEN work orders) when a
+ * user selects them and confirms — nothing posts by itself.
+ */
+function MrpTab({ onChanged }: { onChanged?: () => void }) {
+  const runs = useApi<MrpRunSummary[]>('/api/manufacturing/mrp')
+  const projects = useApi<Project[]>('/api/manufacturing/projects')
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [asOf, setAsOf] = useState(todayISO())
+  const [horizon, setHorizon] = useState('30')
+  const [picked, setPicked] = useState<Record<string, boolean>>({})
+  const [projectId, setProjectId] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const runList = runs.data ?? []
+  const activeProjectList = (projects.data ?? []).filter((p) => p.status === 'PENDING' || p.status === 'RUNNING')
+
+  // Default to the newest plan once the list arrives.
+  const detail = useApi<MrpRunDetail | null>(selectedId ? `/api/manufacturing/mrp/${selectedId}` : null)
+  const run = detail.data
+
+  const selectedLines = (run?.lines ?? []).filter((l) => picked[l.id])
+  const selectedMake = selectedLines.filter((l) => l.suggestion === 'MAKE')
+  const selectedBuy = selectedLines.filter((l) => l.suggestion === 'BUY')
+  const selectableLines = (run?.lines ?? []).filter((l) => !l.createdDocNo && l.netQty > 0 && l.suggestion !== 'NONE')
+
+  const createRun = async () => {
+    setBusy(true)
+    try {
+      const created = await apiPost<MrpRunSummary>('/api/manufacturing/mrp', {
+        asOf: asOf || undefined,
+        horizonDays: num(horizon) > 0 ? num(horizon) : undefined,
+      })
+      toast.success(`${created.runNo} planned`, {
+        description: `${created.suggestionCount} suggestion(s) · ${created.shortageItems} item(s) short. Nothing is ordered until you approve.`,
+      })
+      setPicked({})
+      setSelectedId(created.id)
+      runs.reload()
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const openDocuments = async () => {
+    if (!run) return
+    if (selectedLines.length === 0) return toast.error('Select at least one suggestion')
+    if (selectedMake.length > 0 && !projectId) return toast.error('Pick the project that will execute the planned work orders')
+    setBusy(true)
+    try {
+      const res = await apiPost<MrpDocumentResult>(`/api/manufacturing/mrp/${run.id}/actions`, {
+        action: 'create-documents',
+        lineIds: selectedLines.map((l) => l.id),
+        projectId: projectId || undefined,
+      })
+      const parts = [
+        res.requisition ? `PR ${res.requisition.reqNo}` : null,
+        res.workOrders.length ? `${res.workOrders.length} work order(s)` : null,
+      ].filter(Boolean)
+      toast.success(`${run.runNo} approved`, {
+        description: `${parts.join(' + ') || 'no documents'} created — the requisition still needs submit + approve.`,
+      })
+      setPicked({})
+      setSelectedId(run.id)
+      detail.reload()
+      runs.reload()
+      onChanged?.()
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const closeRun = async () => {
+    if (!run) return
+    setBusy(true)
+    try {
+      await apiPost(`/api/manufacturing/mrp/${run.id}/actions`, { action: 'close' })
+      toast.success(`${run.runNo} closed`)
+      detail.reload()
+      runs.reload()
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const toggle = (id: string) => setPicked((p) => ({ ...p, [id]: !p[id] }))
+  const toggleAll = () => {
+    const allOn = selectableLines.length > 0 && selectableLines.every((l) => picked[l.id])
+    const next: Record<string, boolean> = { ...picked }
+    for (const l of selectableLines) next[l.id] = !allOn
+    setPicked(next)
+  }
+
+  return (
+    <div className="space-y-4">
+      <Card className="border-blue-500/30 bg-blue-500/5 p-4">
+        <p className="text-sm font-medium">Plan first, order later</p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Demand comes from approved sales orders and released work orders, exploded through the approved BOM revision of each
+          item. Supply nets own stock → open work orders → approved POs → approved requisitions. Nothing is purchased,
+          produced or reserved until you select suggestions and approve them here.
+        </p>
+      </Card>
+
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="space-y-1.5">
+          <Label htmlFor="mrp-asof" className="text-xs text-muted-foreground">As of</Label>
+          <Input id="mrp-asof" type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} className="h-11 w-40" />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="mrp-horizon" className="text-xs text-muted-foreground">Horizon (days)</Label>
+          <Input
+            id="mrp-horizon"
+            type="number"
+            inputMode="numeric"
+            min="1"
+            max="365"
+            value={horizon}
+            onChange={(e) => setHorizon(e.target.value)}
+            className="h-11 w-28 text-right tabular-nums"
+          />
+        </div>
+        <Button onClick={createRun} disabled={busy} className="h-11 gap-2">
+          {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <RefreshCw className="size-4" aria-hidden />}
+          Run MRP
+        </Button>
+        <div className="ml-auto flex items-end gap-2">
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">Saved plans</Label>
+            <Select value={selectedId ?? runList[0]?.id ?? undefined} onValueChange={(v) => { setSelectedId(v); setPicked({}) }}>
+              <SelectTrigger className="h-11 data-[size=default]:h-11 w-56">
+                <SelectValue placeholder="No plans yet" />
+              </SelectTrigger>
+              <SelectContent className="max-h-72">
+                {runList.map((r) => (
+                  <SelectItem key={r.id} value={r.id}>
+                    {r.runNo} · {r.status} · {dateStr(r.asOf)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {!selectedId && runList[0] ? (
+            <Button variant="outline" className="h-11" onClick={() => setSelectedId(runList[0].id)}>
+              Open latest
+            </Button>
+          ) : null}
+        </div>
+      </div>
+
+      {runs.loading ? <TableSkeleton rows={4} cols={6} /> : null}
+      {runs.error ? <ErrorState error={runs.error} onRetry={() => runs.reload()} entity="MRP runs" /> : null}
+
+      {!runs.loading && !runs.error && runList.length === 0 ? (
+        <EmptyState
+          title="No MRP run yet"
+          hint="Approve a BOM with a linked output item and confirm a sales order, then run MRP to see buy/make suggestions."
+          icon={CalendarClock}
+        />
+      ) : null}
+
+      {run ? (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+            <KpiCard title="Run" value={run.runNo} icon={CalendarClock} hint={`${dateStr(run.asOf)} · ${run.horizonDays}d`} />
+            <KpiCard title="Suggestions" value={String(run.suggestionCount)} icon={PackageSearch} />
+            <KpiCard title="Short Items" value={String(run.shortageItems)} icon={XCircle} tone={run.shortageItems ? 'negative' : 'positive'} />
+            <KpiCard title="Sales Orders" value={String(run.salesOrderCount)} icon={ClipboardList} hint={`${run.workOrderCount} work order(s)`} />
+            <KpiCard
+              title="Status"
+              value={run.status}
+              icon={BadgeCheck}
+              tone={run.status === 'CLOSED' ? 'default' : 'positive'}
+              hint={run.approvedAt ? `approved ${dateStr(run.approvedAt)}` : 'not approved yet'}
+            />
+          </div>
+
+          {run.warnings.length > 0 ? (
+            <Card className="border-amber-500/40 bg-amber-500/5 p-4">
+              <p className="text-sm font-medium">Planner warnings</p>
+              <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+                {run.warnings.map((w, i) => (
+                  <li key={i}>• {w}</li>
+                ))}
+              </ul>
+            </Card>
+          ) : null}
+
+          {run.lines.length === 0 ? (
+            <EmptyState title="No demand in this horizon" hint="Nothing is due inside the planning window — widen the horizon or check sales orders." icon={PackageSearch} />
+          ) : (
+            <>
+              <Card className="p-0">
+                <CardContent className="p-0">
+                  <div className="max-h-[56dvh] overflow-auto erp-scroll">
+                    <Table>
+                      <TableHeader className="sticky top-0 z-10 bg-card">
+                        <TableRow>
+                          <TableHead className="w-10">
+                            <input
+                              type="checkbox"
+                              className="size-4 accent-primary"
+                              aria-label="Select all suggestions"
+                              checked={selectableLines.length > 0 && selectableLines.every((l) => picked[l.id])}
+                              onChange={toggleAll}
+                            />
+                          </TableHead>
+                          <TableHead>Item</TableHead>
+                          <TableHead className="text-right">Lvl</TableHead>
+                          <TableHead className="hidden md:table-cell">Need By</TableHead>
+                          <TableHead className="text-right">Gross</TableHead>
+                          <TableHead className="text-right hidden sm:table-cell">On Hand</TableHead>
+                          <TableHead className="text-right hidden sm:table-cell">Incoming</TableHead>
+                          <TableHead className="text-right hidden lg:table-cell">WO Supply</TableHead>
+                          <TableHead className="text-right">Net</TableHead>
+                          <TableHead>Suggestion</TableHead>
+                          <TableHead className="hidden xl:table-cell">Pegging</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {run.lines.map((l) => {
+                          const selectable = !l.createdDocNo && l.netQty > 0 && l.suggestion !== 'NONE'
+                          return (
+                            <TableRow key={l.id} className={cn(!selectable && 'opacity-60')}>
+                              <TableCell>
+                                <input
+                                  type="checkbox"
+                                  className="size-4 accent-primary"
+                                  aria-label={`Select ${l.item.name}`}
+                                  disabled={!selectable}
+                                  checked={!!picked[l.id]}
+                                  onChange={() => toggle(l.id)}
+                                />
+                              </TableCell>
+                              <TableCell>
+                                <span className="block max-w-48 truncate font-medium">{l.item.name}</span>
+                                <span className="block text-xs text-muted-foreground tabular-nums">{l.item.code} · {l.item.uom}</span>
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums">{l.level}</TableCell>
+                              <TableCell className="hidden whitespace-nowrap tabular-nums md:table-cell">{dateStr(l.needBy)}</TableCell>
+                              <TableCell className="text-right tabular-nums">{qtyFmt(l.grossQty)}</TableCell>
+                              <TableCell className="hidden text-right tabular-nums sm:table-cell">{qtyFmt(l.onHandQty)}</TableCell>
+                              <TableCell className="hidden text-right tabular-nums sm:table-cell">{l.incomingQty > 0 ? qtyFmt(l.incomingQty) : '—'}</TableCell>
+                              <TableCell className="hidden text-right tabular-nums lg:table-cell">{l.woSupplyQty > 0 ? qtyFmt(l.woSupplyQty) : '—'}</TableCell>
+                              <TableCell className={cn('text-right font-semibold tabular-nums', l.netQty > 0 && 'text-destructive')}>
+                                {l.netQty > 0 ? qtyFmt(l.netQty) : '—'}
+                              </TableCell>
+                              <TableCell>
+                                <SuggestionBadge line={l} />
+                              </TableCell>
+                              <TableCell className="hidden max-w-56 xl:table-cell">
+                                <span className="block truncate text-xs text-muted-foreground" title={(l.pegging ?? '').split('\n').join(' · ')}>
+                                  {(l.pegging ?? '').split('\n')[0] ?? '—'}
+                                </span>
+                              </TableCell>
+                            </TableRow>
+                          )
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {run.allowDocuments ? (
+                <Card className="p-4">
+                  <div className="flex flex-wrap items-end gap-2">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">Project for planned work orders</Label>
+                      <Select value={projectId || undefined} onValueChange={setProjectId}>
+                        <SelectTrigger className="h-11 data-[size=default]:h-11 w-64">
+                          <SelectValue placeholder={selectedMake.length ? 'Select project…' : 'Not needed for buy lines'} />
+                        </SelectTrigger>
+                        <SelectContent className="max-h-72">
+                          {activeProjectList.map((p) => (
+                            <SelectItem key={p.id} value={p.id}>
+                              {p.projectNo} — {p.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {selectedLines.length} selected · {selectedMake.length} make · {selectedBuy.length} buy
+                    </div>
+                    <div className="ml-auto flex gap-2">
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button variant="ghost" className="h-11 text-muted-foreground" disabled={busy}>
+                            Close plan
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Close {run.runNo}?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              Closing retires this snapshot. Documents already created from it stay as they are — nothing is cancelled.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel className="h-11">Keep it open</AlertDialogCancel>
+                            <AlertDialogAction onClick={(e) => { e.preventDefault(); void closeRun() }} className="h-11">
+                              Close plan
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                      <Button onClick={openDocuments} disabled={busy || selectedLines.length === 0} className="h-11 gap-2">
+                        {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <BadgeCheck className="size-4" aria-hidden />}
+                        Create documents
+                      </Button>
+                    </div>
+                  </div>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Buy lines merge into one DRAFT purchase requisition (submit + approve it in Procurement). Make lines become
+                    OPEN work orders with the planned quantity and need-by date.
+                  </p>
+                </Card>
+              ) : null}
+            </>
+          )}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function SuggestionBadge({ line }: { line: MrpLineRow }) {
+  if (line.createdDocNo) {
+    return (
+      <Badge variant="outline" className="gap-1 border-emerald-600/40 text-emerald-700 dark:text-emerald-400">
+        <CheckCircle2 className="size-3" aria-hidden /> {line.createdDocNo}
+      </Badge>
+    )
+  }
+  if (line.suggestion === 'MAKE') return <Badge variant="secondary">MAKE</Badge>
+  if (line.suggestion === 'BUY') return <Badge variant="default">BUY</Badge>
+  return <Badge variant="outline">NONE</Badge>
 }
 
 // ===========================================================================
@@ -1087,14 +1451,23 @@ function BomsTab({ onChanged }: { onChanged?: () => void }) {
   const [createOpen, setCreateOpen] = useState(false)
   const [viewBom, setViewBom] = useState<Bom | null>(null)
   const [woFromBom, setWoFromBom] = useState<Bom | null>(null)
+  const [reviseFrom, setReviseFrom] = useState<Bom | null>(null)
+  const [statusFilter, setStatusFilter] = useState('live')
   const [busy, setBusy] = useState(false)
   const rows = list.data ?? []
+
+  const liveRows = rows.filter((b) => b.status !== 'SUPERSEDED' && b.status !== 'CANCELLED')
+  const visibleRows = statusFilter === 'all' ? rows : statusFilter === 'live' ? liveRows : rows.filter((b) => b.status === statusFilter)
 
   const approve = async (b: Bom) => {
     setBusy(true)
     try {
-      await apiPost(`/api/manufacturing/boms/${b.id}/actions`, { action: 'approve' })
-      toast.success(`${b.bomNo} approved`, { description: 'Project estimated cost recalculated.' })
+      const res = await apiPost<Bom & { supersededBomNo?: string | null }>(`/api/manufacturing/boms/${b.id}/actions`, { action: 'approve' })
+      toast.success(`${b.bomNo} rev ${b.revision} approved`, {
+        description: res.supersededBomNo
+          ? `${res.supersededBomNo} was superseded — project cost recalculated, MRP now explodes this revision.`
+          : 'Project estimated cost recalculated — MRP will explode this revision.',
+      })
       list.reload()
       onChanged?.()
     } catch (e) {
@@ -1122,11 +1495,27 @@ function BomsTab({ onChanged }: { onChanged?: () => void }) {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-muted-foreground">
-          {rows.length} BOM{rows.length === 1 ? '' : 's'} — approve a BOM to unlock work-order generation.
+          {liveRows.length} live row{liveRows.length === 1 ? '' : 's'} · {rows.length} total — approve to unlock work orders; an
+          approved revision is immutable, revise it to change the design.
         </p>
-        <Button onClick={() => setCreateOpen(true)} className="h-11 shrink-0 gap-2">
-          <Plus className="size-4" aria-hidden /> New BOM
-        </Button>
+        <div className="flex items-center gap-2">
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="h-11 data-[size=default]:h-11 w-40" aria-label="Filter BOM status">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="live">Live only</SelectItem>
+              <SelectItem value="all">All revisions</SelectItem>
+              <SelectItem value="DRAFT">Drafts</SelectItem>
+              <SelectItem value="APPROVED">Approved</SelectItem>
+              <SelectItem value="SUPERSEDED">Superseded</SelectItem>
+              <SelectItem value="CANCELLED">Cancelled</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button onClick={() => setCreateOpen(true)} className="h-11 shrink-0 gap-2">
+            <Plus className="size-4" aria-hidden /> New BOM
+          </Button>
+        </div>
       </div>
 
       <Card className="p-0">
@@ -1137,9 +1526,9 @@ function BomsTab({ onChanged }: { onChanged?: () => void }) {
             <div className="p-6">
               <ErrorState error={list.error} onRetry={() => list.reload()} entity="BOMs" />
             </div>
-          ) : rows.length === 0 ? (
+          ) : visibleRows.length === 0 ? (
             <div className="p-6">
-              <EmptyState title="No BOMs yet" hint="Pick a project and list the materials it needs." icon={PackageSearch} />
+              <EmptyState title="No BOMs yet" hint="Pick a project, choose the output item it makes, then list the materials." icon={PackageSearch} />
             </div>
           ) : (
             <div className="max-h-[62dvh] overflow-auto erp-scroll">
@@ -1147,8 +1536,8 @@ function BomsTab({ onChanged }: { onChanged?: () => void }) {
                 <TableHeader className="sticky top-0 z-10 bg-card">
                   <TableRow>
                     <TableHead>BOM No</TableHead>
+                    <TableHead>Output Item</TableHead>
                     <TableHead>Project</TableHead>
-                    <TableHead>Product / Assembly</TableHead>
                     <TableHead className="text-right">Lines</TableHead>
                     <TableHead className="text-right hidden sm:table-cell">Est Cost</TableHead>
                     <TableHead className="hidden md:table-cell">Stock Check</TableHead>
@@ -1157,17 +1546,29 @@ function BomsTab({ onChanged }: { onChanged?: () => void }) {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {rows.map((b) => {
+                  {visibleRows.map((b) => {
                     const shortages = b.items.filter((i) => i.shortage > 0)
                     return (
                       <TableRow key={b.id} className="cursor-pointer" onClick={() => setViewBom(b)}>
-                        <TableCell className="font-medium tabular-nums">{b.bomNo}</TableCell>
+                        <TableCell>
+                          <span className="block font-medium tabular-nums">{b.bomNo}</span>
+                          <Badge variant="outline" className="mt-0.5 tabular-nums">rev {b.revision}</Badge>
+                        </TableCell>
+                        <TableCell>
+                          {b.item ? (
+                            <>
+                              <span className="block max-w-40 truncate">{b.item.name}</span>
+                              <span className="block text-xs text-muted-foreground tabular-nums">{b.item.code}</span>
+                            </>
+                          ) : (
+                            <Badge variant="destructive" className="gap-1">
+                              <TriangleAlertIcon /> no output item
+                            </Badge>
+                          )}
+                        </TableCell>
                         <TableCell>
                           <span className="block max-w-36 truncate tabular-nums">{b.project?.projectNo}</span>
                           <span className="block max-w-36 truncate text-xs text-muted-foreground">{b.project?.name}</span>
-                        </TableCell>
-                        <TableCell>
-                          <span className="block max-w-44 truncate">{b.productName}</span>
                         </TableCell>
                         <TableCell className="text-right tabular-nums">{b.items.length}</TableCell>
                         <TableCell className="text-right hidden sm:table-cell"><Money value={b.totalEstCost} plain /></TableCell>
@@ -1182,7 +1583,15 @@ function BomsTab({ onChanged }: { onChanged?: () => void }) {
                             </Badge>
                           )}
                         </TableCell>
-                        <TableCell><StatusBadge status={b.status} /></TableCell>
+                        <TableCell>
+                          <StatusBadge status={b.status} />
+                          {b.supersededBy ? (
+                            <span className="mt-0.5 block text-[10px] text-muted-foreground">→ {b.supersededBy.bomNo}</span>
+                          ) : null}
+                          {b.supersedes ? (
+                            <span className="mt-0.5 block text-[10px] text-muted-foreground">from rev {b.supersedes.revision}</span>
+                          ) : null}
+                        </TableCell>
                         <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                           <div className="flex justify-end gap-1">
                             {b.status === 'DRAFT' ? (
@@ -1191,11 +1600,16 @@ function BomsTab({ onChanged }: { onChanged?: () => void }) {
                               </Button>
                             ) : null}
                             {b.status === 'APPROVED' ? (
-                              <Button variant="outline" size="sm" className="h-9 gap-1" onClick={() => setWoFromBom(b)}>
-                                <ClipboardList className="size-3.5" aria-hidden /> Work Order
-                              </Button>
+                              <>
+                                <Button variant="outline" size="sm" className="h-9 gap-1" onClick={() => setWoFromBom(b)}>
+                                  <ClipboardList className="size-3.5" aria-hidden /> Work Order
+                                </Button>
+                                <Button variant="outline" size="sm" className="h-9 gap-1" onClick={() => setReviseFrom(b)}>
+                                  <Pencil className="size-3.5" aria-hidden /> Revise
+                                </Button>
+                              </>
                             ) : null}
-                            {b.status !== 'CANCELLED' ? (
+                            {b.status !== 'CANCELLED' && b.status !== 'SUPERSEDED' ? (
                               <AlertDialog>
                                 <AlertDialogTrigger asChild>
                                   <Button variant="ghost" size="sm" className="h-9 gap-1 text-destructive hover:text-destructive" disabled={busy}>
@@ -1204,9 +1618,10 @@ function BomsTab({ onChanged }: { onChanged?: () => void }) {
                                 </AlertDialogTrigger>
                                 <AlertDialogContent>
                                   <AlertDialogHeader>
-                                    <AlertDialogTitle>Cancel {b.bomNo}?</AlertDialogTitle>
+                                    <AlertDialogTitle>Cancel {b.bomNo} rev {b.revision}?</AlertDialogTitle>
                                     <AlertDialogDescription>
-                                      The BOM will be voided and its estimate removed from the project cost. Active work orders generated from it must be cancelled first. This cannot be undone.
+                                      The BOM will be voided and its estimate removed from the project cost. Active work orders generated
+                                      from it must be cancelled first. This cannot be undone — to change an approved design, revise it instead.
                                     </AlertDialogDescription>
                                   </AlertDialogHeader>
                                   <AlertDialogFooter>
@@ -1245,7 +1660,79 @@ function BomsTab({ onChanged }: { onChanged?: () => void }) {
       {woFromBom ? (
         <GenerateWoDialog bom={woFromBom} open={!!woFromBom} onOpenChange={(o) => !o && setWoFromBom(null)} onCreated={() => { setView('manufacturing'); onChanged?.() }} />
       ) : null}
+      {reviseFrom ? (
+        <ReviseBomDialog
+          bom={reviseFrom}
+          open={!!reviseFrom}
+          onOpenChange={(o) => !o && setReviseFrom(null)}
+          onDone={() => { setView('manufacturing'); list.reload(); onChanged?.() }}
+        />
+      ) : null}
     </div>
+  )
+}
+
+function TriangleAlertIcon() {
+  return <XCircle className="size-3" aria-hidden />
+}
+
+// ---------- revise an approved BOM (new DRAFT revision) ----------
+
+function ReviseBomDialog({ bom, open, onOpenChange, onDone }: { bom: Bom; open: boolean; onOpenChange: (o: boolean) => void; onDone: () => void }) {
+  const [notes, setNotes] = useState('')
+  const [effectiveFrom, setEffectiveFrom] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      const rev = await apiPost<Bom>(`/api/manufacturing/boms/${bom.id}/actions`, {
+        action: 'revise',
+        notes: notes.trim() || undefined,
+        effectiveFrom: effectiveFrom || undefined,
+      })
+      toast.success(`${rev.bomNo} rev ${rev.revision} created (DRAFT)`, {
+        description: 'Edit the lines, then approve it — approval supersedes the current revision.',
+      })
+      onDone()
+      onOpenChange(false)
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Revise {bom.bomNo} (rev {bom.revision})</DialogTitle>
+          <DialogDescription>
+            Creates revision {bom.revision + 1} as a DRAFT copy. The current approved revision stays live and keep producing until
+            you approve the new one — then it is superseded automatically. Approved BOMs are never edited in place.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="rev-eff">Effective From</Label>
+            <Input id="rev-eff" type="date" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} className="h-11" />
+            <p className="text-xs text-muted-foreground">Optional. Leave blank to use the approval date.</p>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="rev-notes">Change reason (ECO)</Label>
+            <Textarea id="rev-notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. 8mm gusset instead of 6mm, per customer drawing B" className="min-h-16" />
+          </div>
+        </div>
+        <DialogFooter className="gap-2 sm:flex-row">
+          <Button variant="outline" onClick={() => onOpenChange(false)} className="h-11">Cancel</Button>
+          <Button onClick={save} disabled={saving} className="h-11 min-w-32">
+            {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Pencil className="size-4" aria-hidden />}
+            Create revision
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -1286,8 +1773,10 @@ function NewBomDialog({
   const activeProjects = (projects.data ?? []).filter((p) => p.status === 'PENDING' || p.status === 'RUNNING')
 
   const [pid, setPid] = useState(projectId ?? '')
+  const [outputItemId, setOutputItemId] = useState('')
   const [productName, setProductName] = useState('')
   const [drawingRef, setDrawingRef] = useState('')
+  const [effectiveFrom, setEffectiveFrom] = useState('')
   const [notes, setNotes] = useState('')
   const [rows, setRows] = useState<BomDraftRow[]>([emptyBomRow()])
   const [saving, setSaving] = useState(false)
@@ -1296,6 +1785,10 @@ function NewBomDialog({
     setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)))
 
   const itemMap = useMemo(() => new Map(masters.items.map((i) => [i.id, i])), [masters.items])
+  // The output item is what the BOM makes (FG / sub-assembly). Any active,
+  // non-service catalog item can be made, so the picker is not narrowed to
+  // stock items — fabricated assemblies are often tracked as FG items.
+  const outputItems = masters.items.filter((i) => i.active && !i.isService)
 
   const validRows = rows.filter((r) => r.itemId && num(r.qty) > 0)
   const totalEst = validRows.reduce((s, r) => {
@@ -1306,14 +1799,18 @@ function NewBomDialog({
 
   const save = async () => {
     if (!pid) return toast.error('Pick the project')
+    if (!outputItemId) return toast.error('Pick the output item this BOM makes')
+    if (validRows.some((r) => r.itemId === outputItemId)) return toast.error('The output item cannot also be a component of its own BOM')
     if (!productName.trim()) return toast.error('Product / assembly name is required')
     if (validRows.length === 0) return toast.error('Add at least one material line with quantity')
     setSaving(true)
     try {
       const res = await apiPost<Bom>('/api/manufacturing/boms', {
         projectId: pid,
+        itemId: outputItemId,
         productName: productName.trim(),
         drawingRef: drawingRef.trim() || undefined,
+        effectiveFrom: effectiveFrom || undefined,
         notes: notes.trim() || undefined,
         lines: validRows.map((r) => {
           const it = itemMap.get(r.itemId)!
@@ -1336,7 +1833,7 @@ function NewBomDialog({
       })
       onApproved()
       onOpenChange(false)
-      setProductName(''); setDrawingRef(''); setNotes('')
+      setProductName(''); setDrawingRef(''); setNotes(''); setOutputItemId(''); setEffectiveFrom('')
       setRows([emptyBomRow()])
     } catch (e) {
       toastError(e)
@@ -1374,13 +1871,41 @@ function NewBomDialog({
                 </Select>
               </div>
             ) : null}
-            <div className={`space-y-1.5 ${projectId ? 'sm:col-span-2' : ''}`}>
+            <div className={`space-y-1.5 ${projectId ? 'sm:col-span-2' : 'sm:col-span-2'}`}>
+              <Label>Output Item (what this BOM makes)</Label>
+              <Select
+                value={outputItemId || undefined}
+                onValueChange={(v) => {
+                  setOutputItemId(v)
+                  if (!productName.trim()) setProductName(itemMap.get(v)?.name ?? '')
+                }}
+              >
+                <SelectTrigger className="h-11 data-[size=default]:h-11 w-full">
+                  <SelectValue placeholder="Select finished item…" />
+                </SelectTrigger>
+                <SelectContent className="max-h-64">
+                  {outputItems.map((i) => (
+                    <SelectItem key={i.id} value={i.id}>
+                      {i.code} — {i.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                MRP explodes sales-order demand through this link. A BOM without an output item cannot be approved.
+              </p>
+            </div>
+            <div className="space-y-1.5">
               <Label htmlFor="bom-product">Product / Assembly Name</Label>
               <Input id="bom-product" value={productName} onChange={(e) => setProductName(e.target.value)} placeholder="e.g. Canopy Frame — Level 1" className="h-11" />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="bom-dwg">Drawing Reference</Label>
               <Input id="bom-dwg" value={drawingRef} onChange={(e) => setDrawingRef(e.target.value)} placeholder="Optional" className="h-11" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="bom-eff">Effective From</Label>
+              <Input id="bom-eff" type="date" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} className="h-11" />
             </div>
           </div>
 
@@ -1551,13 +2076,21 @@ function NewBomDialog({
 // ---------- BOM lines viewer (with MRP stock check) ----------
 
 function BomLinesDialog({ bom, open, onOpenChange }: { bom: Bom; open: boolean; onOpenChange: (o: boolean) => void }) {
+  const [usedItem, setUsedItem] = useState<{ id: string; label: string } | null>(null)
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[92dvh] flex-col overflow-hidden sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>{bom.bomNo} — {bom.productName}</DialogTitle>
+          <DialogTitle>
+            {bom.bomNo} rev {bom.revision} — {bom.productName}
+          </DialogTitle>
           <DialogDescription>
-            {bom.project?.projectNo} · {bom.items.length} line(s) · gross = qty + wastage. Stock check against current inventory.
+            {bom.project?.projectNo} · makes {bom.item ? `${bom.item.code} (${bom.item.name})` : 'an unlinked item'} ·{' '}
+            {bom.items.length} line(s) · gross = qty + wastage. Stock check against current inventory.
+            {bom.effectiveFrom ? ` Effective ${dateStr(bom.effectiveFrom)}${bom.effectiveTo ? ` → ${dateStr(bom.effectiveTo)}` : ' → open'}.` : ''}
+            {bom.supersedes ? ` Supersedes ${bom.supersedes.bomNo} rev ${bom.supersedes.revision}.` : ''}
+            {bom.supersededBy ? ` Superseded by ${bom.supersededBy.bomNo} rev ${bom.supersededBy.revision}.` : ''}
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-auto erp-scroll-y">
@@ -1576,7 +2109,14 @@ function BomLinesDialog({ bom, open, onOpenChange }: { bom: Bom; open: boolean; 
               {bom.items.map((i) => (
                 <TableRow key={i.id}>
                   <TableCell>
-                    <span className="block max-w-44 truncate">{i.item.name}</span>
+                    <button
+                      type="button"
+                      className="block max-w-44 truncate text-left hover:underline focus-visible:underline"
+                      title="Show where this material is used"
+                      onClick={() => setUsedItem({ id: i.itemId, label: `${i.item.code} — ${i.item.name}` })}
+                    >
+                      {i.item.name}
+                    </button>
                     <span className="block text-xs tabular-nums text-muted-foreground">{i.item.code}</span>
                   </TableCell>
                   <TableCell className="hidden sm:table-cell">
@@ -1615,6 +2155,68 @@ function BomLinesDialog({ bom, open, onOpenChange }: { bom: Bom; open: boolean; 
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    {usedItem ? (
+      <WhereUsedDialog itemId={usedItem.id} label={usedItem.label} open={!!usedItem} onOpenChange={(o) => !o && setUsedItem(null)} />
+    ) : null}
+    </>
+  )
+}
+
+// ---------- where-used / impact review ----------
+
+function WhereUsedDialog({ itemId, label, open, onOpenChange }: { itemId: string; label: string; open: boolean; onOpenChange: (o: boolean) => void }) {
+  const res = useApi<BomWhereUsed | null>(open ? `/api/manufacturing/boms/where-used?itemId=${itemId}` : null)
+  const rows = res.data?.usedIn ?? []
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[88dvh] flex-col overflow-hidden sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Where used — {label}</DialogTitle>
+          <DialogDescription>
+            Every live BOM revision that consumes this item. Check this before changing a component: an approved revision that is
+            already consuming it must be superseded, not edited.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="min-h-0 flex-1 overflow-auto erp-scroll-y">
+          {res.loading ? (
+            <TableSkeleton rows={4} cols={4} />
+          ) : res.error ? (
+            <ErrorState error={res.error} onRetry={() => res.reload()} entity="where-used" />
+          ) : rows.length === 0 ? (
+            <EmptyState title="Not used in any BOM" hint="This item is only consumed directly (task issue) or not consumed at all." icon={PackageSearch} />
+          ) : (
+            <Table>
+              <TableHeader className="sticky top-0 z-10 bg-card">
+                <TableRow>
+                  <TableHead>BOM</TableHead>
+                  <TableHead>Makes</TableHead>
+                  <TableHead className="text-right">Qty / unit</TableHead>
+                  <TableHead className="text-right">Work Orders</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map((r) => (
+                  <TableRow key={r.bomId}>
+                    <TableCell>
+                      <span className="block font-medium tabular-nums">{r.bomNo}</span>
+                      <span className="block text-xs text-muted-foreground">rev {r.revision} · {r.project?.projectNo}</span>
+                    </TableCell>
+                    <TableCell className="max-w-40 truncate">{r.outputItem ? `${r.outputItem.code}` : '—'}</TableCell>
+                    <TableCell className="text-right tabular-nums">{qtyFmt(r.qtyPer)} <span className="text-xs text-muted-foreground">{r.uom}</span></TableCell>
+                    <TableCell className="text-right tabular-nums">{r.workOrders}</TableCell>
+                    <TableCell><StatusBadge status={r.status} /></TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} className="h-11">Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -1624,22 +2226,26 @@ function GenerateWoDialog({ bom, open, onOpenChange, onCreated }: { bom: Bom; op
   const [priority, setPriority] = useState<string>('NORMAL')
   const [startDate, setStartDate] = useState(todayISO())
   const [endDate, setEndDate] = useState('')
+  const [outputQty, setOutputQty] = useState('1')
   const [notes, setNotes] = useState('')
   const [saving, setSaving] = useState(false)
+  const batch = num(outputQty) > 0 ? num(outputQty) : 1
 
   const save = async () => {
+    if (!(num(outputQty) > 0)) return toast.error('Output quantity must be greater than zero')
     setSaving(true)
     try {
       const res = await apiPost<WorkOrder>('/api/manufacturing/work-orders', {
         projectId: bom.projectId,
         bomId: bom.id,
+        outputQty: batch,
         priority,
         startDate: startDate || undefined,
         endDate: endDate || undefined,
         notes: notes.trim() || undefined,
       })
       toast.success(`${res.woNo} generated`, {
-        description: `${bom.items.length} line(s) grossed with wastage — now add operation tasks (cutting → … → finishing).`,
+        description: `${bom.items.length} line(s) grossed with wastage for ${qtyFmt(batch)} × ${bom.item?.code ?? bom.productName} — now add operation tasks (cutting → … → finishing).`,
       })
       onCreated()
       onOpenChange(false)
@@ -1656,7 +2262,7 @@ function GenerateWoDialog({ bom, open, onOpenChange, onCreated }: { bom: Bom; op
         <DialogHeader>
           <DialogTitle>Generate Work Order from {bom.bomNo}</DialogTitle>
           <DialogDescription>
-            Lines are pulled from the approved BOM with wastage gross-up. Schedule and priority below.
+            Lines are pulled from the approved BOM rev {bom.revision} with wastage gross-up, scaled by the batch quantity. Schedule and priority below.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
@@ -1674,7 +2280,7 @@ function GenerateWoDialog({ bom, open, onOpenChange, onCreated }: { bom: Bom; op
                   <TableRow key={i.id}>
                     <TableCell className="max-w-44 truncate">{i.item.name}</TableCell>
                     <TableCell className="text-right tabular-nums">{qtyFmt(i.qty)}</TableCell>
-                    <TableCell className="text-right font-medium tabular-nums">{qtyFmt(i.grossQty)} <span className="text-xs text-muted-foreground">{i.uom}</span></TableCell>
+                    <TableCell className="text-right font-medium tabular-nums">{qtyFmt(r2(i.grossQty * batch))} <span className="text-xs text-muted-foreground">{i.uom}</span></TableCell>
                   </TableRow>
                 ))}
                 {bom.items.length > 6 ? (
@@ -1687,7 +2293,20 @@ function GenerateWoDialog({ bom, open, onOpenChange, onCreated }: { bom: Bom; op
               </TableBody>
             </Table>
           </div>
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid gap-4 sm:grid-cols-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="wo-qty">Output Qty ({bom.item?.uom ?? 'units'})</Label>
+              <Input
+                id="wo-qty"
+                type="number"
+                inputMode="decimal"
+                min="0"
+                step="any"
+                value={outputQty}
+                onChange={(e) => setOutputQty(e.target.value)}
+                className="h-11 text-right tabular-nums"
+              />
+            </div>
             <div className="space-y-1.5">
               <Label>Priority</Label>
               <Select value={priority} onValueChange={setPriority}>

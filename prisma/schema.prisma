@@ -112,6 +112,7 @@ model Company {
   serviceCalls              ServiceCall[]
   rfqs                      Rfq[]
   supplierQuotes            SupplierQuote[]
+  mrpRuns                   MrpRun[]
 }
 
 // ---------- Organization logins (SaaS) ----------
@@ -295,6 +296,9 @@ model Item {
   adjustmentLines    StockAdjustmentLine[]
   serviceCalls       ServiceCall[]
   rfqLines           RfqLine[]
+  outputBoms         Bom[]             @relation("BomOutput")
+  woOutputs          WorkOrder[]       @relation("WorkOrderOutput")
+  mrpLines           MrpLine[]
 
   @@unique([companyId, code])
 }
@@ -690,7 +694,20 @@ model Bom {
   project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
   productName String // product / assembly name
   drawingRef  String?
-  status      String    @default("DRAFT") // DRAFT | APPROVED | CANCELLED
+  // Output (made) item. Required on every new BOM; null only on legacy rows
+  // created before item linkage existed (backfill checklist, see
+  // docs/MRP_AND_BOM_REVISIONS.md). MRP explodes demand through this link.
+  itemId       String?
+  item         Item?      @relation("BomOutput", fields: [itemId], references: [id])
+  // Immutable revision chain: a revision is never edited after approval —
+  // changing an approved BOM means creating revision N+1 (see reviseBom()).
+  revision     Int       @default(1)
+  effectiveFrom DateTime?
+  effectiveTo   DateTime?
+  supersedesId  String?   @unique
+  supersedes    Bom?      @relation("BomRevision", fields: [supersedesId], references: [id])
+  supersededBy  Bom?      @relation("BomRevision")
+  status      String    @default("DRAFT") // DRAFT | APPROVED | SUPERSEDED | CANCELLED
   approvedAt  DateTime?
   notes       String?   @db.Text
   createdAt   DateTime  @default(now())
@@ -699,7 +716,9 @@ model Bom {
   workOrders WorkOrder[]
 
   @@unique([companyId, bomNo])
+  @@unique([companyId, itemId, revision])
   @@index([projectId])
+  @@index([companyId, itemId, status])
 }
 
 model BomItem {
@@ -723,6 +742,61 @@ model BomItem {
   woLines WorkOrderLine[]
 }
 
+// ---------- Material Requirements Planning ----------
+
+/// A saved MRP snapshot: independent demand (approved sales orders) exploded
+/// through the effective BOM of each output item, netted against own stock,
+/// open work-order supply, approved unreceived POs and approved requisitions.
+/// Lines are a plan, never a posting: only an explicit user action turns a
+/// suggestion into a DRAFT purchase requisition or work order.
+model MrpRun {
+  id               String   @id @default(cuid())
+  companyId        String
+  company          Company  @relation(fields: [companyId], references: [id])
+  runNo            String // MRP-2526-001 (FY-aware)
+  asOf             DateTime
+  horizonDays      Int      @default(30)
+  status           String   @default("DRAFT") // DRAFT | APPROVED | CLOSED
+  salesOrderCount  Int      @default(0)
+  workOrderCount   Int      @default(0)
+  requirementCount Int      @default(0)
+  suggestionCount  Int      @default(0)
+  shortageItems    Int      @default(0)
+  createdBy        String?
+  approvedBy       String?
+  approvedAt       DateTime?
+  notes            String?  @db.Text
+  createdAt        DateTime @default(now())
+
+  lines MrpLine[]
+
+  @@unique([companyId, runNo])
+  @@index([companyId, status, asOf])
+}
+
+model MrpLine {
+  id           String   @id @default(cuid())
+  runId        String
+  run          MrpRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  itemId       String
+  item         Item     @relation(fields: [itemId], references: [id])
+  level        Int      @default(0) // 0 = independent demand, 1..n = exploded component
+  needBy       DateTime
+  grossQty     Float    @default(0)
+  onHandQty    Float    @default(0)
+  incomingQty  Float    @default(0) // approved unreceived POs + approved, un-ordered PRs
+  woSupplyQty  Float    @default(0) // open work orders producing this item
+  netQty       Float    @default(0)
+  suggestion   String   @default("NONE") // BUY | MAKE | NONE
+  bomNo        String? // effective BOM used to explode this line (MAKE lines)
+  pegging      String?  @db.Text // human-readable demand trail
+  createdDocType String? // PR | WO
+  createdDocNo   String?
+
+  @@index([runId, level, itemId])
+  @@index([itemId])
+}
+
 model WorkOrder {
   id          String    @id @default(cuid())
   companyId   String    @default("") // filled by the tenant extension; "" fails the FK
@@ -732,6 +806,12 @@ model WorkOrder {
   project     Project   @relation(fields: [projectId], references: [id])
   bomId       String?
   bom         Bom?      @relation(fields: [bomId], references: [id])
+  // What this order produces and how much. bomId supplies the recipe; these
+  // columns make the *quantity* explicit so MRP can net open work orders as
+  // supply instead of assuming "one BOM batch".
+  outputItemId String?
+  outputItem   Item?     @relation("WorkOrderOutput", fields: [outputItemId], references: [id])
+  outputQty    Float     @default(1)
   date        DateTime
   startDate   DateTime?
   endDate     DateTime?

@@ -418,20 +418,57 @@ export interface BomItemRow {
   shortage: number
 }
 
+export interface BomRevisionRef {
+  id: string
+  bomNo: string
+  revision: number
+}
+
 export interface Bom {
   id: string
   bomNo: string
   projectId: string
   project: { id: string; projectNo: string; name: string; status: string }
+  /** Output item — what this BOM makes. MRP explodes demand through it. */
+  itemId: string | null
+  item: { id: string; code: string; name: string; uom: string } | null
+  /** Engineering revision of the output item; one APPROVED revision is live. */
+  revision: number
+  effectiveFrom: string | null
+  effectiveTo: string | null
+  supersedesId: string | null
+  supersedes: BomRevisionRef | null
+  supersededBy: BomRevisionRef | null
   productName: string
   drawingRef: string | null
-  status: string // DRAFT | APPROVED | CANCELLED
+  status: string // DRAFT | APPROVED | SUPERSEDED | CANCELLED
   approvedAt: string | null
   notes: string | null
   createdAt: string
   items: BomItemRow[]
   totalEstCost: number
   _count?: { workOrders: number }
+}
+
+export interface BomWhereUsedRow {
+  bomId: string
+  bomNo: string
+  revision: number
+  status: string
+  effectiveFrom: string | null
+  /** Gross quantity of this item consumed per BOM run (qty + wastage). */
+  qtyPer: number
+  uom: string
+  lines: number
+  /** Work orders already generated from this revision (impact review). */
+  workOrders: number
+  outputItem: { id: string; code: string; name: string } | null
+  project: { projectNo: string; name: string }
+}
+
+export interface BomWhereUsed {
+  item: { id: string; code: string; name: string; uom: string }
+  usedIn: BomWhereUsedRow[]
 }
 
 export interface WorkOrderLineRow {
@@ -476,7 +513,11 @@ export interface WorkOrder {
   projectId: string
   project: { id: string; projectNo: string; name: string; status: string }
   bomId: string | null
-  bom?: { id: string; bomNo: string; productName: string } | null
+  bom?: { id: string; bomNo: string; productName: string; revision?: number; itemId?: string | null } | null
+  /** What this order produces; defaulted from the BOM's output item. */
+  outputItemId?: string | null
+  outputItem?: { id: string; code: string; name: string; uom: string } | null
+  outputQty?: number
   date: string
   startDate: string | null
   endDate: string | null
@@ -543,6 +584,63 @@ export interface MaterialPlanReport {
   rows: MaterialPlanRow[]
   summary: { activeWorkOrders: number; materialItems: number; shortageItems: number; totalShortageQty: number; customerMaterialQty: number }
   ownershipRule: string
+}
+
+// ---------- MRP (multi-level, versioned BOM) ----------
+
+export type MrpSuggestion = 'BUY' | 'MAKE' | 'NONE'
+export type MrpRunStatus = 'DRAFT' | 'APPROVED' | 'CLOSED'
+
+export interface MrpRunSummary {
+  id: string
+  runNo: string
+  asOf: string
+  horizonDays: number
+  status: MrpRunStatus
+  salesOrderCount: number
+  workOrderCount: number
+  requirementCount: number
+  suggestionCount: number
+  shortageItems: number
+  createdBy: string | null
+  approvedBy: string | null
+  approvedAt: string | null
+  notes: string | null
+  createdAt: string
+  _count?: { lines: number }
+}
+
+export interface MrpLineRow {
+  id: string
+  runId: string
+  itemId: string
+  item: { id: string; code: string; name: string; uom: string; isStockItem: boolean }
+  level: number
+  needBy: string
+  grossQty: number
+  onHandQty: number
+  incomingQty: number
+  woSupplyQty: number
+  netQty: number
+  suggestion: MrpSuggestion
+  bomNo: string | null
+  /** Newline-separated demand pegging (sales order / work order references). */
+  pegging: string | null
+  createdDocType: string | null
+  createdDocNo: string | null
+}
+
+export interface MrpRunDetail extends MrpRunSummary {
+  lines: MrpLineRow[]
+  /** Warnings captured while planning (missing BOM, cycle, horizon cuts). */
+  warnings: string[]
+  allowDocuments: boolean
+}
+
+export interface MrpDocumentResult {
+  run: MrpRunSummary
+  requisition: { id: string; reqNo: string; grandTotal?: number } | null
+  workOrders: { id: string; woNo: string }[]
 }
 
 export const MANUFACTURING_OPERATIONS: { key: string; label: string }[] = [

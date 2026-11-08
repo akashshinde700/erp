@@ -7,8 +7,11 @@ import { listBoms, createBom } from '@/lib/manufacturing'
 export async function GET(req: Request) {
   try {
     await assertCompanyAccess()
-    const projectId = new URL(req.url).searchParams.get('projectId') ?? undefined
-    return ok(await listBoms(projectId || undefined))
+    const params = new URL(req.url).searchParams
+    const projectId = params.get('projectId') ?? undefined
+    const itemId = params.get('itemId') ?? undefined
+    const status = params.get('status') ?? undefined
+    return ok(await listBoms({ projectId: projectId || undefined, itemId: itemId || undefined, status: status || undefined }))
   } catch (e) {
     return handleError(e)
   }
@@ -30,8 +33,11 @@ const bomLineSchema = z.object({
 
 const bomSchema = z.object({
   projectId: z.string().min(1, 'Project is required'),
-  productName: z.string().min(1, 'Product / assembly name is required').max(160),
+  /** Output item — the link MRP explodes demand through. */
+  itemId: z.string().min(1, 'Output item is required'),
+  productName: z.string().max(160).optional(),
   drawingRef: z.string().max(80).optional().nullable(),
+  effectiveFrom: z.string().optional().nullable(),
   notes: z.string().max(1000).optional().nullable(),
   lines: z.array(bomLineSchema).min(1, 'Add at least one material line').max(200),
 })
@@ -41,7 +47,7 @@ export async function POST(req: Request) {
     const actor = await assertMutationAccess()
     const body = bomSchema.parse(await req.json())
     const bom = await createBom(body)
-    await logAudit('CREATE', 'Bom', bom.id, `${bom.bomNo} — ${bom.productName} (${body.lines.length} lines)`, actor?.email)
+    await logAudit('CREATE', 'Bom', bom.id, `${bom.bomNo} rev ${bom.revision} — ${bom.productName} for ${bom.item?.code ?? bom.itemId} (${body.lines.length} lines)`, actor?.email)
     return ok(bom)
   } catch (e) {
     return handleError(e)

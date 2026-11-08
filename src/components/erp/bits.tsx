@@ -29,6 +29,8 @@ const STATUS_VARIANT: Record<string, 'default' | 'secondary' | 'outline' | 'dest
   ASSIGNED: 'secondary',
   IN_PROGRESS: 'outline',
   DRAFT: 'outline',
+  SUPERSEDED: 'secondary',
+  CLOSED: 'secondary',
   CANCELLED: 'destructive',
 }
 

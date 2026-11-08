@@ -462,8 +462,12 @@ export interface BomLineInput {
 
 export interface BomInput {
   projectId: string
-  productName: string
+  /** Output (made) item. Required: this is the link MRP explodes demand through. */
+  itemId: string
+  /** Display name; defaults to the output item's name. */
+  productName?: string
   drawingRef?: string | null
+  effectiveFrom?: string | Date | null
   notes?: string | null
   lines: BomLineInput[]
 }
@@ -499,17 +503,60 @@ async function refreshProjectEstCost(tx: Tx, projectId: string) {
   return est
 }
 
-export async function listBoms(projectId?: string) {
+/** Date-only normalisation (engineering dates are calendar days, not instants). */
+const dayStart = (d: Date | string): Date => {
+  const dt = typeof d === 'string' ? new Date(d) : d
+  if (Number.isNaN(dt.getTime())) throw new BusinessError('Invalid date — use YYYY-MM-DD', 400)
+  return new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate()))
+}
+
+/** Shared validation for a BOM output item + its component lines. */
+async function validateBomLines(
+  tx: Tx,
+  outputItemId: string,
+  lines: BomLineInput[]
+): Promise<Map<string, { id: string; name: string; costRate: number; isService: boolean; isStockItem: boolean; active: boolean }>> {
+  if (!lines?.length) throw new BusinessError('BOM needs at least one material line')
+  const output = await tx.item.findUnique({ where: { id: outputItemId } })
+  if (!output) throw new BusinessError('Output item not found', 404)
+  if (!output.active) throw new BusinessError(`Output item ${output.name} is inactive`)
+  if (output.isService) throw new BusinessError('A service item cannot be manufactured — pick a stock item as the BOM output')
+
+  const items = await tx.item.findMany({ where: { id: { in: lines.map((l) => l.itemId) } } })
+  const itemMap = new Map(items.map((i) => [i.id, i]))
+  for (const l of lines) {
+    const it = itemMap.get(l.itemId)
+    if (!it) throw new BusinessError(`Item ${l.itemId} not found`, 404)
+    if (it.id === outputItemId) throw new BusinessError(`"${it.name}" is the BOM output — it cannot also be its own component`)
+    if (!(l.qty > 0)) throw new BusinessError(`Quantity must be positive for "${it.name}"`)
+    if ((l.wastagePct ?? 0) < 0 || (l.wastagePct ?? 0) > 50) throw new BusinessError(`Wastage % must be 0–50 for "${it.name}"`)
+    if ((l.rate ?? 0) < 0) throw new BusinessError(`Rate cannot be negative for "${it.name}"`)
+  }
+  return itemMap
+}
+
+export async function listBoms(filters?: { projectId?: string; itemId?: string; status?: string }) {
+  // Superseded/cancelled history is only loaded when the caller asks for it —
+  // the BOM workspace defaults to the live revisions.
+  const status = filters?.status
+  const where = {
+    ...(filters?.projectId ? { projectId: filters.projectId } : {}),
+    ...(filters?.itemId ? { itemId: filters.itemId } : {}),
+    ...(status && status !== 'ALL' ? { status } : {}),
+  }
   const rows = await db.bom.findMany({
-    where: projectId ? { projectId } : undefined,
-    orderBy: { createdAt: 'desc' },
+    where,
+    orderBy: [{ itemId: 'asc' }, { revision: 'desc' }, { createdAt: 'desc' }],
     include: {
       project: { select: { id: true, projectNo: true, name: true, status: true } },
+      item: { select: { id: true, code: true, name: true, uom: true } },
+      supersedes: { select: { id: true, bomNo: true, revision: true } },
+      supersededBy: { select: { id: true, bomNo: true, revision: true } },
       items: { include: { item: { select: { code: true, name: true, uom: true } } } },
       _count: { select: { workOrders: true } },
     },
   })
-  // Totals + MRP stock availability per line
+  // Totals + stock availability per line
   const tx = db as unknown as Tx
   return Promise.all(
     rows.map(async (b) => ({
@@ -528,32 +575,47 @@ export async function listBoms(projectId?: string) {
 
 export async function createBom(input: BomInput) {
   return db.$transaction(async (tx) => {
-    if (!input.lines?.length) throw new BusinessError('BOM needs at least one material line')
     const project = await tx.project.findUnique({ where: { id: input.projectId } })
     if (!project) throw new BusinessError('Project not found', 404)
     if (project.status === 'COMPLETED' || project.status === 'CANCELLED') {
       throw new BusinessError(`Project is ${project.status} — BOMs can only be added to active projects`)
     }
-    if (!input.productName?.trim()) throw new BusinessError('Product / assembly name is required')
+    if (!input.itemId) throw new BusinessError('Pick the output item this BOM makes')
+    const itemMap = await validateBomLines(tx, input.itemId, input.lines)
+    const output = await tx.item.findUnique({ where: { id: input.itemId } })
 
-    const items = await tx.item.findMany({ where: { id: { in: input.lines.map((l) => l.itemId) } } })
-    const itemMap = new Map(items.map((i) => [i.id, i]))
-    for (const l of input.lines) {
-      const it = itemMap.get(l.itemId)
-      if (!it) throw new BusinessError(`Item ${l.itemId} not found`, 404)
-      if (!(l.qty > 0)) throw new BusinessError(`Quantity must be positive for "${it.name}"`)
-      if ((l.wastagePct ?? 0) < 0 || (l.wastagePct ?? 0) > 50) throw new BusinessError(`Wastage % must be 0–50 for "${it.name}"`)
-      if ((l.rate ?? 0) < 0) throw new BusinessError(`Rate cannot be negative for "${it.name}"`)
+    // One live BOM per item. Replacing an approved BOM means a NEW revision
+    // (reviseBom), never editing the approved one in place.
+    const existing = await tx.bom.findMany({
+      where: { itemId: input.itemId, status: { not: 'CANCELLED' } },
+      select: { bomNo: true, revision: true, status: true },
+      orderBy: { revision: 'desc' },
+    })
+    if (existing.length) {
+      const head = existing[0]
+      throw new BusinessError(
+        `${head.bomNo} (rev ${head.revision}, ${head.status}) already exists for ${output?.name} — revise that BOM instead of creating a second one`,
+        409
+      )
     }
+    // Cancelled predecessors keep their revision numbers, so the chain stays readable.
+    const cancelled = await tx.bom.findFirst({
+      where: { itemId: input.itemId },
+      orderBy: { revision: 'desc' },
+      select: { revision: true },
+    })
 
     const date = new Date()
     const bomNo = await nextDocNo(tx, 'BOM', date)
-    const bom = await tx.bom.create({
+    return tx.bom.create({
       data: {
         bomNo,
         projectId: project.id,
-        productName: input.productName.trim(),
+        itemId: output!.id,
+        revision: (cancelled?.revision ?? 0) + 1,
+        productName: input.productName?.trim() || output!.name,
         drawingRef: input.drawingRef ?? null,
+        effectiveFrom: input.effectiveFrom ? dayStart(input.effectiveFrom) : dayStart(date),
         notes: input.notes ?? null,
         items: {
           create: input.lines.map((l) => ({
@@ -562,9 +624,8 @@ export async function createBom(input: BomInput) {
           })),
         },
       },
-      include: { items: true },
+      include: { items: true, item: true },
     })
-    return bom
   })
 }
 
@@ -572,18 +633,12 @@ export async function updateBom(id: string, input: Partial<BomInput> & { lines: 
   return db.$transaction(async (tx) => {
     const bom = await tx.bom.findUnique({ where: { id }, include: { items: true } })
     if (!bom) throw new BusinessError('BOM not found', 404)
-    if (bom.status !== 'DRAFT') throw new BusinessError('Only DRAFT BOMs can be edited')
-    if (!input.lines?.length) throw new BusinessError('BOM needs at least one material line')
-
-    const items = await tx.item.findMany({ where: { id: { in: input.lines.map((l) => l.itemId) } } })
-    const itemMap = new Map(items.map((i) => [i.id, i]))
-    for (const l of input.lines) {
-      const it = itemMap.get(l.itemId)
-      if (!it) throw new BusinessError(`Item ${l.itemId} not found`, 404)
-      if (!(l.qty > 0)) throw new BusinessError(`Quantity must be positive for "${it.name}"`)
-      if ((l.wastagePct ?? 0) < 0 || (l.wastagePct ?? 0) > 50) throw new BusinessError(`Wastage % must be 0–50 for "${it.name}"`)
-      if ((l.rate ?? 0) < 0) throw new BusinessError(`Rate cannot be negative for "${it.name}"`)
+    if (bom.status !== 'DRAFT') {
+      throw new BusinessError(`${bom.bomNo} is ${bom.status} — approved revisions are immutable; create a revision instead`)
     }
+    if (!input.lines?.length) throw new BusinessError('BOM needs at least one material line')
+    if (!bom.itemId) throw new BusinessError('This legacy BOM has no output item yet — link it before editing', 409)
+    const itemMap = await validateBomLines(tx, bom.itemId, input.lines)
 
     await tx.bomItem.deleteMany({ where: { bomId: id } })
     return tx.bom.update({
@@ -592,6 +647,7 @@ export async function updateBom(id: string, input: Partial<BomInput> & { lines: 
         productName: input.productName?.trim() || bom.productName,
         drawingRef: input.drawingRef ?? null,
         notes: input.notes ?? null,
+        ...(input.effectiveFrom ? { effectiveFrom: dayStart(input.effectiveFrom) } : {}),
         items: {
           create: input.lines.map((l) => ({
             ...computeBomLine(l, itemMap.get(l.itemId)!.costRate),
@@ -599,30 +655,118 @@ export async function updateBom(id: string, input: Partial<BomInput> & { lines: 
           })),
         },
       },
-      include: { items: true },
+      include: { items: true, item: true },
     })
   })
 }
 
-/** DRAFT → APPROVED. Approval recalculates the project's estimated cost.
- *  A BOM cannot be approved on a terminal project (COMPLETED/CANCELLED) —
- *  its estimate would never feed a work order. */
+/**
+ * Approved BOM → new DRAFT revision copying every component line.
+ * The approved revision stays untouched (immutable) until the draft is
+ * approved; only then does it become SUPERSEDED.
+ */
+export async function reviseBom(id: string, input?: { notes?: string | null; effectiveFrom?: string | Date | null }) {
+  return db.$transaction(async (tx) => {
+    const source = await tx.bom.findUnique({
+      where: { id },
+      include: { items: true, project: { select: { status: true } } },
+    })
+    if (!source) throw new BusinessError('BOM not found', 404)
+    if (source.status !== 'APPROVED') {
+      throw new BusinessError(`Only an APPROVED BOM can be revised (current: ${source.status})`)
+    }
+    if (!source.itemId) {
+      throw new BusinessError('This legacy BOM has no output item yet — link it before revising', 409)
+    }
+    if (source.project.status === 'COMPLETED' || source.project.status === 'CANCELLED') {
+      throw new BusinessError(`Project is ${source.project.status} — its BOMs can no longer change`)
+    }
+    const pending = await tx.bom.findFirst({
+      where: { itemId: source.itemId, status: 'DRAFT' },
+      select: { bomNo: true, revision: true },
+    })
+    if (pending) throw new BusinessError(`${pending.bomNo} (rev ${pending.revision}) is already a pending revision for this item`, 409)
+    const latest = await tx.bom.findFirst({
+      where: { itemId: source.itemId },
+      orderBy: { revision: 'desc' },
+      select: { revision: true },
+    })
+    const revision = Math.max(source.revision, latest?.revision ?? 0) + 1
+    const bomNo = await nextDocNo(tx, 'BOM', new Date())
+    return tx.bom.create({
+      data: {
+        bomNo,
+        projectId: source.projectId,
+        itemId: source.itemId,
+        revision,
+        supersedesId: source.id,
+        productName: source.productName,
+        drawingRef: source.drawingRef,
+        effectiveFrom: input?.effectiveFrom ? dayStart(input.effectiveFrom) : dayStart(new Date()),
+        notes: input?.notes ?? source.notes,
+        items: {
+          create: source.items.map((i) => ({
+            itemId: i.itemId,
+            grade: i.grade,
+            thickness: i.thickness,
+            length: i.length,
+            width: i.width,
+            qty: i.qty,
+            uom: i.uom,
+            wastagePct: i.wastagePct,
+            rate: i.rate,
+            estCost: i.estCost,
+            drawingRef: i.drawingRef,
+            remarks: i.remarks,
+          })),
+        },
+      },
+      include: { items: true, item: true, supersedes: { select: { id: true, bomNo: true, revision: true } } },
+    })
+  })
+}
+
+/** DRAFT → APPROVED. Supersedes the previously effective revision of the same item. */
 export async function approveBom(id: string) {
   return db.$transaction(async (tx) => {
     const bom = await tx.bom.findUnique({
       where: { id },
-      include: { items: { select: { estCost: true } }, project: { select: { status: true } } },
+      include: {
+        items: { select: { estCost: true } },
+        project: { select: { status: true } },
+        item: { select: { name: true } },
+      },
     })
     if (!bom) throw new BusinessError('BOM not found', 404)
     if (bom.status !== 'DRAFT') throw new BusinessError(`Only DRAFT BOMs can be approved (current: ${bom.status})`)
     if (bom.items.length === 0) throw new BusinessError('Cannot approve an empty BOM')
+    if (!bom.itemId) throw new BusinessError('Link the output item before approving this BOM')
     if (bom.project.status === 'COMPLETED' || bom.project.status === 'CANCELLED') {
       throw new BusinessError(`Project is ${bom.project.status} — its BOMs can no longer be approved`)
     }
+    const effectiveFrom = bom.effectiveFrom ?? dayStart(new Date())
+    if (bom.effectiveFrom && bom.effectiveFrom.getTime() > dayStart(new Date()).getTime()) {
+      throw new BusinessError('Effective date cannot be in the future — approve it from that date instead')
+    }
+
+    // Exactly one APPROVED revision per output item: retire the incumbent.
+    const incumbent = await tx.bom.findFirst({
+      where: { itemId: bom.itemId, status: 'APPROVED', id: { not: bom.id } },
+      select: { id: true, bomNo: true },
+    })
+    if (incumbent) {
+      await tx.bom.update({
+        where: { id: incumbent.id },
+        data: { status: 'SUPERSEDED', effectiveTo: effectiveFrom },
+      })
+    }
     const est = r2(bom.items.reduce((s, i) => s + i.estCost, 0))
-    const updated = await tx.bom.update({ where: { id }, data: { status: 'APPROVED', approvedAt: new Date() } })
+    const updated = await tx.bom.update({
+      where: { id },
+      data: { status: 'APPROVED', approvedAt: new Date(), effectiveFrom },
+    })
     await refreshProjectEstCost(tx, bom.projectId)
-    return { ...updated, estCost: est }
+    return { ...updated, estCost: est, supersededBomNo: incumbent?.bomNo ?? null }
   })
 }
 
@@ -634,12 +778,102 @@ export async function cancelBom(id: string) {
     })
     if (!bom) throw new BusinessError('BOM not found', 404)
     if (bom.status === 'CANCELLED') throw new BusinessError('BOM is already cancelled')
+    if (bom.status === 'SUPERSEDED') throw new BusinessError('Superseded revisions are history and cannot be cancelled')
     const activeWo = bom.workOrders.find((w) => w.status === 'OPEN' || w.status === 'IN_PROGRESS')
     if (activeWo) throw new BusinessError('An active work order was generated from this BOM — cancel it first')
     const updated = await tx.bom.update({ where: { id }, data: { status: 'CANCELLED' } })
     await refreshProjectEstCost(tx, bom.projectId)
     return updated
   })
+}
+
+/** Where-used: every live BOM that consumes this item, at any revision. */
+export async function bomWhereUsed(itemId: string) {
+  const item = await db.item.findUnique({ where: { id: itemId }, select: { id: true, code: true, name: true, uom: true } })
+  if (!item) throw new BusinessError('Item not found', 404)
+  const rows = await db.bom.findMany({
+    where: { status: { not: 'CANCELLED' }, items: { some: { itemId } } },
+    orderBy: [{ itemId: 'asc' }, { revision: 'desc' }],
+    include: {
+      item: { select: { id: true, code: true, name: true } },
+      project: { select: { projectNo: true, name: true } },
+      items: { where: { itemId }, select: { qty: true, wastagePct: true, uom: true, grade: true } },
+      _count: { select: { workOrders: true } },
+    },
+  })
+  return {
+    item,
+    usedIn: rows.map((b) => ({
+      bomId: b.id,
+      bomNo: b.bomNo,
+      revision: b.revision,
+      status: b.status,
+      outputItem: b.item,
+      project: b.project,
+      effectiveFrom: b.effectiveFrom,
+      qtyPer: r2(b.items.reduce((s, i) => s + i.qty * (1 + i.wastagePct / 100), 0)),
+      uom: b.items[0]?.uom ?? item.uom,
+      lines: b.items.length,
+      workOrders: b._count.workOrders,
+    })),
+  }
+}
+
+export interface EffectiveBomLine {
+  itemId: string
+  item: { id: string; code: string; name: string; uom: string; isStockItem: boolean; isService: boolean }
+  qty: number
+  grossQty: number // qty × (1 + wastage%)
+  uom: string
+  wastagePct: number
+}
+
+export interface EffectiveBom {
+  id: string
+  bomNo: string
+  revision: number
+  itemId: string
+  projectId: string
+  effectiveFrom: Date | null
+  lines: EffectiveBomLine[]
+}
+
+/**
+ * The single effective (APPROVED, in-date, highest-revision) BOM per output
+ * item. Legacy BOMs without an output item are skipped — MRP reports them
+ * instead of guessing what they make.
+ */
+export async function effectiveBomMap(client: Tx, asOf: Date = new Date()): Promise<Map<string, EffectiveBom>> {
+  const asOfDay = dayStart(asOf)
+  const rows = await client.bom.findMany({
+    where: { status: 'APPROVED', itemId: { not: null } },
+    orderBy: [{ revision: 'desc' }, { createdAt: 'desc' }],
+    include: { items: { include: { item: { select: { id: true, code: true, name: true, uom: true, isStockItem: true, isService: true } } } } },
+  })
+  const map = new Map<string, EffectiveBom>()
+  for (const b of rows) {
+    if (!b.itemId || map.has(b.itemId)) continue
+    if (b.effectiveFrom && dayStart(b.effectiveFrom).getTime() > asOfDay.getTime()) continue
+    if (b.effectiveTo && dayStart(b.effectiveTo).getTime() <= asOfDay.getTime()) continue
+    if (b.items.length === 0) continue
+    map.set(b.itemId, {
+      id: b.id,
+      bomNo: b.bomNo,
+      revision: b.revision,
+      itemId: b.itemId,
+      projectId: b.projectId,
+      effectiveFrom: b.effectiveFrom,
+      lines: b.items.map((i) => ({
+        itemId: i.itemId,
+        item: i.item,
+        qty: i.qty,
+        grossQty: r2(i.qty * (1 + i.wastagePct / 100)),
+        uom: i.uom,
+        wastagePct: i.wastagePct,
+      })),
+    })
+  }
+  return map
 }
 
 // ---------- work orders ----------
@@ -655,6 +889,10 @@ export interface WoLineInput {
 export interface WorkOrderInput {
   projectId: string
   bomId?: string | null
+  /** What this order makes. Defaults to the BOM's output item. */
+  outputItemId?: string | null
+  /** How many units it makes; component lines are scaled by this. Default 1. */
+  outputQty?: number
   date?: string | Date
   startDate?: string | Date | null
   endDate?: string | Date | null
@@ -669,7 +907,8 @@ export async function listWorkOrders(projectId?: string) {
     orderBy: { createdAt: 'desc' },
     include: {
       project: { select: { id: true, projectNo: true, name: true, status: true } },
-      bom: { select: { id: true, bomNo: true, productName: true } },
+      bom: { select: { id: true, bomNo: true, productName: true, revision: true, itemId: true } },
+      outputItem: { select: { id: true, code: true, name: true, uom: true } },
       lines: { include: { item: { select: { code: true, name: true, uom: true } } } },
       tasks: {
         orderBy: [{ seq: 'asc' }, { createdAt: 'asc' }],
@@ -693,27 +932,39 @@ export async function listWorkOrders(projectId?: string) {
   })
 }
 
-export async function createWorkOrder(input: WorkOrderInput) {
-  return db.$transaction(async (tx) => {
-    const project = await tx.project.findUnique({ where: { id: input.projectId } })
-    if (!project) throw new BusinessError('Project not found', 404)
-    if (project.status === 'COMPLETED' || project.status === 'CANCELLED') {
-      throw new BusinessError(`Project is ${project.status} — work orders need an active project`)
+/**
+ * Transaction-scoped work-order creation, shared by the UI route and MRP
+ * suggestion approval (which must create documents inside ONE transaction).
+ */
+export async function createWorkOrderTx(tx: Tx, input: WorkOrderInput) {
+  const project = await tx.project.findUnique({ where: { id: input.projectId } })
+  if (!project) throw new BusinessError('Project not found', 404)
+  if (project.status === 'COMPLETED' || project.status === 'CANCELLED') {
+    throw new BusinessError(`Project is ${project.status} — work orders need an active project`)
+  }
+
+  let lines: WoLineInput[] = input.lines ?? []
+  let bomId: string | null = null
+  let outputItemId: string | null = input.outputItemId ?? null
+  const outputQty = input.outputQty ?? 1
+  if (!(outputQty > 0) || outputQty > 1_000_000) throw new BusinessError('Output quantity must be between 0 and 1,000,000')
+
+  if (input.bomId) {
+    const bom = await tx.bom.findUnique({ where: { id: input.bomId }, include: { items: true } })
+    if (!bom) throw new BusinessError('BOM not found', 404)
+    if (bom.projectId !== project.id) throw new BusinessError('BOM belongs to a different project', 400)
+    if (bom.status === 'SUPERSEDED') {
+      throw new BusinessError(`${bom.bomNo} has been superseded — use the current approved revision`)
     }
-
-    let lines: WoLineInput[] = input.lines ?? []
-    let bomId: string | null = null
-
-    if (input.bomId) {
-      const bom = await tx.bom.findUnique({ where: { id: input.bomId }, include: { items: true } })
-      if (!bom) throw new BusinessError('BOM not found', 404)
-      if (bom.projectId !== project.id) throw new BusinessError('BOM belongs to a different project', 400)
-      if (bom.status !== 'APPROVED') throw new BusinessError('Only APPROVED BOMs can generate work orders')
-      // The current BOM has one fixed output/material quantity (there is no
-      // production-batch multiplier yet). A second live WO from the same BOM
-      // would silently duplicate material demand and is almost always a
-      // double-click/user error. Completed/cancelled history does not block a
-      // later repeat order.
+    if (bom.status !== 'APPROVED') throw new BusinessError('Only APPROVED BOMs can generate work orders')
+    // The current BOM has one fixed output/material quantity (there is no
+    // production-batch multiplier yet). A second live WO from the same BOM
+    // would silently duplicate material demand and is almost always a
+    // double-click/user error. Completed/cancelled history does not block a
+    // later repeat order. Callers that state an explicit outputQty (the MRP
+    // planner and partial-batch runs) bypass this because the quantity — not
+    // the BOM — is what distinguishes their orders.
+    if (input.outputQty === undefined) {
       const duplicate = await tx.workOrder.findFirst({
         where: { bomId: bom.id, status: { in: ['OPEN', 'IN_PROGRESS'] } },
         select: { woNo: true },
@@ -724,64 +975,77 @@ export async function createWorkOrder(input: WorkOrderInput) {
           409
         )
       }
-      bomId = bom.id
-      // WO quantity = BOM net + wastage allowance (the fabrication gross-up).
-      lines = bom.items.map((bi) => ({
-        itemId: bi.itemId,
-        description: bom.productName,
-        plannedQty: r2(bi.qty * (1 + bi.wastagePct / 100)),
-        uom: bi.uom,
-        bomItemId: bi.id,
-      }))
     }
-
-    if (!lines.length) throw new BusinessError('Work order needs lines (pick a BOM or add lines manually)')
-
-    const items = await tx.item.findMany({ where: { id: { in: lines.map((l) => l.itemId) } } })
-    const itemMap = new Map(items.map((i) => [i.id, i]))
-    for (const l of lines) {
-      const it = itemMap.get(l.itemId)
-      if (!it) throw new BusinessError(`Item ${l.itemId} not found`, 404)
-      if (!(l.plannedQty > 0)) throw new BusinessError(`Planned quantity must be positive for "${it.name}"`)
+    bomId = bom.id
+    if (!outputItemId) outputItemId = bom.itemId
+    if (!outputItemId) {
+      throw new BusinessError(`${bom.bomNo} has no linked output item — link it in the BOM before creating a work order`, 409)
     }
+    // WO quantity = BOM net + wastage allowance, scaled to the output batch.
+    lines = bom.items.map((bi) => ({
+      itemId: bi.itemId,
+      description: bom.productName,
+      plannedQty: r2(bi.qty * (1 + bi.wastagePct / 100) * outputQty),
+      uom: bi.uom,
+      bomItemId: bi.id,
+    }))
+  } else if (outputItemId) {
+    const out = await tx.item.findUnique({ where: { id: outputItemId }, select: { id: true } })
+    if (!out) throw new BusinessError('Output item not found', 404)
+  }
 
-    const date = iso(input.date)
-    const startDate = input.startDate ? iso(input.startDate) : null
-    const endDate = input.endDate ? iso(input.endDate) : null
-    if (startDate && endDate && endDate.getTime() < startDate.getTime()) {
-      throw new BusinessError('Planned end date cannot be before the start date')
-    }
-    const woNo = await nextDocNo(tx, 'WO', date)
-    const wo = await tx.workOrder.create({
-      data: {
-        woNo,
-        projectId: project.id,
-        bomId,
-        date,
-        startDate,
-        endDate,
-        priority: input.priority ?? 'NORMAL',
-        notes: input.notes ?? null,
-        lines: {
-          create: lines.map((l) => ({
-            // Nested writes need relation syntax for the optional BOM link
-            ...(l.bomItemId ? { bomItem: { connect: { id: l.bomItemId } } } : {}),
-            description: l.description ?? null,
-            plannedQty: l.plannedQty,
-            uom: l.uom,
-            item: { connect: { id: l.itemId } },
-          })),
-        },
+  if (!lines.length) throw new BusinessError('Work order needs lines (pick a BOM or add lines manually)')
+
+  const items = await tx.item.findMany({ where: { id: { in: lines.map((l) => l.itemId) } } })
+  const itemMap = new Map(items.map((i) => [i.id, i]))
+  for (const l of lines) {
+    const it = itemMap.get(l.itemId)
+    if (!it) throw new BusinessError(`Item ${l.itemId} not found`, 404)
+    if (!(l.plannedQty > 0)) throw new BusinessError(`Planned quantity must be positive for "${it.name}"`)
+  }
+
+  const date = iso(input.date)
+  const startDate = input.startDate ? iso(input.startDate) : null
+  const endDate = input.endDate ? iso(input.endDate) : null
+  if (startDate && endDate && endDate.getTime() < startDate.getTime()) {
+    throw new BusinessError('Planned end date cannot be before the start date')
+  }
+  const woNo = await nextDocNo(tx, 'WO', date)
+  const wo = await tx.workOrder.create({
+    data: {
+      woNo,
+      projectId: project.id,
+      bomId,
+      outputItemId,
+      outputQty,
+      date,
+      startDate,
+      endDate,
+      priority: input.priority ?? 'NORMAL',
+      notes: input.notes ?? null,
+      lines: {
+        create: lines.map((l) => ({
+          // Nested writes need relation syntax for the optional BOM link
+          ...(l.bomItemId ? { bomItem: { connect: { id: l.bomItemId } } } : {}),
+          description: l.description ?? null,
+          plannedQty: l.plannedQty,
+          uom: l.uom,
+          item: { connect: { id: l.itemId } },
+        })),
       },
-      include: { lines: true },
-    })
-
-    // First work order kicks a PENDING project into RUNNING (the plan started).
-    if (project.status === 'PENDING') {
-      await tx.project.update({ where: { id: project.id }, data: { status: 'RUNNING' } })
-    }
-    return wo
+    },
+    include: { lines: true, outputItem: true },
   })
+
+  // First work order kicks a PENDING project into RUNNING (the plan started).
+  if (project.status === 'PENDING') {
+    await tx.project.update({ where: { id: project.id }, data: { status: 'RUNNING' } })
+  }
+  return wo
+}
+
+export async function createWorkOrder(input: WorkOrderInput) {
+  return db.$transaction((tx) => createWorkOrderTx(tx, input))
 }
 
 export async function updateWorkOrder(id: string, input: Partial<WorkOrderInput>) {

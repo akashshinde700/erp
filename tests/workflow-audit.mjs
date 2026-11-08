@@ -151,6 +151,12 @@ async function setup() {
   F.rm = await item({ code: 'AUD-RM', name: 'Audit Raw Steel', uom: 'KG', costRate: 100, saleRate: 130, hsn: '720890' })
   F.fg = await item({ code: 'AUD-FG', name: 'Audit Bracket', uom: 'PCS', costRate: 300, saleRate: 500, hsn: '732690' })
   F.fg2 = await item({ code: 'AUD-FG2', name: 'Audit Serial Pump', uom: 'PCS', costRate: 900, saleRate: 1500, hsn: '841370' })
+  // BOM outputs must be item-linked now (MRP explodes demand through the item).
+  F.bomOut = await item({ code: 'AUD-BOM-FG', name: 'Audit Bracket Assembly', uom: 'PCS', costRate: 400, saleRate: 800, hsn: '732690' })
+  F.bomOut2 = await item({ code: 'AUD-BOM-FG2', name: 'Audit Bracket Assembly II', uom: 'PCS', costRate: 400, saleRate: 800, hsn: '732690' })
+  F.bomOut3 = await item({ code: 'AUD-BOM-FG3', name: 'Audit Bracket Assembly III', uom: 'PCS', costRate: 400, saleRate: 800, hsn: '732690' })
+  F.subAsm = await item({ code: 'AUD-SUB-ASM', name: 'Audit Sub Assembly', uom: 'PCS', costRate: 250, saleRate: 400, hsn: '732690' })
+  F.sellable = await item({ code: 'AUD-MRP-SELL', name: 'Audit MRP Sellable', uom: 'PCS', costRate: 700, saleRate: 1200, hsn: '732690' })
   F.jwOnly = await item({ code: 'AUD-JWM', name: 'Audit Customer Casting', uom: 'PCS', costRate: 50, hsn: '732510' })
   const op = await post('/api/inventory/opening', { warehouseId: F.main, rows: [{ itemId: F.fg, qty: 100, rate: 300 }, { itemId: F.rm, qty: 200, rate: 100 }] })
   expectOk('opening stock (owned, MAIN)', op)
@@ -540,7 +546,8 @@ async function phaseMfg() {
   const M = '/api/manufacturing'
   const prj = await post(`${M}/projects`, { name: 'Audit Bracket Run', partyId: F.cust, startDate: today, budget: 100000 })
   expectOk('create project', prj); F.prj = prj.data.id
-  const bom = await post(`${M}/boms`, { projectId: F.prj, productName: 'Audit Bracket', lines: [{ itemId: F.rm, qty: 10, uom: 'KG', rate: 100 }] })
+  expectReject('BOM without an output item is refused', await post(`${M}/boms`, { projectId: F.prj, productName: 'Audit Bracket', lines: [{ itemId: F.rm, qty: 10, uom: 'KG', rate: 100 }] }), /output item/i)
+  const bom = await post(`${M}/boms`, { projectId: F.prj, itemId: F.bomOut, productName: 'Audit Bracket', lines: [{ itemId: F.rm, qty: 10, uom: 'KG', rate: 100 }] })
   expectOk('create BOM', bom); F.bom = bom.data.id
   expectOk('approve BOM', await post(`${M}/boms/${F.bom}/actions`, { action: 'approve' }))
   const wo = await post(`${M}/work-orders`, { projectId: F.prj, bomId: F.bom, priority: 'HIGH' })
@@ -611,7 +618,7 @@ async function phaseMfg() {
   const close = await post(`${M}/work-orders/${F.wo}/actions`, { action: 'complete' })
   check('WO closes once FG is received and WIP settled', close.status === 200, `status=${close.status} ${close.error ?? ''}`)
   // 18: WIP guard on a second work order with only a partial receipt
-  const bom2 = await post(`${M}/boms`, { projectId: F.prj, productName: 'Audit Bracket II', lines: [{ itemId: F.rm, qty: 5, uom: 'KG', rate: 100 }] })
+  const bom2 = await post(`${M}/boms`, { projectId: F.prj, itemId: F.bomOut2, productName: 'Audit Bracket II', lines: [{ itemId: F.rm, qty: 5, uom: 'KG', rate: 100 }] })
   await post(`${M}/boms/${bom2.data.id}/actions`, { action: 'approve' })
   const wo2 = await post(`${M}/work-orders`, { projectId: F.prj, bomId: bom2.data.id })
   const t3 = await post(`${M}/tasks`, { workOrderId: wo2.data.id, operation: 'ASSEMBLY', seq: 1, plannedQty: 10 })
@@ -686,7 +693,7 @@ async function phaseLots() {
   const emp = (await q1('SELECT id FROM Employee LIMIT 1')).id
   const T = (id) => `${M}/tasks/${id}/actions`
   async function readyWo(name, plannedQty) {
-    const bom = await post(`${M}/boms`, { projectId: F.prj, productName: name, lines: [{ itemId: F.rm, qty: 1, uom: 'KG', rate: 100 }] })
+    const bom = await post(`${M}/boms`, { projectId: F.prj, itemId: F.bomOut3, productName: name, lines: [{ itemId: F.rm, qty: 1, uom: 'KG', rate: 100 }] })
     await post(`${M}/boms/${bom.data.id}/actions`, { action: 'approve' })
     const wo = await post(`${M}/work-orders`, { projectId: F.prj, bomId: bom.data.id })
     const t = await post(`${M}/tasks`, { workOrderId: wo.data.id, operation: 'ASSEMBLY', seq: 1, plannedQty })
@@ -881,6 +888,120 @@ async function phaseGst() {
   check('exports write audit records', num((await q1('SELECT COUNT(*) c FROM AuditLog')).c) > auditBefore, `before=${auditBefore}`)
 }
 
+// ---------------------------------------------------------------- Phase 12b: BOM revisions + MRP
+async function phaseMrp() {
+  phase = 'P12b-mrp'
+  const M = '/api/manufacturing'
+  const prj = await post(`${M}/projects`, { name: 'Audit MRP Cell', partyId: F.cust, startDate: today, budget: 500000 })
+  expectOk('MRP: create planning project', prj)
+  const pid = prj.data.id
+  const mrpCust = await post('/api/masters/parties', { code: 'AUD-MRP-C', name: 'Audit MRP Customer', types: ['CUSTOMER'], stateCode: '27', creditLimit: 100_000_000 })
+  expectOk('MRP: customer fixture', mrpCust)
+  const isoRm = (await post('/api/masters/items', { code: 'AUD-MRP-RM', name: 'Audit MRP Sheet', uom: 'KG', costRate: 100, saleRate: 130, gstRate: 18, groupName: 'Audit' })).data.id
+  const isoFg = (await post('/api/masters/items', { code: 'AUD-MRP-FG', name: 'Audit MRP Skid', uom: 'PCS', costRate: 600, saleRate: 1200, gstRate: 18, groupName: 'Audit' })).data.id
+
+  // ---- BOM rev 1 → rev 2 lifecycle on the shared sellable item -------------
+  const bom1 = await post(`${M}/boms`, {
+    projectId: pid, itemId: F.sellable, productName: 'Audit Sellable v1', effectiveFrom: today,
+    lines: [{ itemId: F.subAsm, qty: 2, uom: 'PCS', rate: 250 }, { itemId: F.rm, qty: 4, uom: 'KG', rate: 100 }],
+  })
+  expectOk('MRP: create BOM rev 1', bom1)
+  const bomV1 = bom1.data
+  check('MRP: first revision is revision 1', num(bomV1?.revision) === 1, `revision=${bomV1?.revision}`)
+  expectOk('MRP: approve rev 1', await post(`${M}/boms/${bomV1.id}/actions`, { action: 'approve' }))
+  expectReject('MRP: an approved revision cannot be edited in place', await api('PUT', `${M}/boms/${bomV1.id}`, { lines: [{ itemId: F.rm, qty: 1, uom: 'KG', rate: 10 }] }), /draft/i)
+  expectReject('MRP: a second live BOM for the same output item is refused', await post(`${M}/boms`, { projectId: pid, itemId: F.sellable, productName: 'duplicate', lines: [{ itemId: F.rm, qty: 1, uom: 'KG', rate: 10 }] }), /already exists/i)
+  const subBom = await post(`${M}/boms`, { projectId: pid, itemId: F.subAsm, productName: 'Audit Sub Assembly v1', lines: [{ itemId: F.rm, qty: 3, uom: 'KG', rate: 100 }] })
+  expectOk('MRP: create sub-assembly BOM', subBom)
+  expectOk('MRP: approve sub-assembly BOM', await post(`${M}/boms/${subBom.data.id}/actions`, { action: 'approve' }))
+
+  const revise = await post(`${M}/boms/${bomV1.id}/actions`, { action: 'revise', notes: 'ECO: 5 KG instead of 4' })
+  expectOk('MRP: revise an approved BOM into a DRAFT', revise)
+  check('MRP: revision is numbered 2 and points at rev 1', num(revise.data?.revision) === 2 && revise.data?.supersedesId === bomV1.id, JSON.stringify({ r: revise.data?.revision, s: revise.data?.supersedesId }))
+  expectReject('MRP: only one open draft revision per item', await post(`${M}/boms/${bomV1.id}/actions`, { action: 'revise' }), /draft|revision/i)
+  expectOk('MRP: edit the draft revision lines', await api('PUT', `${M}/boms/${revise.data.id}`, { lines: [{ itemId: F.subAsm, qty: 2, uom: 'PCS', rate: 250 }, { itemId: F.rm, qty: 5, uom: 'KG', rate: 100 }] }))
+  expectOk('MRP: approve rev 2', await post(`${M}/boms/${revise.data.id}/actions`, { action: 'approve' }))
+  const chain = await qa('SELECT bomNo, revision, status, effectiveTo FROM Bom WHERE itemId=? ORDER BY revision', [F.sellable])
+  check('MRP: approving rev 2 supersedes rev 1 (one live revision)', chain.length === 2 && chain[0].status === 'SUPERSEDED' && chain[0].effectiveTo != null && chain[1].status === 'APPROVED', JSON.stringify(chain))
+  expectReject('MRP: a superseded revision cannot generate a work order', await post(`${M}/work-orders`, { projectId: pid, bomId: bomV1.id }), /superseded/i)
+  expectReject('MRP: a superseded revision cannot be cancelled', await post(`${M}/boms/${bomV1.id}/actions`, { action: 'cancel' }), /superseded/i)
+  const used = await get(`${M}/boms/where-used?itemId=${F.subAsm}`)
+  check('MRP: where-used lists every live BOM that consumes the sub-assembly', used.status === 200 && (used.data?.usedIn ?? []).some((r) => r.bomNo === revise.data.bomNo && num(r.qtyPer) === 2 && r.status === 'APPROVED'), `status=${used.status} ${JSON.stringify(used.data?.usedIn)}`)
+
+  // ---- isolated demand: 1 skid = 4 KG sheet, nothing in stock/pipeline -----
+  const isoBom = await post(`${M}/boms`, { projectId: pid, itemId: isoFg, productName: 'Audit MRP Skid BOM', lines: [{ itemId: isoRm, qty: 4, uom: 'KG', rate: 100 }] })
+  expectOk('MRP: create isolated FG BOM', isoBom)
+  expectOk('MRP: approve isolated FG BOM', await post(`${M}/boms/${isoBom.data.id}/actions`, { action: 'approve' }))
+  const O = '/api/order-to-cash'
+  const quote = await post(O, { action: 'create-quotation', partyId: mrpCust.data.id, validUntil: daysFromNow(25), lines: [{ itemId: isoFg, qty: 25, rate: 1200 }] })
+  expectOk('MRP: quotation for 25 FG', quote)
+  await post(O, { action: 'transition-quotation', id: quote.data.id, transition: 'SUBMIT' })
+  expectOk('MRP: approve the quotation', await post(O, { action: 'transition-quotation', id: quote.data.id, transition: 'APPROVE' }))
+  const order = await post(O, { action: 'quotation-to-order', id: quote.data.id, deliveryDate: daysFromNow(15) })
+  expectOk('MRP: quotation becomes a sales order', order)
+  expectOk('MRP: approve the sales order (independent demand)', await post(O, { action: 'approve-order', id: order.data.id }))
+  const soNo = (await q1('SELECT orderNo FROM SalesOrder WHERE id=?', [order.data.id])).orderNo
+  const isoStock = async () => num((await q1('SELECT COALESCE(SUM(qtyIn-qtyOut),0) q FROM StockLedger WHERE itemId IN (?,?) AND isCancelled=0', [isoFg, isoRm])).q)
+  check('MRP: the isolated fixture has no stock to net against', near(await isoStock(), 0), `stock=${await isoStock()}`)
+
+  const preview = await get(`${M}/mrp/preview?asOf=${today}&horizonDays=30`)
+  expectOk('MRP: dry run responds', preview)
+  const lines = preview.data?.lines ?? []
+  const fgLine = lines.find((l) => l.itemId === isoFg)
+  const rmLine = lines.find((l) => l.itemId === isoRm)
+  check('MRP: approved sales-order demand is the independent requirement', fgLine && near(fgLine.grossQty, 25) && near(fgLine.netQty, 25) && fgLine.level === 0, JSON.stringify(fgLine && { g: fgLine.grossQty, n: fgLine.netQty, l: fgLine.level }))
+  check('MRP: FG with an effective BOM is a MAKE suggestion bound to its revision', fgLine?.suggestion === 'MAKE' && fgLine?.bomNo === isoBom.data.bomNo, JSON.stringify({ s: fgLine?.suggestion, b: fgLine?.bomNo }))
+  check('MRP: demand is dated by the sales-order delivery date', fgLine ? fgLine.needBy.slice(0, 10) === daysFromNow(15) : false, fgLine?.needBy)
+  check('MRP: explosion grosses the component quantity (25 × 4 = 100 KG)', rmLine && near(rmLine.grossQty, 100) && near(rmLine.netQty, 100) && rmLine.level === 1, JSON.stringify(rmLine && { g: rmLine.grossQty, n: rmLine.netQty, l: rmLine.level }))
+  check('MRP: a purchased component is a BUY suggestion', rmLine?.suggestion === 'BUY', rmLine?.suggestion)
+  check('MRP: pegging names the driving sales order', rmLine ? String(rmLine.pegging).includes(soNo) : false, String(rmLine?.pegging ?? '').slice(0, 140))
+  const jobworkNetted = lines.find((l) => l.itemId === F.rm)
+  if (jobworkNetted) {
+    const owned = num((await q1("SELECT COALESCE(SUM(qtyIn-qtyOut),0) q FROM StockLedger WHERE itemId=? AND isCancelled=0 AND voucherType<>'JOBWORK_IN'", [F.rm])).q)
+    check('MRP: on-hand netting never exceeds company-owned stock (JOBWORK_IN excluded)', jobworkNetted.onHandQty <= owned + 0.001, `netted=${jobworkNetted.onHandQty} owned=${owned}`)
+  }
+
+  // ---- snapshot semantics: saving posts nothing ---------------------------
+  const docCounts = async () => JSON.stringify({
+    pr: num((await q1('SELECT COUNT(*) c FROM PurchaseRequisition')).c),
+    wo: num((await q1('SELECT COUNT(*) c FROM WorkOrder')).c),
+    stock: num((await q1('SELECT COUNT(*) c FROM StockLedger')).c),
+    gl: num((await q1('SELECT COUNT(*) c FROM AccountLedger')).c),
+  })
+  const before = await docCounts()
+  const created = await post(`${M}/mrp`, { asOf: today, horizonDays: 30 })
+  expectOk('MRP: save a run snapshot', created)
+  check('MRP: saving a run creates no document, stock row or ledger entry', (await docCounts()) === before, `before=${before} after=${await docCounts()}`)
+  check('MRP: run number is FY formatted', /^MRP-\d{4}-\d{3,}$/.test(String(created.data?.runNo ?? '')), created.data?.runNo)
+  const runId = created.data?.id
+  const detail = await get(`${M}/mrp/${runId}`)
+  expectOk('MRP: read the saved snapshot', detail)
+  check('MRP: the saved snapshot matches a fresh calculation line for line', (detail.data?.lines ?? []).length === lines.length, `saved=${detail.data?.lines?.length} fresh=${lines.length}`)
+  check('MRP: every saved run is scoped to the operating company', num((await q1('SELECT COUNT(*) c FROM MrpRun WHERE companyId=?', [F.company.id])).c) === num((await q1('SELECT COUNT(*) c FROM MrpRun')).c))
+
+  // ---- user approval converts selected lines into non-posting documents ---
+  const savedMake = (detail.data?.lines ?? []).find((l) => l.itemId === isoFg && l.suggestion === 'MAKE' && l.netQty > 0)
+  const savedBuy = (detail.data?.lines ?? []).find((l) => l.itemId === isoRm && l.suggestion === 'BUY' && l.netQty > 0)
+  if (savedMake && savedBuy) {
+    expectReject('MRP: MAKE lines need an executing project', await post(`${M}/mrp/${runId}/actions`, { action: 'create-documents', lineIds: [savedMake.id] }), /project/i)
+    const conv = await post(`${M}/mrp/${runId}/actions`, { action: 'create-documents', lineIds: [savedMake.id, savedBuy.id], projectId: pid })
+    expectOk('MRP: approve suggestions into documents', conv)
+    const pr = await q1('SELECT status, purpose FROM PurchaseRequisition WHERE reqNo=?', [conv.data?.requisition?.reqNo])
+    check('MRP: buy suggestions create a DRAFT requisition (still needs approval)', pr?.status === 'DRAFT' && /MRP/i.test(String(pr?.purpose)), JSON.stringify(pr))
+    const woRow = await q1('SELECT status, outputItemId, outputQty FROM WorkOrder WHERE woNo=?', [conv.data?.workOrders?.[0]?.woNo])
+    check('MRP: make suggestion creates an OPEN work order for the net quantity', woRow?.status === 'OPEN' && woRow?.outputItemId === isoFg && near(woRow?.outputQty, 25), JSON.stringify(woRow))
+    const woLines = num((await q1('SELECT COALESCE(SUM(pl.plannedQty),0) q FROM WorkOrderLine pl JOIN WorkOrder w ON w.id=pl.workOrderId WHERE w.woNo=?', [conv.data?.workOrders?.[0]?.woNo])).q)
+    check('MRP: the planned work order carries the exploded component quantity (25 × 4)', near(woLines, 100), `planned=${woLines}`)
+    expectReject('MRP: an approved suggestion cannot be converted twice', await post(`${M}/mrp/${runId}/actions`, { action: 'create-documents', lineIds: [savedBuy.id], projectId: pid }), /already|produced/i)
+    check('MRP: conversion did not move stock or post a ledger entry', num((await q1('SELECT COUNT(*) c FROM StockLedger')).c) === JSON.parse(before).stock && num((await q1('SELECT COUNT(*) c FROM AccountLedger')).c) === JSON.parse(before).gl)
+  } else {
+    check('MRP: suggestion fixtures present (make + buy lines)', false, JSON.stringify((detail.data?.lines ?? []).filter((l) => [isoFg, isoRm].includes(l.itemId)).map((l) => [l.suggestion, l.netQty])))
+  }
+  expectOk('MRP: close the run', await post(`${M}/mrp/${runId}/actions`, { action: 'close' }))
+  expectReject('MRP: a closed run cannot be converted', await post(`${M}/mrp/${runId}/actions`, { action: 'create-documents', lineIds: [savedBuy?.id].filter(Boolean) }), /closed/i)
+  await reconcile('after MRP')
+}
+
 // ---------------------------------------------------------------- Phase 13: fuzzing
 async function phaseFuzz() {
   phase = 'P13-fuzz'
@@ -937,7 +1058,7 @@ async function phaseFuzz() {
 async function main() {
   const t0 = Date.now()
   await setup()
-  const phases = [phaseAuth, phaseP2P, phaseRfq, phaseQ2C, phaseMfg, phaseQuality, phaseLots, phaseFinance, phaseGst, phaseFuzz]
+  const phases = [phaseAuth, phaseP2P, phaseRfq, phaseQ2C, phaseMfg, phaseQuality, phaseLots, phaseFinance, phaseGst, phaseMrp, phaseFuzz]
   for (const fn of phases) {
     try { await fn() } catch (e) { check(`${fn.name} completed without a harness exception`, false, e?.stack?.split('\n').slice(0, 3).join(' ') ?? String(e)) }
   }

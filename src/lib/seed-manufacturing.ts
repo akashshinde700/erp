@@ -43,6 +43,8 @@ export interface ManufacturingSeedDeps {
   bolts: Ref
   main: Ref // finished-goods warehouse
   fgTank: Ref // FG stock item received from the completed tank work order
+  fgCanopy: Ref // output item of the canopy BOM
+  fgGantry: Ref // output item of the gantry BOM
 }
 
 /** Raw materials the BOMs consume — created (with opening stock) when missing. */
@@ -53,10 +55,12 @@ const FABRICATION_ITEMS = [
   { key: 'paint', code: 'RM-2005', name: 'Epoxy Paint Zinc Primer', groupName: 'Consumables', hsn: '320990', uom: 'LTR', saleRate: 320, costRate: 240, reorderLevel: 40, openingQty: 200 },
   { key: 'bolts', code: 'RM-2006', name: 'Bolts & Nuts M16 HDG', groupName: 'Consumables', hsn: '731815', uom: 'PCS', saleRate: 45, costRate: 30, reorderLevel: 200, openingQty: 1000 },
   { key: 'fgTank', code: 'FG-2001', name: 'Storage Tank 20KL SS304 (fabricated)', groupName: 'Finished Goods', hsn: '730900', uom: 'KG', saleRate: 120, costRate: 70, reorderLevel: 0, openingQty: 0 },
+  { key: 'fgCanopy', code: 'FG-2002', name: 'Canopy Frame — Level 1 (fabricated)', groupName: 'Finished Goods', hsn: '730890', uom: 'SET', saleRate: 850000, costRate: 0, reorderLevel: 0, openingQty: 0 },
+  { key: 'fgGantry', code: 'FG-2003', name: 'Gantry Truss Assembly (fabricated)', groupName: 'Finished Goods', hsn: '730890', uom: 'SET', saleRate: 2400000, costRate: 0, reorderLevel: 0, openingQty: 0 },
 ] as const
 
 export async function seedManufacturingDemo(deps: ManufacturingSeedDeps) {
-  const { mahindra, gujarat, bengal, msPlate, msPipe, weldRod, paint, bolts, main, fgTank } = deps
+  const { mahindra, gujarat, bengal, msPlate, msPipe, weldRod, paint, bolts, main, fgTank, fgCanopy, fgGantry } = deps
   // =========================================================================
   // Manufacturing chain (Project → BOM → Work Order → Tasks → Completion)
   // Everything below runs through the REAL manufacturing services, so
@@ -85,6 +89,7 @@ export async function seedManufacturingDemo(deps: ManufacturingSeedDeps) {
   })
   const canopyBom = await createBom({
     projectId: canopy.id,
+    itemId: fgCanopy.id,
     productName: 'Canopy Frame — Level 1',
     drawingRef: 'DWG-2025-117',
     notes: 'Net quantities; wastage per shop practice.',
@@ -156,6 +161,7 @@ export async function seedManufacturingDemo(deps: ManufacturingSeedDeps) {
   })
   await createBom({
     projectId: gantry.id,
+    itemId: fgGantry.id,
     productName: 'Gantry Truss Assembly',
     drawingRef: 'GA-GANTRY-2026-08',
     lines: [
@@ -178,6 +184,7 @@ export async function seedManufacturingDemo(deps: ManufacturingSeedDeps) {
   })
   const tankBom = await createBom({
     projectId: tank.id,
+    itemId: fgTank.id,
     productName: 'Tank Shell + Dome Assembly',
     drawingRef: 'TK-20KL-DWG-01',
     lines: [
@@ -270,7 +277,7 @@ export async function seedManufacturingIfEmpty() {
   const mfg = await seedManufacturingDemo({
     mahindra, gujarat, bengal,
     msPlate: items.msPlate, msPipe: items.msPipe, weldRod: items.weldRod, paint: items.paint, bolts: items.bolts,
-    main, fgTank: items.fgTank,
+    main, fgTank: items.fgTank, fgCanopy: items.fgCanopy, fgGantry: items.fgGantry,
   })
   return { seeded: true, company: company.name, itemsCreated: created.length, ...mfg }
 }

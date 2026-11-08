@@ -76,6 +76,16 @@ export type WorkflowModel = (typeof WORKFLOW_MODELS_CHILDREN_FIRST)[number]
 /** Workflow masters that legacy rows point at: inserted right after parties/items, before invoices and payments. */
 export const EARLY_RESTORE_MODELS = ['salesperson', 'tdsSection'] as const satisfies readonly WorkflowModel[]
 
+/**
+ * Workflow masters that the LEGACY manufacturing tables point at.
+ * `ProductionTask.workCenterId` is a real FK, so work centres must be restored
+ * before work orders / production tasks are inserted — but they still sit last
+ * in the children-first wipe list above because tasks must be deleted first.
+ * Getting this wrong makes every restore of a routed shop floor fail with P2003;
+ * `tests/backup-drill.mjs` is the check that catches it.
+ */
+export const EARLY_BUSINESS_MODELS = ['workCenter'] as const satisfies readonly WorkflowModel[]
+
 export const WORKFLOW_MODELS_PARENTS_FIRST = [...WORKFLOW_MODELS_CHILDREN_FIRST].reverse().filter((m) => !(EARLY_RESTORE_MODELS as readonly string[]).includes(m))
 
 /** Minimal delegate surface the backup/restore/seed code needs, model-agnostic. */

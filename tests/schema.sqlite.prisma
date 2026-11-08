@@ -48,18 +48,81 @@ model Company {
   tallyRoundOffLedger String?
 
   // ---- SaaS subscription (managed via /api/platform/*; no plan = unlimited) ----
-  isPlatform   Boolean  @default(false) // operator's own company — never blocked
-  planId       String?
-  plan         Plan?    @relation(fields: [planId], references: [id])
-  saasStatus   String   @default("ACTIVE") // ACTIVE | SUSPENDED
-  billingCycle String   @default("MONTHLY") // MONTHLY | YEARLY
-  paidUntil    DateTime?
-  trialEndsAt  DateTime?
+  isPlatform    Boolean   @default(false) // operator's own company — never blocked
+  planId        String?
+  plan          Plan?     @relation(fields: [planId], references: [id])
+  saasStatus    String    @default("ACTIVE") // ACTIVE | SUSPENDED
+  billingCycle  String    @default("MONTHLY") // MONTHLY | YEARLY
+  paidUntil     DateTime?
+  trialEndsAt   DateTime?
   maxItems      Int? // per-org overrides; null = plan's limit; 0 = unlimited
   maxWarehouses Int?
   maxParties    Int?
 
+  // ---- books control: no GL row may be posted or cancelled on/before this date ----
+  booksLockedUntil DateTime?
+  booksLockedBy    String?
+
+  // ---- overhead absorption (manufacturing cost roll-up) ----
+  /// Percentage of prime cost (material + labour) absorbed as factory overhead
+  /// on every completed operation. 0 = off. Accrued in OVHA, never in a bank
+  /// account; reversal is a contram posting (src/lib/costing.ts).
+  overheadRatePct Float @default(0)
+
   users OrgUser[]
+
+  purchaseRequisitions PurchaseRequisition[]
+  purchaseOrders       PurchaseOrder[]
+  goodsReceipts        GoodsReceipt[]
+  qualityInspections   QualityInspection[]
+  qualityTemplates     QualityTemplate[]
+  inventoryLots        InventoryLot[]
+  serialNumbers        SerialNumber[]
+  lotMovements         LotMovement[]
+  paymentSchedules     PaymentSchedule[]
+  partyAdvances        PartyAdvance[]
+  refundAllocations    RefundAllocation[]
+  itemVendors          ItemVendor[]
+  returnDocuments      ReturnDocument[]
+  quotations           SalesQuotation[]
+  salesOrders          SalesOrder[]
+  deliveryChallans     DeliveryChallan[]
+  productionReceipts   ProductionReceipt[]
+
+  // ---- organisation-owned legacy tables (tenant isolation) ----
+  tenantAuditLogs           AuditLog[]
+  tenantPartys              Party[]
+  tenantItems               Item[]
+  tenantWarehouses          Warehouse[]
+  tenantProcesss            Process[]
+  tenantPartyProcessRates   PartyProcessRate[]
+  tenantStockLedgers        StockLedger[]
+  tenantAccountLedgers      AccountLedger[]
+  tenantSalesInvoices       SalesInvoice[]
+  tenantPurchaseInvoices    PurchaseInvoice[]
+  tenantJobworkInwards      JobworkInward[]
+  tenantJobCards            JobCard[]
+  tenantJobworkCertificates JobworkCertificate[]
+  tenantEmployees           Employee[]
+  tenantProjects            Project[]
+  tenantBoms                Bom[]
+  tenantWorkOrders          WorkOrder[]
+  tenantProductionTasks     ProductionTask[]
+  tenantPayments            Payment[]
+  ledgerAccounts            LedgerAccount[]
+  journalVouchers           JournalVoucher[]
+  tdsSections               TdsSection[]
+  stockAdjustments          StockAdjustment[]
+  salespersons              Salesperson[]
+  leads                     Lead[]
+  serviceCalls              ServiceCall[]
+  rfqs                      Rfq[]
+  supplierQuotes            SupplierQuote[]
+  mrpRuns                   MrpRun[]
+  workCenters               WorkCenter[]
+  shiftCalendars            ShiftCalendar[]
+  routingOperations         RoutingOperation[]
+  machineDowntimes          MachineDowntime[]
 }
 
 // ---------- Organization logins (SaaS) ----------
@@ -92,7 +155,7 @@ model Plan {
   maxParties    Int      @default(0)
   active        Boolean  @default(true)
   // CSV of enabled feature keys (see PLAN_FEATURES in src/lib/platform.ts)
-  features      String @default("exportData,advancedReports")
+  features      String   @default("exportData,advancedReports")
   createdAt     DateTime @default(now())
 
   companies Company[]
@@ -117,31 +180,33 @@ model PlatformInquiry {
 }
 
 model PlatformInquiryFollowUp {
-  id        String   @id @default(cuid())
+  id        String          @id @default(cuid())
   inquiryId String
   inquiry   PlatformInquiry @relation(fields: [inquiryId], references: [id], onDelete: Cascade)
   note      String
-  createdAt DateTime @default(now())
+  createdAt DateTime        @default(now())
 }
 
 // ---------- Platform blog posts ----------
 
 model PlatformBlogPost {
-  id          String   @id @default(cuid())
+  id          String    @id @default(cuid())
   title       String
-  slug        String   @unique
+  slug        String    @unique
   excerpt     String?
   body        String?
-  status      String   @default("draft") // draft | published
+  status      String    @default("draft") // draft | published
   publishedAt DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
 }
 
 // ---------- Audit trail (every mutation; see src/lib/audit.ts) ----------
 
 model AuditLog {
   id        String   @id @default(cuid())
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id])
   action    String // CREATE | UPDATE | DELETE | CANCEL | POST | EXPORT | PLATFORM | BACKUP | SEED
   entity    String // SalesInvoice | Party | Plan | …
   entityId  String?
@@ -152,25 +217,30 @@ model AuditLog {
   @@index([createdAt])
   @@index([entity])
   @@index([actor])
+  @@index([companyId, createdAt])
 }
 
 // ---------- Masters ----------
 
 model Party {
-  id         String   @id @default(cuid())
-  code       String   @unique
-  name       String
-  types      String   @default("CUSTOMER") // CSV: CUSTOMER,SUPPLIER,JOBWORKER
-  gstin      String?
-  stateCode  String   @default("27")
-  address    String?
-  city       String?
-  pincode    String? // required for e-Invoice BuyerDtls.Pin (IRP v1.1)
-  phone      String?
-  email      String?
-  openingBal Float    @default(0) // + = receivable / - = payable
-  active     Boolean  @default(true)
-  createdAt  DateTime @default(now())
+  id          String   @id @default(cuid())
+  companyId   String   @default("") // filled by the tenant extension; "" fails the FK
+  company     Company  @relation(fields: [companyId], references: [id])
+  code        String
+  name        String
+  types       String   @default("CUSTOMER") // CSV: CUSTOMER,SUPPLIER,JOBWORKER
+  gstin       String?
+  stateCode   String   @default("27")
+  address     String?
+  city        String?
+  pincode     String? // required for e-Invoice BuyerDtls.Pin (IRP v1.1)
+  phone       String?
+  email       String?
+  openingBal  Float    @default(0) // + = receivable / - = payable
+  creditLimit Float    @default(0) // 0 = unlimited; enforced when approving sales orders
+  creditDays  Int      @default(0) // payment terms in days; due date = invoice date + creditDays (aging)
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
 
   salesInvoices    SalesInvoice[]
   purchaseInvoices PurchaseInvoice[]
@@ -178,13 +248,27 @@ model Party {
   payments         Payment[]
   processRates     PartyProcessRate[]
   projects         Project[]
+  purchaseOrders   PurchaseOrder[]    @relation("PurchaseOrderSupplier")
+  itemVendors      ItemVendor[]
+  returnDocuments  ReturnDocument[]
+  quotations       SalesQuotation[]
+  salesOrders      SalesOrder[]
+  paymentSchedules PaymentSchedule[]
+  partyAdvances    PartyAdvance[]
+  leads            Lead[]
+  serviceCalls     ServiceCall[]
+  rfqSuppliers     RfqSupplier[]
+  supplierQuotes   SupplierQuote[]
 
+  @@unique([companyId, code])
   @@index([types])
 }
 
 model Item {
   id           String   @id @default(cuid())
-  code         String   @unique
+  companyId    String   @default("") // filled by the tenant extension; "" fails the FK
+  company      Company  @relation(fields: [companyId], references: [id])
+  code         String
   name         String
   groupName    String   @default("General")
   hsn          String?
@@ -198,42 +282,82 @@ model Item {
   active       Boolean  @default(true)
   createdAt    DateTime @default(now())
 
-  stockRows    StockLedger[]
-  salesLines   SalesInvoiceItem[]
-  purchaseLines PurchaseInvoiceItem[]
-  inwardLines  JobworkInwardItem[]
-  bomLines     BomItem[]
-  woLines      WorkOrderLine[]
-  taskMaterial ProductionTask[] @relation("TaskMaterial")
+  stockRows          StockLedger[]
+  salesLines         SalesInvoiceItem[]
+  purchaseLines      PurchaseInvoiceItem[]
+  inwardLines        JobworkInwardItem[]
+  bomLines           BomItem[]
+  woLines            WorkOrderLine[]
+  taskMaterial       ProductionTask[]          @relation("TaskMaterial")
+  requisitionLines   PurchaseRequisitionLine[]
+  purchaseOrderLines PurchaseOrderLine[]
+  goodsReceiptLines  GoodsReceiptLine[]
+  itemVendors        ItemVendor[]
+  returnLines        ReturnDocumentLine[]
+  quotationLines     SalesQuotationLine[]
+  salesOrderLines    SalesOrderLine[]
+  deliveryLines      DeliveryChallanLine[]
+  productionReceipts ProductionReceipt[]
+  qualityTemplates   QualityTemplate[]
+  qualityInspections QualityInspection[]
+  inventoryLots      InventoryLot[]
+  serialNumbers      SerialNumber[]
+  lotMovements       LotMovement[]
+  adjustmentLines    StockAdjustmentLine[]
+  serviceCalls       ServiceCall[]
+  rfqLines           RfqLine[]
+  outputBoms         Bom[]             @relation("BomOutput")
+  woOutputs          WorkOrder[]       @relation("WorkOrderOutput")
+  mrpLines           MrpLine[]
+
+  @@unique([companyId, code])
 }
 
 model Warehouse {
   id        String   @id @default(cuid())
-  code      String   @unique
+  companyId String   @default("") // filled by the tenant extension; "" fails the FK
+  company   Company  @relation(fields: [companyId], references: [id])
+  code      String
   name      String
   location  String?
   active    Boolean  @default(true)
   createdAt DateTime @default(now())
 
-  stockRows StockLedger[]
+  stockRows          StockLedger[]
+  goodsReceipts      GoodsReceipt[]
+  returnDocuments    ReturnDocument[]
+  deliveryChallans   DeliveryChallan[]
+  productionReceipts ProductionReceipt[]
+  inventoryLots      InventoryLot[]
+  serialNumbers      SerialNumber[]
+  stockAdjustments   StockAdjustment[]
+  lotMovements       LotMovement[]
+
+  @@unique([companyId, code])
 }
 
 model Process {
-  id        String   @id @default(cuid())
-  code      String   @unique
+  id        String  @id @default(cuid())
+  companyId String  @default("") // filled by the tenant extension; "" fails the FK
+  company   Company @relation(fields: [companyId], references: [id])
+  code      String
   name      String
-  seq       Int      @default(0) // routing order
-  basis     String   @default("WEIGHT") // WEIGHT (per KG) | QTY (per piece)
-  rate      Float    @default(0) // default rate
-  lotCharge Float    @default(0)
-  active    Boolean  @default(true)
+  seq       Int     @default(0) // routing order
+  basis     String  @default("WEIGHT") // WEIGHT (per KG) | QTY (per piece)
+  rate      Float   @default(0) // default rate
+  lotCharge Float   @default(0)
+  active    Boolean @default(true)
 
   partyRates PartyProcessRate[]
   cardRows   JobCardProcess[]
+
+  @@unique([companyId, code])
 }
 
 model PartyProcessRate {
   id        String  @id @default(cuid())
+  companyId String  @default("") // filled by the tenant extension; "" fails the FK
+  company   Company @relation(fields: [companyId], references: [id])
   partyId   String
   party     Party   @relation(fields: [partyId], references: [id], onDelete: Cascade)
   processId String
@@ -242,12 +366,15 @@ model PartyProcessRate {
   lotCharge Float   @default(0)
 
   @@unique([partyId, processId])
+  @@index([companyId])
 }
 
 // ---------- Ledgers (append-only; cancel writes reversal rows) ----------
 
 model StockLedger {
   id          String    @id @default(cuid())
+  companyId   String    @default("") // filled by the tenant extension; "" fails the FK
+  company     Company   @relation(fields: [companyId], references: [id])
   postingDate DateTime
   voucherType String // OPENING | PURCHASE | SALES | JOBWORK_IN | ADJUST
   voucherNo   String
@@ -265,10 +392,13 @@ model StockLedger {
   @@index([itemId, warehouseId, postingDate])
   @@index([voucherNo])
   @@index([postingDate])
+  @@index([companyId, itemId, warehouseId])
 }
 
 model AccountLedger {
   id          String   @id @default(cuid())
+  companyId   String   @default("") // filled by the tenant extension; "" fails the FK
+  company     Company  @relation(fields: [companyId], references: [id])
   date        DateTime
   account     String // chart code, see src/lib/accounting.ts
   accountName String
@@ -285,123 +415,144 @@ model AccountLedger {
   @@index([voucherNo])
   @@index([partyId, isCancelled])
   @@index([voucherType, partyId])
+  @@index([companyId, account, date])
 }
 
 // ---------- Sales ----------
 
 model SalesInvoice {
-  id           String   @id @default(cuid())
-  invoiceNo    String   @unique
-  date         DateTime
-  partyId      String
-  party        Party    @relation(fields: [partyId], references: [id])
-  poNo         String?
-  pos          String   @default("27") // place of supply (state code)
-  interState   Boolean  @default(false)
-  taxInclusive Boolean  @default(false)
-  taxable      Float    @default(0)
-  discount     Float    @default(0)
-  cgst         Float    @default(0)
-  sgst         Float    @default(0)
-  igst         Float    @default(0)
-  roundOff     Float    @default(0)
-  grandTotal   Float    @default(0)
-  paidAmount   Float    @default(0)
-  status       String   @default("POSTED") // POSTED | CANCELLED
-  source       String   @default("MANUAL") // MANUAL | JOBWORK
-  remarks      String?
-  createdAt    DateTime @default(now())
+  id                String       @id @default(cuid())
+  companyId         String       @default("") // filled by the tenant extension; "" fails the FK
+  company           Company      @relation(fields: [companyId], references: [id])
+  invoiceNo         String
+  date              DateTime
+  partyId           String
+  party             Party        @relation(fields: [partyId], references: [id])
+  poNo              String?
+  pos               String       @default("27") // place of supply (state code)
+  interState        Boolean      @default(false)
+  taxInclusive      Boolean      @default(false)
+  taxable           Float        @default(0)
+  discount          Float        @default(0)
+  cgst              Float        @default(0)
+  sgst              Float        @default(0)
+  igst              Float        @default(0)
+  roundOff          Float        @default(0)
+  grandTotal        Float        @default(0)
+  paidAmount        Float        @default(0)
+  status            String       @default("POSTED") // POSTED | CANCELLED
+  source            String       @default("MANUAL") // MANUAL | JOBWORK | DELIVERY_CHALLAN
+  deliveryChallanId String? // controlled dispatch source; null for direct/legacy invoices
+  salespersonId     String?
+  salesperson       Salesperson? @relation(fields: [salespersonId], references: [id])
+  remarks           String?
+  createdAt         DateTime     @default(now())
 
   // Tally export stamps (records only — never blocks re-export)
   tallyExportedAt DateTime?
   tallySentAt     DateTime?
 
-  items       SalesInvoiceItem[]
+  items SalesInvoiceItem[]
 
+  @@unique([companyId, invoiceNo])
   @@index([partyId])
   @@index([date])
 }
 
 model SalesInvoiceItem {
-  id      String  @id @default(cuid())
-  invoiceId String
-  invoice SalesInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  itemId  String
-  item    Item    @relation(fields: [itemId], references: [id])
-  detail  String?
-  hsn     String?
-  uom     String
-  qty     Float
-  rate    Float
-  discPct Float   @default(0)
-  discAmt Float   @default(0)
-  taxable Float
-  gstRate Float
-  cgst    Float   @default(0)
-  sgst    Float   @default(0)
-  igst    Float   @default(0)
-  total   Float
+  id                    String       @id @default(cuid())
+  invoiceId             String
+  invoice               SalesInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  itemId                String
+  item                  Item         @relation(fields: [itemId], references: [id])
+  detail                String?
+  hsn                   String?
+  uom                   String
+  qty                   Float
+  rate                  Float
+  discPct               Float        @default(0)
+  discAmt               Float        @default(0)
+  taxable               Float
+  gstRate               Float
+  cgst                  Float        @default(0)
+  sgst                  Float        @default(0)
+  igst                  Float        @default(0)
+  total                 Float
+  deliveryChallanLineId String? // accepted dispatch quantity billed by this line
 }
 
 // ---------- Purchase ----------
 
 model PurchaseInvoice {
-  id           String   @id @default(cuid())
-  invoiceNo    String   @unique
-  date         DateTime
-  partyId      String
-  party        Party    @relation(fields: [partyId], references: [id])
-  poNo         String?
-  interState   Boolean  @default(false)
-  taxInclusive Boolean  @default(false)
-  taxable      Float    @default(0)
-  discount     Float    @default(0)
-  cgst         Float    @default(0)
-  sgst         Float    @default(0)
-  igst         Float    @default(0)
-  roundOff     Float    @default(0)
-  grandTotal   Float    @default(0)
-  paidAmount   Float    @default(0)
-  status       String   @default("POSTED") // POSTED | CANCELLED
-  remarks      String?
-  createdAt    DateTime @default(now())
+  id                      String   @id @default(cuid())
+  companyId               String   @default("") // filled by the tenant extension; "" fails the FK
+  company                 Company  @relation(fields: [companyId], references: [id])
+  invoiceNo               String
+  date                    DateTime
+  partyId                 String
+  party                   Party    @relation(fields: [partyId], references: [id])
+  poNo                    String?
+  supplierInvoiceNo       String?
+  // = supplierInvoiceNo while POSTED, NULL once cancelled: the unique key below then
+  // only guards ACTIVE invoices, so a cancelled bill can be re-entered correctly.
+  activeSupplierInvoiceNo String?
+  interState              Boolean  @default(false)
+  taxInclusive            Boolean  @default(false)
+  taxable                 Float    @default(0)
+  discount                Float    @default(0)
+  cgst                    Float    @default(0)
+  sgst                    Float    @default(0)
+  igst                    Float    @default(0)
+  roundOff                Float    @default(0)
+  grandTotal              Float    @default(0)
+  paidAmount              Float    @default(0)
+  status                  String   @default("POSTED") // POSTED | CANCELLED
+  remarks                 String?
+  goodsReceiptId          String? // controlled procurement source; null for direct/legacy invoices
+  createdAt               DateTime @default(now())
 
   // Tally export stamps (records only — never blocks re-export)
   tallyExportedAt DateTime?
   tallySentAt     DateTime?
 
-  items       PurchaseInvoiceItem[]
+  items PurchaseInvoiceItem[]
 
+  @@unique([partyId, activeSupplierInvoiceNo])
+  @@unique([companyId, invoiceNo])
+  @@index([partyId, supplierInvoiceNo])
   @@index([partyId])
   @@index([date])
 }
 
 model PurchaseInvoiceItem {
-  id      String  @id @default(cuid())
-  invoiceId String
-  invoice PurchaseInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  itemId  String
-  item    Item    @relation(fields: [itemId], references: [id])
-  detail  String?
-  hsn     String?
-  uom     String
-  qty     Float
-  rate    Float
-  discPct Float   @default(0)
-  discAmt Float   @default(0)
-  taxable Float
-  gstRate Float
-  cgst    Float   @default(0)
-  sgst    Float   @default(0)
-  igst    Float   @default(0)
-  total   Float
+  id                 String          @id @default(cuid())
+  invoiceId          String
+  invoice            PurchaseInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  itemId             String
+  item               Item            @relation(fields: [itemId], references: [id])
+  detail             String?
+  hsn                String?
+  uom                String
+  qty                Float
+  rate               Float
+  discPct            Float           @default(0)
+  discAmt            Float           @default(0)
+  taxable            Float
+  gstRate            Float
+  cgst               Float           @default(0)
+  sgst               Float           @default(0)
+  igst               Float           @default(0)
+  total              Float
+  goodsReceiptLineId String? // accepted receipt line billed by this invoice line
 }
 
 // ---------- Jobwork (Inward → Job Card → Certificate → Invoice) ----------
 
 model JobworkInward {
   id          String   @id @default(cuid())
-  inwardNo    String   @unique
+  companyId   String   @default("") // filled by the tenant extension; "" fails the FK
+  company     Company  @relation(fields: [companyId], references: [id])
+  inwardNo    String
   date        DateTime
   partyId     String
   party       Party    @relation(fields: [partyId], references: [id])
@@ -411,71 +562,80 @@ model JobworkInward {
   status      String   @default("OPEN") // OPEN | IN_PROGRESS | COMPLETED | INVOICED | CANCELLED
   createdAt   DateTime @default(now())
 
-  items       JobworkInwardItem[]
-  jobCards    JobCard[]
+  items        JobworkInwardItem[]
+  jobCards     JobCard[]
   certificates JobworkCertificate[]
 
+  @@unique([companyId, inwardNo])
   @@index([partyId])
 }
 
 model JobworkInwardItem {
-  id              String  @id @default(cuid())
+  id              String        @id @default(cuid())
   inwardId        String
   inward          JobworkInward @relation(fields: [inwardId], references: [id], onDelete: Cascade)
   itemId          String
-  item            Item    @relation(fields: [itemId], references: [id])
+  item            Item          @relation(fields: [itemId], references: [id])
   batchNo         String?
   qty             Float
   weight          Float // KG
-  processedQty    Float   @default(0)
-  processedWeight Float   @default(0)
+  processedQty    Float         @default(0)
+  processedWeight Float         @default(0)
   remarks         String?
 
   cardRows JobCardProcess[]
 }
 
 model JobCard {
-  id          String   @id @default(cuid())
-  cardNo      String   @unique
+  id          String        @id @default(cuid())
+  companyId   String        @default("") // filled by the tenant extension; "" fails the FK
+  company     Company       @relation(fields: [companyId], references: [id])
+  cardNo      String
   inwardId    String
   inward      JobworkInward @relation(fields: [inwardId], references: [id])
   date        DateTime
-  status      String   @default("COMPLETED") // COMPLETED | CANCELLED
-  totalAmount Float    @default(0)
+  status      String        @default("COMPLETED") // COMPLETED | CANCELLED
+  totalAmount Float         @default(0)
   notes       String?
-  createdAt   DateTime @default(now())
+  createdAt   DateTime      @default(now())
 
   processes JobCardProcess[]
+
+  @@unique([companyId, cardNo])
 }
 
 model JobCardProcess {
-  id            String  @id @default(cuid())
-  jobCardId     String
-  jobCard       JobCard @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
-  processId     String
-  process       Process @relation(fields: [processId], references: [id])
-  inwardItemId  String
-  inwardItem    JobworkInwardItem @relation(fields: [inwardItemId], references: [id])
-  qty           Float
-  weight        Float
-  basis         String // WEIGHT | QTY
-  rate          Float
-  amount        Float
-  lotCharge     Float   @default(0)
+  id           String            @id @default(cuid())
+  jobCardId    String
+  jobCard      JobCard           @relation(fields: [jobCardId], references: [id], onDelete: Cascade)
+  processId    String
+  process      Process           @relation(fields: [processId], references: [id])
+  inwardItemId String
+  inwardItem   JobworkInwardItem @relation(fields: [inwardItemId], references: [id])
+  qty          Float
+  weight       Float
+  basis        String // WEIGHT | QTY
+  rate         Float
+  amount       Float
+  lotCharge    Float             @default(0)
 }
 
 model JobworkCertificate {
-  id          String   @id @default(cuid())
-  certNo      String   @unique
+  id          String        @id @default(cuid())
+  companyId   String        @default("") // filled by the tenant extension; "" fails the FK
+  company     Company       @relation(fields: [companyId], references: [id])
+  certNo      String
   inwardId    String
   inward      JobworkInward @relation(fields: [inwardId], references: [id])
   date        DateTime
-  totalQty    Float    @default(0)
-  totalWeight Float    @default(0)
-  totalAmount Float    @default(0)
-  status      String   @default("ISSUED") // ISSUED | CANCELLED
+  totalQty    Float         @default(0)
+  totalWeight Float         @default(0)
+  totalAmount Float         @default(0)
+  status      String        @default("ISSUED") // ISSUED | CANCELLED
   details     String? // process-wise summary (JSON string)
-  createdAt   DateTime @default(now())
+  createdAt   DateTime      @default(now())
+
+  @@unique([companyId, certNo])
 }
 
 // ---------- Manufacturing (Project → BOM → Work Order → Production Tasks) ----------
@@ -488,7 +648,9 @@ model JobworkCertificate {
 
 model Employee {
   id         String   @id @default(cuid())
-  code       String   @unique
+  companyId  String   @default("") // filled by the tenant extension; "" fails the FK
+  company    Company  @relation(fields: [companyId], references: [id])
+  code       String
   name       String
   role       String   @default("WORKER") // WORKER | SUPERVISOR | MANAGER
   skill      String? // e.g. Welder, CNC Operator, Fitter, Painter
@@ -499,12 +661,17 @@ model Employee {
   active     Boolean  @default(true)
   createdAt  DateTime @default(now())
 
-  tasks ProductionTask[]
+  serviceCalls ServiceCall[]
+  tasks        ProductionTask[]
+
+  @@unique([companyId, code])
 }
 
 model Project {
   id          String    @id @default(cuid())
-  projectNo   String    @unique // PRJ-0001 (global counter, not FY-based)
+  companyId   String    @default("") // filled by the tenant extension; "" fails the FK
+  company     Company   @relation(fields: [companyId], references: [id])
+  projectNo   String // PRJ-0001 (global counter, not FY-based)
   name        String
   partyId     String
   party       Party     @relation(fields: [partyId], references: [id])
@@ -523,26 +690,51 @@ model Project {
   boms       Bom[]
   workOrders WorkOrder[]
 
+  @@unique([companyId, projectNo])
   @@index([partyId])
   @@index([status])
 }
 
 model Bom {
   id          String    @id @default(cuid())
-  bomNo       String    @unique // BOM-2526-001 (FY-aware)
+  companyId   String    @default("") // filled by the tenant extension; "" fails the FK
+  company     Company   @relation(fields: [companyId], references: [id])
+  bomNo       String // BOM-2526-001 (FY-aware)
   projectId   String
   project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
   productName String // product / assembly name
   drawingRef  String?
-  status      String    @default("DRAFT") // DRAFT | APPROVED | CANCELLED
+  // Output (made) item. Required on every new BOM; null only on legacy rows
+  // created before item linkage existed (backfill checklist, see
+  // docs/MRP_AND_BOM_REVISIONS.md). MRP explodes demand through this link.
+  itemId       String?
+  item         Item?      @relation("BomOutput", fields: [itemId], references: [id])
+  // Immutable revision chain: a revision is never edited after approval —
+  // changing an approved BOM means creating revision N+1 (see reviseBom()).
+  revision     Int       @default(1)
+  effectiveFrom DateTime?
+  effectiveTo   DateTime?
+  supersedesId  String?   @unique
+  supersedes    Bom?      @relation("BomRevision", fields: [supersedesId], references: [id])
+  supersededBy  Bom?      @relation("BomRevision")
+  status      String    @default("DRAFT") // DRAFT | APPROVED | SUPERSEDED | CANCELLED
   approvedAt  DateTime?
+  /// Standard labour per one output unit, rolled up from the routing when the
+  /// revision is approved (frozen with the revision like the routes themselves).
+  standardLabourCost Float @default(0)
+  /// Minutes per one output unit across all routed operations (setup included).
+  standardMinutes    Float @default(0)
   notes       String?
   createdAt   DateTime  @default(now())
 
   items      BomItem[]
   workOrders WorkOrder[]
+  routing    RoutingOperation[]
 
+  @@unique([companyId, bomNo])
+  @@unique([companyId, itemId, revision])
   @@index([projectId])
+  @@index([companyId, itemId, status])
 }
 
 model BomItem {
@@ -566,105 +758,1309 @@ model BomItem {
   woLines WorkOrderLine[]
 }
 
+// ---------- Material Requirements Planning ----------
+
+/// A saved MRP snapshot: independent demand (approved sales orders) exploded
+/// through the effective BOM of each output item, netted against own stock,
+/// open work-order supply, approved unreceived POs and approved requisitions.
+/// Lines are a plan, never a posting: only an explicit user action turns a
+/// suggestion into a DRAFT purchase requisition or work order.
+model MrpRun {
+  id               String   @id @default(cuid())
+  companyId        String
+  company          Company  @relation(fields: [companyId], references: [id])
+  runNo            String // MRP-2526-001 (FY-aware)
+  asOf             DateTime
+  horizonDays      Int      @default(30)
+  status           String   @default("DRAFT") // DRAFT | APPROVED | CLOSED
+  salesOrderCount  Int      @default(0)
+  workOrderCount   Int      @default(0)
+  requirementCount Int      @default(0)
+  suggestionCount  Int      @default(0)
+  shortageItems    Int      @default(0)
+  createdBy        String?
+  approvedBy       String?
+  approvedAt       DateTime?
+  notes            String?
+  createdAt        DateTime @default(now())
+
+  lines MrpLine[]
+
+  @@unique([companyId, runNo])
+  @@index([companyId, status, asOf])
+}
+
+model MrpLine {
+  id           String   @id @default(cuid())
+  runId        String
+  run          MrpRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  itemId       String
+  item         Item     @relation(fields: [itemId], references: [id])
+  level        Int      @default(0) // 0 = independent demand, 1..n = exploded component
+  needBy       DateTime
+  grossQty     Float    @default(0)
+  onHandQty    Float    @default(0)
+  incomingQty  Float    @default(0) // approved unreceived POs + approved, un-ordered PRs
+  woSupplyQty  Float    @default(0) // open work orders producing this item
+  netQty       Float    @default(0)
+  suggestion   String   @default("NONE") // BUY | MAKE | NONE
+  bomNo        String? // effective BOM used to explode this line (MAKE lines)
+  pegging      String? // human-readable demand trail
+  createdDocType String? // PR | WO
+  createdDocNo   String?
+
+  @@index([runId, level, itemId])
+  @@index([itemId])
+}
+
+// ---------- routing, work centres, shift calendars, downtime (OEE) ----------
+
+/// A work centre: a machine or a manned cell that performs operations. Capacity
+/// is per shift; `calendar` layers shift hours and holidays on top.
+model WorkCenter {
+  id          String   @id @default(cuid())
+  companyId   String   @default("") // filled by the tenant extension; "" fails the FK
+  company     Company  @relation(fields: [companyId], references: [id])
+  code        String
+  name        String
+  /// MACHINE | CELL | MANUAL — a MANUAL centre has no machine-hour capacity cap.
+  type        String   @default("MACHINE")
+  machineNo   String?
+  /** Parallel capacity: how many jobs this centre can run at once. */
+  parallelCapacity Int  @default(1)
+  /** Hours available per working day when no calendar shift covers it. */
+  dailyHours  Float    @default(8)
+  costPerHour Float    @default(0)
+  active      Boolean  @default(true)
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  calendar ShiftCalendar?
+  operations RoutingOperation[]
+  tasks    ProductionTask[]
+  downtimes MachineDowntime[]
+
+  @@unique([companyId, code])
+  @@index([companyId, active])
+}
+
+/// One shift template per work centre (GENERAL / DAY / NIGHT …). Kept as a
+/// separate row from Shift so a centre can run several shifts a day.
+model ShiftCalendar {
+  id          String   @id @default(cuid())
+  companyId   String   @default("") // filled by the tenant extension
+  company     Company  @relation(fields: [companyId], references: [id])
+  workCenterId String @unique
+  workCenter  WorkCenter @relation(fields: [workCenterId], references: [id], onDelete: Cascade)
+  /** Informational working week (0 = Sunday … 6 = Saturday) as CSV. */
+  workDays    String   @default("1,2,3,4,5,6")
+  createdAt   DateTime @default(now())
+
+  shifts   Shift[]
+  holidays ShiftHoliday[]
+
+  @@unique([companyId, workCenterId])
+}
+
+model Shift {
+  id         String        @id @default(cuid())
+  calendarId String
+  calendar   ShiftCalendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+  name       String        @default("GENERAL")
+  /** Minutes from midnight; startMin + durationMin may cross midnight. */
+  startMin    Int          @default(540) // 09:00
+  durationMin Int          @default(480) // 8 h
+  active      Boolean      @default(true)
+
+  @@index([calendarId, startMin])
+}
+
+model ShiftHoliday {
+  id         String        @id @default(cuid())
+  calendarId String
+  calendar   ShiftCalendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+  date       DateTime
+  reason     String?
+
+  @@unique([calendarId, date])
+}
+
+/// Routing: the ordered operations a BOM revision is built with, each on a work
+/// centre with setup / run / queue / move / inspection time factors.
+model RoutingOperation {
+  id            String   @id @default(cuid())
+  companyId     String   @default("")
+  company       Company  @relation(fields: [companyId], references: [id])
+  bomId         String
+  bom           Bom      @relation(fields: [bomId], references: [id], onDelete: Cascade)
+  seq           Int      @default(1)
+  operation     String   // must match a manufacturing operation key
+  workCenterId  String
+  workCenter    WorkCenter @relation(fields: [workCenterId], references: [id])
+  /** Per-unit processing time (minutes) and per-batch setup time. */
+  runMinutesPerUnit Float @default(0)
+  setupMinutes      Float @default(0)
+  queueMinutes      Float @default(0)
+  moveMinutes       Float @default(0)
+  inspectionMinutes Float @default(0)
+  /** Operations with the same seq run in parallel; a higher seq waits. */
+  parallel       Boolean  @default(false)
+  notes          String?
+  createdAt      DateTime @default(now())
+
+  @@unique([companyId, bomId, seq])
+  @@index([companyId, bomId])
+}
+
+/// Unplanned/reactive downtime with a reason — the Availability half of OEE.
+/// Planned maintenance windows use the same table with `planned = true`.
+model MachineDowntime {
+  id           String     @id @default(cuid())
+  companyId    String     @default("")
+  company      Company    @relation(fields: [companyId], references: [id])
+  workCenterId String
+  workCenter   WorkCenter @relation(fields: [workCenterId], references: [id], onDelete: Cascade)
+  startedAt    DateTime
+  endedAt      DateTime?
+  reason       String     // BREAKDOWN | CHANGEOVER | NO_MATERIAL | NO_OPERATOR | POWER | MAINTENANCE | QUALITY | OTHER
+  planned      Boolean    @default(false)
+  notes        String?
+  createdBy    String?
+  createdAt    DateTime   @default(now())
+
+  @@index([companyId, workCenterId, startedAt])
+}
+
 model WorkOrder {
   id          String    @id @default(cuid())
-  woNo        String    @unique // WO-2526-001 (FY-aware)
+  companyId   String    @default("") // filled by the tenant extension; "" fails the FK
+  company     Company   @relation(fields: [companyId], references: [id])
+  woNo        String // WO-2526-001 (FY-aware)
   projectId   String
   project     Project   @relation(fields: [projectId], references: [id])
   bomId       String?
   bom         Bom?      @relation(fields: [bomId], references: [id])
+  // What this order produces and how much. bomId supplies the recipe; these
+  // columns make the *quantity* explicit so MRP can net open work orders as
+  // supply instead of assuming "one BOM batch".
+  outputItemId String?
+  outputItem   Item?     @relation("WorkOrderOutput", fields: [outputItemId], references: [id])
+  outputQty    Float     @default(1)
   date        DateTime
   startDate   DateTime?
   endDate     DateTime?
   priority    String    @default("NORMAL") // LOW | NORMAL | HIGH | URGENT
   status      String    @default("OPEN") // OPEN | IN_PROGRESS | COMPLETED | CANCELLED
   completedAt DateTime?
+  /// Factory overhead absorbed by the completed operations of this order.
+  /// Part of WIP, settled into the finished-goods receipt like material/labour.
+  overheadCost Float    @default(0)
   notes       String?
   createdAt   DateTime  @default(now())
 
-  lines WorkOrderLine[]
-  tasks ProductionTask[]
+  lines              WorkOrderLine[]
+  tasks              ProductionTask[]
+  productionReceipts ProductionReceipt[]
 
+  @@unique([companyId, woNo])
   @@index([projectId])
   @@index([status])
 }
 
 model WorkOrderLine {
-  id          String     @id @default(cuid())
+  id          String    @id @default(cuid())
   workOrderId String
-  workOrder   WorkOrder  @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  workOrder   WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
   bomItemId   String?
-  bomItem     BomItem?   @relation(fields: [bomItemId], references: [id])
+  bomItem     BomItem?  @relation(fields: [bomItemId], references: [id])
   itemId      String
-  item        Item       @relation(fields: [itemId], references: [id])
+  item        Item      @relation(fields: [itemId], references: [id])
   description String? // product / assembly being made
   plannedQty  Float
   uom         String
 }
 
 model ProductionTask {
-  id              String    @id @default(cuid())
-  taskNo          String    @unique // TASK-2526-001 (FY-aware)
-  workOrderId     String
-  workOrder       WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
-  seq             Int       @default(0) // operation order
-  operation       String // CUTTING | CNC_LASER | BENDING | DRILLING | WELDING | GRINDING | ASSEMBLY | PAINTING | FINISHING | OTHER
-  employeeId      String? // assigned worker (task assigning)
-  employee        Employee? @relation(fields: [employeeId], references: [id])
-  machineNo       String?
-  plannedQty      Float
-  actualQty       Float     @default(0)
-  rejectionQty    Float     @default(0)
-  hours           Float     @default(0) // production time
-  labourRate      Float     @default(0) // INR/hour (snapshotted from employee)
-  labourCost      Float     @default(0) // hours × rate
-  materialItemId  String? // material consumed → StockLedger MFG_ISSUE
-  materialItem    Item?     @relation("TaskMaterial", fields: [materialItemId], references: [id])
-  materialQty     Float     @default(0)
-  materialCost    Float     @default(0) // at avg cost on issue date
-  status          String    @default("PENDING") // PENDING | ASSIGNED | IN_PROGRESS | COMPLETED | CANCELLED
-  dueDate         DateTime?
-  startedAt       DateTime?
-  completedAt     DateTime?
-  notes           String?
-  createdAt       DateTime  @default(now())
+  id             String    @id @default(cuid())
+  companyId      String    @default("") // filled by the tenant extension; "" fails the FK
+  company        Company   @relation(fields: [companyId], references: [id])
+  taskNo         String // TASK-2526-001 (FY-aware)
+  workOrderId    String
+  workOrder      WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
+  seq            Int       @default(0) // operation order
+  operation      String // CUTTING | CNC_LASER | BENDING | DRILLING | WELDING | GRINDING | ASSEMBLY | PAINTING | FINISHING | OTHER
+  employeeId     String? // assigned worker (task assigning)
+  employee       Employee? @relation(fields: [employeeId], references: [id])
+  machineNo      String?
+  /** Work centre the operation runs on (routing / capacity / OEE). */
+  workCenterId   String?
+  workCenter     WorkCenter? @relation(fields: [workCenterId], references: [id])
+  /** Planned minutes from the routing snapshot (setup + run + queue/move). */
+  plannedMinutes Float     @default(0)
+  plannedQty     Float
+  actualQty      Float     @default(0)
+  rejectionQty   Float     @default(0)
+  hours          Float     @default(0) // production time
+  labourRate     Float     @default(0) // INR/hour (snapshotted from employee)
+  labourCost     Float     @default(0) // hours × rate
+  materialItemId String? // material consumed → StockLedger MFG_ISSUE
+  materialItem   Item?     @relation("TaskMaterial", fields: [materialItemId], references: [id])
+  materialQty    Float     @default(0)
+  materialCost   Float     @default(0) // at avg cost on issue date
+  /// Absorbed factory overhead for this operation (rate × prime cost). Part of
+  /// the task's WIP contribution and of the work-order cost roll-up.
+  overheadCost   Float     @default(0)
+  status         String    @default("PENDING") // PENDING | ASSIGNED | IN_PROGRESS | COMPLETED | CANCELLED
+  dueDate        DateTime?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  notes          String?
+  createdAt      DateTime  @default(now())
 
+  @@unique([companyId, taskNo])
   @@index([workOrderId])
   @@index([status])
   @@index([employeeId])
 }
 
+// ---------- Batch / lot / serial traceability ----------
+
+model InventoryLot {
+  id              String         @id @default(cuid())
+  companyId       String
+  company         Company        @relation(fields: [companyId], references: [id])
+  itemId          String
+  item            Item           @relation(fields: [itemId], references: [id])
+  warehouseId     String
+  warehouse       Warehouse      @relation(fields: [warehouseId], references: [id])
+  lotNo           String
+  manufactureDate DateTime?
+  expiryDate      DateTime?
+  supplierLotNo   String?
+  status          String         @default("AVAILABLE") // AVAILABLE | QUARANTINE | BLOCKED | EXPIRED | CONSUMED | RECALLED
+  sourceType      String
+  sourceId        String
+  createdAt       DateTime       @default(now())
+  movements       LotMovement[]
+  serials         SerialNumber[]
+  parentLinks     LotGenealogy[] @relation("ChildLot")
+  childLinks      LotGenealogy[] @relation("ParentLot")
+
+  @@unique([companyId, itemId, warehouseId, lotNo])
+  @@index([companyId, status, expiryDate])
+  @@index([sourceType, sourceId])
+}
+
+model SerialNumber {
+  id           String        @id @default(cuid())
+  companyId    String
+  company      Company       @relation(fields: [companyId], references: [id])
+  itemId       String
+  item         Item          @relation(fields: [itemId], references: [id])
+  warehouseId  String?
+  warehouse    Warehouse?    @relation(fields: [warehouseId], references: [id])
+  lotId        String?
+  lot          InventoryLot? @relation(fields: [lotId], references: [id])
+  serialNo     String
+  status       String        @default("AVAILABLE") // AVAILABLE | RESERVED | ISSUED | SCRAPPED | RECALLED
+  sourceType   String
+  sourceId     String
+  issuedToType String?
+  issuedToId   String?
+  createdAt    DateTime      @default(now())
+
+  @@unique([companyId, itemId, serialNo])
+  @@index([companyId, status])
+  @@index([sourceType, sourceId])
+}
+
+model LotMovement {
+  id           String       @id @default(cuid())
+  companyId    String
+  company      Company      @relation(fields: [companyId], references: [id])
+  lotId        String
+  lot          InventoryLot @relation(fields: [lotId], references: [id])
+  itemId       String
+  item         Item         @relation(fields: [itemId], references: [id])
+  warehouseId  String
+  warehouse    Warehouse    @relation(fields: [warehouseId], references: [id])
+  postingDate  DateTime
+  movementType String // RECEIPT | ISSUE | TRANSFER_IN | TRANSFER_OUT | ADJUSTMENT | REVERSAL
+  qtyIn        Float        @default(0)
+  qtyOut       Float        @default(0)
+  voucherType  String
+  voucherNo    String
+  referenceId  String?
+  remarks      String?
+  isCancelled  Boolean      @default(false)
+  createdAt    DateTime     @default(now())
+
+  @@index([lotId, postingDate])
+  @@index([companyId, itemId, warehouseId])
+  @@index([voucherType, voucherNo])
+}
+
+model LotGenealogy {
+  id          String       @id @default(cuid())
+  parentLotId String
+  parentLot   InventoryLot @relation("ParentLot", fields: [parentLotId], references: [id])
+  childLotId  String
+  childLot    InventoryLot @relation("ChildLot", fields: [childLotId], references: [id])
+  consumedQty Float
+  createdAt   DateTime     @default(now())
+
+  @@unique([parentLotId, childLotId])
+  @@index([childLotId])
+}
+
+// ---------- Production output, QC and WIP settlement ----------
+
+model ProductionReceipt {
+  id             String    @id @default(cuid())
+  companyId      String
+  company        Company   @relation(fields: [companyId], references: [id])
+  receiptNo      String
+  date           DateTime
+  workOrderId    String
+  workOrder      WorkOrder @relation(fields: [workOrderId], references: [id])
+  outputItemId   String
+  outputItem     Item      @relation(fields: [outputItemId], references: [id])
+  warehouseId    String
+  warehouse      Warehouse @relation(fields: [warehouseId], references: [id])
+  batchNo        String?
+  manufacturedAt DateTime?
+  expiryDate     DateTime?
+  producedQty    Float
+  acceptedQty    Float
+  rejectedQty    Float     @default(0)
+  reworkQty      Float     @default(0)
+  scrapQty       Float     @default(0)
+  qcStatus       String // PASSED | PARTIAL | FAILED
+  qcNotes        String?
+  expectedCost   Float     @default(0)
+  actualCost     Float     @default(0)
+  variance       Float     @default(0)
+  status         String    @default("POSTED") // POSTED | CANCELLED
+  postedAt       DateTime  @default(now())
+  cancelledAt    DateTime?
+  createdBy      String?
+  createdAt      DateTime  @default(now())
+
+  @@unique([companyId, receiptNo])
+  @@index([companyId, status, date])
+  @@index([workOrderId])
+  @@index([outputItemId, batchNo])
+}
+
+// ---------- Procurement (Requisition → PO → GRN/QC → Invoice) ----------
+
+model PurchaseRequisition {
+  id         String                    @id @default(cuid())
+  companyId  String
+  company    Company                   @relation(fields: [companyId], references: [id])
+  reqNo      String
+  date       DateTime
+  requiredBy DateTime?
+  department String?
+  purpose    String?
+  status     String                    @default("DRAFT") // DRAFT | SUBMITTED | APPROVED | REJECTED | CLOSED | CANCELLED
+  approvedBy String?
+  approvedAt DateTime?
+  createdBy  String?
+  createdAt  DateTime                  @default(now())
+  lines      PurchaseRequisitionLine[]
+  orders     PurchaseOrder[]
+  rfqs       Rfq[]
+
+  @@unique([companyId, reqNo])
+  @@index([companyId, status, date])
+}
+
+model PurchaseRequisitionLine {
+  id            String              @id @default(cuid())
+  requisitionId String
+  requisition   PurchaseRequisition @relation(fields: [requisitionId], references: [id], onDelete: Cascade)
+  itemId        String
+  item          Item                @relation(fields: [itemId], references: [id])
+  qty           Float
+  orderedQty    Float               @default(0)
+  uom           String
+  estimatedRate Float               @default(0)
+  remarks       String?
+
+  @@index([requisitionId])
+  @@index([itemId])
+}
+
+model PurchaseOrder {
+  id             String               @id @default(cuid())
+  companyId      String
+  company        Company              @relation(fields: [companyId], references: [id])
+  poNo           String
+  date           DateTime
+  supplierId     String
+  supplier       Party                @relation("PurchaseOrderSupplier", fields: [supplierId], references: [id])
+  requisitionId  String?
+  requisition    PurchaseRequisition? @relation(fields: [requisitionId], references: [id])
+  expectedDate   DateTime?
+  status         String               @default("DRAFT") // DRAFT | APPROVED | PART_RECEIVED | RECEIVED | CLOSED | CANCELLED
+  taxInclusive   Boolean              @default(false)
+  overReceiptPct Float                @default(0)
+  subtotal       Float                @default(0)
+  taxAmount      Float                @default(0)
+  grandTotal     Float                @default(0)
+  approvedBy     String?
+  approvedAt     DateTime?
+  terms          String?
+  createdBy      String?
+  createdAt      DateTime             @default(now())
+  lines          PurchaseOrderLine[]
+  receipts       GoodsReceipt[]
+
+  @@unique([companyId, poNo])
+  @@index([companyId, status, date])
+  @@index([supplierId])
+}
+
+model PurchaseOrderLine {
+  id              String             @id @default(cuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder      @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  itemId          String
+  item            Item               @relation(fields: [itemId], references: [id])
+  qty             Float
+  receivedQty     Float              @default(0)
+  acceptedQty     Float              @default(0)
+  rejectedQty     Float              @default(0)
+  billedQty       Float              @default(0)
+  uom             String
+  rate            Float
+  gstRate         Float
+  discountPct     Float              @default(0)
+  amount          Float
+  remarks         String?
+  receiptLines    GoodsReceiptLine[]
+
+  @@index([purchaseOrderId])
+  @@index([itemId])
+}
+
+model GoodsReceipt {
+  id              String              @id @default(cuid())
+  companyId       String
+  company         Company             @relation(fields: [companyId], references: [id])
+  grnNo           String
+  date            DateTime
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder       @relation(fields: [purchaseOrderId], references: [id])
+  supplierDocNo   String?
+  // `<supplierId>:<supplierDocNo>` while the GRN is active, NULL once cancelled: one
+  // supplier challan per supplier, re-receivable after a cancellation.
+  supplierDocKey  String?
+  supplierDocDate DateTime?
+  warehouseId     String
+  warehouse       Warehouse           @relation(fields: [warehouseId], references: [id])
+  status          String              @default("PENDING_QC") // PENDING_QC | ACCEPTED | PART_ACCEPTED | REJECTED | CANCELLED
+  remarks         String?
+  createdBy       String?
+  postedAt        DateTime?
+  cancelledAt     DateTime?
+  createdAt       DateTime            @default(now())
+  lines           GoodsReceiptLine[]
+  inspections     QualityInspection[]
+
+  @@unique([companyId, grnNo])
+  @@unique([companyId, supplierDocKey])
+  @@index([companyId, supplierDocNo])
+  @@index([companyId, status, date])
+  @@index([purchaseOrderId])
+}
+
+model GoodsReceiptLine {
+  id                  String              @id @default(cuid())
+  goodsReceiptId      String
+  goodsReceipt        GoodsReceipt        @relation(fields: [goodsReceiptId], references: [id], onDelete: Cascade)
+  purchaseOrderLineId String
+  purchaseOrderLine   PurchaseOrderLine   @relation(fields: [purchaseOrderLineId], references: [id])
+  itemId              String
+  item                Item                @relation(fields: [itemId], references: [id])
+  receivedQty         Float
+  acceptedQty         Float               @default(0)
+  rejectedQty         Float               @default(0)
+  billedQty           Float               @default(0)
+  batchNo             String?
+  manufactureDate     DateTime?
+  expiryDate          DateTime?
+  qcStatus            String              @default("PENDING") // PENDING | PASSED | PARTIAL | FAILED
+  rejectionReason     String?
+  inspections         QualityInspection[]
+
+  @@unique([goodsReceiptId, purchaseOrderLineId])
+  @@index([purchaseOrderLineId])
+  @@index([itemId, batchNo])
+}
+
+model QualityTemplate {
+  id             String              @id @default(cuid())
+  companyId      String
+  company        Company             @relation(fields: [companyId], references: [id])
+  code           String
+  name           String
+  inspectionType String // INWARD | PRODUCTION | DISPATCH | RETURN
+  itemId         String?
+  item           Item?               @relation(fields: [itemId], references: [id])
+  active         Boolean             @default(true)
+  version        Int                 @default(1)
+  notes          String?
+  createdAt      DateTime            @default(now())
+  parameters     QualityParameter[]
+  inspections    QualityInspection[]
+
+  @@unique([companyId, code, version])
+  @@index([companyId, inspectionType, itemId, active])
+}
+
+model QualityParameter {
+  id           String               @id @default(cuid())
+  templateId   String
+  template     QualityTemplate      @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  name         String
+  dataType     String               @default("NUMBER") // NUMBER | TEXT | BOOLEAN
+  unit         String?
+  minValue     Float?
+  maxValue     Float?
+  expectedText String?
+  required     Boolean              @default(true)
+  seq          Int                  @default(0)
+  measurements QualityMeasurement[]
+
+  @@unique([templateId, name])
+  @@index([templateId, seq])
+}
+
+model QualityInspection {
+  id                 String               @id @default(cuid())
+  companyId          String
+  company            Company              @relation(fields: [companyId], references: [id])
+  inspectionNo       String
+  inspectionType     String // INWARD | PRODUCTION | DISPATCH | RETURN
+  referenceType      String
+  referenceId        String
+  templateId         String?
+  template           QualityTemplate?     @relation(fields: [templateId], references: [id])
+  itemId             String?
+  item               Item?                @relation(fields: [itemId], references: [id])
+  goodsReceiptId     String?
+  goodsReceipt       GoodsReceipt?        @relation(fields: [goodsReceiptId], references: [id])
+  goodsReceiptLineId String?
+  goodsReceiptLine   GoodsReceiptLine?    @relation(fields: [goodsReceiptLineId], references: [id])
+  status             String               @default("OPEN") // OPEN | PASSED | PARTIAL | FAILED | CANCELLED
+  inspectedBy        String?
+  inspectedAt        DateTime?
+  disposition        String? // ACCEPT | REWORK | SCRAP | RETURN_TO_VENDOR | QUARANTINE
+  resultsJson        String?
+  notes              String?
+  createdAt          DateTime             @default(now())
+  measurements       QualityMeasurement[]
+
+  @@unique([companyId, inspectionNo])
+  @@index([companyId, referenceType, referenceId])
+}
+
+model QualityMeasurement {
+  id           String            @id @default(cuid())
+  inspectionId String
+  inspection   QualityInspection @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+  parameterId  String
+  parameter    QualityParameter  @relation(fields: [parameterId], references: [id])
+  numberValue  Float?
+  textValue    String?
+  booleanValue Boolean?
+  passed       Boolean
+  remarks      String?
+
+  @@unique([inspectionId, parameterId])
+  @@index([parameterId])
+}
+
+model ItemVendor {
+  id           String   @id @default(cuid())
+  companyId    String
+  company      Company  @relation(fields: [companyId], references: [id])
+  itemId       String
+  item         Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  supplierId   String
+  supplier     Party    @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  supplierSku  String?
+  lastRate     Float    @default(0)
+  leadTimeDays Int      @default(0)
+  minOrderQty  Float    @default(0)
+  preferred    Boolean  @default(false)
+  active       Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  @@unique([companyId, itemId, supplierId])
+  @@index([supplierId])
+}
+
+// ---------- Quote-to-Cash (Quotation → SO → Dispatch/QC → Invoice) ----------
+
+model SalesQuotation {
+  id            String               @id @default(cuid())
+  companyId     String
+  company       Company              @relation(fields: [companyId], references: [id])
+  quotationNo   String
+  revisionNo    Int                  @default(1)
+  supersedesId  String?
+  date          DateTime
+  validUntil    DateTime
+  partyId       String
+  party         Party                @relation(fields: [partyId], references: [id])
+  status        String               @default("DRAFT") // DRAFT | SUBMITTED | APPROVED | REJECTED | ACCEPTED | EXPIRED | SUPERSEDED | CANCELLED
+  taxable       Float                @default(0)
+  cgst          Float                @default(0)
+  sgst          Float                @default(0)
+  igst          Float                @default(0)
+  grandTotal    Float                @default(0)
+  terms         String?
+  approvedBy    String?
+  approvedAt    DateTime?
+  salespersonId String?
+  salesperson   Salesperson?         @relation(fields: [salespersonId], references: [id])
+  createdBy     String?
+  createdAt     DateTime             @default(now())
+  lines         SalesQuotationLine[]
+  salesOrders   SalesOrder[]
+
+  @@unique([companyId, quotationNo, revisionNo])
+  @@index([companyId, status, date])
+  @@index([partyId])
+}
+
+model SalesQuotationLine {
+  id          String         @id @default(cuid())
+  quotationId String
+  quotation   SalesQuotation @relation(fields: [quotationId], references: [id], onDelete: Cascade)
+  itemId      String
+  item        Item           @relation(fields: [itemId], references: [id])
+  qty         Float
+  uom         String
+  rate        Float
+  discountPct Float          @default(0)
+  gstRate     Float
+  taxable     Float
+  total       Float
+  remarks     String?
+
+  @@index([quotationId])
+}
+
+model SalesOrder {
+  id               String            @id @default(cuid())
+  companyId        String
+  company          Company           @relation(fields: [companyId], references: [id])
+  orderNo          String
+  date             DateTime
+  deliveryDate     DateTime?
+  partyId          String
+  party            Party             @relation(fields: [partyId], references: [id])
+  quotationId      String?
+  quotation        SalesQuotation?   @relation(fields: [quotationId], references: [id])
+  customerPoNo     String?
+  status           String            @default("DRAFT") // DRAFT | APPROVED | PART_DISPATCHED | DISPATCHED | CLOSED | CANCELLED
+  taxable          Float             @default(0)
+  taxAmount        Float             @default(0)
+  grandTotal       Float             @default(0)
+  creditApproved   Boolean           @default(false)
+  approvedBy       String?
+  approvedAt       DateTime?
+  notes            String?
+  salespersonId    String?
+  salesperson      Salesperson?      @relation(fields: [salespersonId], references: [id])
+  createdBy        String?
+  createdAt        DateTime          @default(now())
+  lines            SalesOrderLine[]
+  challans         DeliveryChallan[]
+  paymentSchedules PaymentSchedule[]
+  partyAdvances    PartyAdvance[]
+
+  @@unique([companyId, orderNo])
+  @@index([companyId, status, date])
+  @@index([partyId])
+}
+
+model SalesOrderLine {
+  id            String                @id @default(cuid())
+  salesOrderId  String
+  salesOrder    SalesOrder            @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  itemId        String
+  item          Item                  @relation(fields: [itemId], references: [id])
+  qty           Float
+  reservedQty   Float                 @default(0)
+  dispatchedQty Float                 @default(0)
+  invoicedQty   Float                 @default(0)
+  uom           String
+  rate          Float
+  gstRate       Float
+  taxable       Float
+  total         Float
+  remarks       String?
+  challanLines  DeliveryChallanLine[]
+
+  @@index([salesOrderId])
+  @@index([itemId])
+}
+
+model DeliveryChallan {
+  id           String                @id @default(cuid())
+  companyId    String
+  company      Company               @relation(fields: [companyId], references: [id])
+  challanNo    String
+  date         DateTime
+  salesOrderId String
+  salesOrder   SalesOrder            @relation(fields: [salesOrderId], references: [id])
+  warehouseId  String
+  warehouse    Warehouse             @relation(fields: [warehouseId], references: [id])
+  status       String                @default("PENDING_QC") // PENDING_QC | READY | DISPATCHED | INVOICED | CANCELLED
+  vehicleNo    String?
+  transporter  String?
+  remarks      String?
+  dispatchedAt DateTime?
+  cancelledAt  DateTime?
+  createdBy    String?
+  createdAt    DateTime              @default(now())
+  lines        DeliveryChallanLine[]
+
+  @@unique([companyId, challanNo])
+  @@index([companyId, status, date])
+  @@index([salesOrderId])
+}
+
+model DeliveryChallanLine {
+  id                String          @id @default(cuid())
+  deliveryChallanId String
+  deliveryChallan   DeliveryChallan @relation(fields: [deliveryChallanId], references: [id], onDelete: Cascade)
+  salesOrderLineId  String
+  salesOrderLine    SalesOrderLine  @relation(fields: [salesOrderLineId], references: [id])
+  itemId            String
+  item              Item            @relation(fields: [itemId], references: [id])
+  plannedQty        Float
+  acceptedQty       Float           @default(0)
+  rejectedQty       Float           @default(0)
+  invoicedQty       Float           @default(0)
+  qcStatus          String          @default("PENDING") // PENDING | PASSED | PARTIAL | FAILED
+  batchNo           String?
+  qcNotes           String?
+
+  @@unique([deliveryChallanId, salesOrderLineId])
+  @@index([salesOrderLineId])
+}
+
+// ---------- Commercial returns and tax adjustment notes ----------
+
+model ReturnDocument {
+  id              String               @id @default(cuid())
+  companyId       String
+  company         Company              @relation(fields: [companyId], references: [id])
+  returnNo        String
+  date            DateTime
+  returnType      String // SALES_RETURN | PURCHASE_RETURN
+  sourceInvoiceId String
+  sourceInvoiceNo String
+  partyId         String
+  party           Party                @relation(fields: [partyId], references: [id])
+  warehouseId     String
+  warehouse       Warehouse            @relation(fields: [warehouseId], references: [id])
+  qcStatus        String               @default("PENDING") // PENDING | PASSED | PARTIAL | FAILED
+  status          String               @default("DRAFT") // DRAFT | POSTED | CANCELLED
+  adjustmentType  String // CREDIT_NOTE for sales return | DEBIT_NOTE for purchase return
+  adjustmentNo    String?
+  taxable         Float                @default(0)
+  cgst            Float                @default(0)
+  sgst            Float                @default(0)
+  igst            Float                @default(0)
+  grandTotal      Float                @default(0)
+  // Running total of POSTED refunds. Incremented with a conditional UPDATE so two
+  // concurrent refunds can never exceed grandTotal (see finance-adjustments.ts).
+  refundedAmount  Float                @default(0)
+  reason          String
+  postedAt        DateTime?
+  cancelledAt     DateTime?
+  createdBy       String?
+  createdAt       DateTime             @default(now())
+  lines           ReturnDocumentLine[]
+  refunds         RefundAllocation[]
+
+  @@unique([companyId, returnNo])
+  @@unique([companyId, adjustmentNo])
+  @@index([companyId, returnType, status, date])
+  @@index([sourceInvoiceId])
+}
+
+model ReturnDocumentLine {
+  id               String         @id @default(cuid())
+  returnDocumentId String
+  returnDocument   ReturnDocument @relation(fields: [returnDocumentId], references: [id], onDelete: Cascade)
+  sourceLineId     String
+  itemId           String
+  item             Item           @relation(fields: [itemId], references: [id])
+  requestedQty     Float
+  acceptedQty      Float          @default(0)
+  rejectedQty      Float          @default(0)
+  rate             Float
+  gstRate          Float
+  taxable          Float
+  cgst             Float          @default(0)
+  sgst             Float          @default(0)
+  igst             Float          @default(0)
+  total            Float
+  disposition      String // RESTOCK | SCRAP | RETURN_TO_VENDOR | REJECT_TO_CUSTOMER
+  batchNo          String?
+  qcNotes          String?
+
+  @@unique([returnDocumentId, sourceLineId])
+  @@index([sourceLineId])
+  @@index([itemId])
+}
+
+// ---------- Payment schedules, advances and refunds ----------
+
+model PaymentSchedule {
+  id           String     @id @default(cuid())
+  companyId    String
+  company      Company    @relation(fields: [companyId], references: [id])
+  salesOrderId String
+  salesOrder   SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  partyId      String
+  party        Party      @relation(fields: [partyId], references: [id])
+  milestone    String
+  dueDate      DateTime
+  amount       Float
+  paidAmount   Float      @default(0)
+  status       String     @default("PENDING") // PENDING | PART_PAID | PAID | OVERDUE | CANCELLED
+  createdAt    DateTime   @default(now())
+
+  @@unique([salesOrderId, milestone])
+  @@index([companyId, dueDate, status])
+  @@index([partyId])
+}
+
+model PartyAdvance {
+  id             String      @id @default(cuid())
+  companyId      String
+  company        Company     @relation(fields: [companyId], references: [id])
+  partyId        String
+  party          Party       @relation(fields: [partyId], references: [id])
+  paymentId      String
+  payment        Payment     @relation(fields: [paymentId], references: [id])
+  advanceType    String // CUSTOMER | SUPPLIER
+  // Optional: the sales order this advance was collected against (counts toward
+  // its payment milestones until it is applied to an invoice).
+  salesOrderId   String?
+  salesOrder     SalesOrder? @relation(fields: [salesOrderId], references: [id], onDelete: SetNull)
+  originalAmount Float
+  appliedAmount  Float       @default(0)
+  status         String      @default("OPEN") // OPEN | PART_APPLIED | APPLIED | CANCELLED
+  createdAt      DateTime    @default(now())
+
+  @@unique([paymentId])
+  @@index([companyId, partyId, status])
+  @@index([salesOrderId])
+}
+
+model RefundAllocation {
+  id               String         @id @default(cuid())
+  companyId        String
+  company          Company        @relation(fields: [companyId], references: [id])
+  returnDocumentId String
+  returnDocument   ReturnDocument @relation(fields: [returnDocumentId], references: [id])
+  paymentId        String
+  payment          Payment        @relation(fields: [paymentId], references: [id])
+  amount           Float
+  createdAt        DateTime       @default(now())
+
+  @@unique([paymentId])
+  @@index([companyId, returnDocumentId])
+}
+
 // ---------- Payments ----------
 
 model Payment {
-  id         String   @id @default(cuid())
-  paymentNo  String   @unique
-  date       DateTime
-  type       String // RECEIPT | PAYMENT
-  partyId    String
-  party      Party    @relation(fields: [partyId], references: [id])
-  amount     Float
-  mode       String   @default("CASH") // CASH | BANK | UPI | CHEQUE
-  refNo      String?
-  notes      String?
-  status     String   @default("POSTED") // POSTED | CANCELLED
-  createdAt  DateTime @default(now())
+  id           String      @id @default(cuid())
+  companyId    String      @default("") // filled by the tenant extension; "" fails the FK
+  company      Company     @relation(fields: [companyId], references: [id])
+  paymentNo    String
+  date         DateTime
+  type         String // RECEIPT | PAYMENT
+  partyId      String
+  party        Party       @relation(fields: [partyId], references: [id])
+  amount       Float
+  mode         String      @default("CASH") // CASH | BANK | UPI | CHEQUE
+  refNo        String?
+  notes        String?
+  tdsSectionId String? // TDS at source: amount = net cash, settled = amount + tdsAmount
+  tdsSection   TdsSection? @relation(fields: [tdsSectionId], references: [id])
+  tdsAmount    Float       @default(0)
+  status       String      @default("POSTED") // POSTED | CANCELLED
+  createdAt    DateTime    @default(now())
 
   allocations PaymentAllocation[]
+  advances    PartyAdvance[]
+  refunds     RefundAllocation[]
 
+  @@unique([companyId, paymentNo])
   @@index([partyId])
   @@index([date])
 }
 
 model PaymentAllocation {
-  id          String @id @default(cuid())
-  paymentId   String
-  payment     Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
-  invoiceType String // SALES | PURCHASE
-  invoiceId   String?
-  invoiceNo   String
-  amount      Float
+  id             String    @id @default(cuid())
+  paymentId      String
+  payment        Payment   @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  invoiceType    String // SALES | PURCHASE
+  invoiceId      String?
+  invoiceNo      String
+  amount         Float
+  // PAYMENT = allocated when the payment was posted; ADVANCE_APPLICATION = a later
+  // application of an unallocated advance (reversible via reversedAt).
+  kind           String    @default("PAYMENT")
+  reversedAt     DateTime?
+  reversalReason String?
 
   @@index([paymentId])
   @@index([invoiceNo])
+}
+
+// ---------- Request idempotency ----------
+// A client-supplied Idempotency-Key makes a create/post request safe to retry or
+// double-submit: the first request records its response, later ones replay it.
+model IdempotencyKey {
+  id           String   @id // "<scope>:<client key>"
+  scope        String
+  requestHash  String
+  state        String   @default("IN_PROGRESS") // IN_PROGRESS | COMPLETED
+  statusCode   Int?
+  responseBody String?  @db.LongText
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+// ---------- RFQ and supplier quotation comparison ----------
+// Requisition -> RFQ (invited suppliers) -> one quotation per supplier ->
+// commercial comparison (rate, discount, GST, freight, landed total, delivery,
+// validity) -> award with mandatory reason (OWNER approval, audit trail) -> PO.
+
+model Rfq {
+  id              String               @id @default(cuid())
+  companyId       String
+  company         Company              @relation(fields: [companyId], references: [id])
+  rfqNo           String
+  date            DateTime             @default(now())
+  dueDate         DateTime?
+  requisitionId   String?
+  requisition     PurchaseRequisition? @relation(fields: [requisitionId], references: [id])
+  status          String               @default("OPEN") // OPEN | AWARDED | ORDERED | CANCELLED
+  notes           String?
+  createdBy       String?
+  awardedQuoteId  String?
+  awardReason     String?
+  awardedBy       String?
+  awardedAt       DateTime?
+  purchaseOrderId String?
+  cancelReason    String?
+  createdAt       DateTime             @default(now())
+  lines           RfqLine[]
+  suppliers       RfqSupplier[]
+  quotes          SupplierQuote[]
+
+  @@unique([companyId, rfqNo])
+  @@index([companyId, status, date])
+}
+
+model RfqLine {
+  id                String              @id @default(cuid())
+  rfqId             String
+  rfq               Rfq                 @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  itemId            String
+  item              Item                @relation(fields: [itemId], references: [id])
+  qty               Float
+  uom               String
+  requisitionLineId String?
+  quoteLines        SupplierQuoteLine[]
+
+  @@unique([rfqId, itemId])
+}
+
+model RfqSupplier {
+  id         String @id @default(cuid())
+  rfqId      String
+  rfq        Rfq    @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  supplierId String
+  supplier   Party  @relation(fields: [supplierId], references: [id])
+
+  @@unique([rfqId, supplierId])
+}
+
+model SupplierQuote {
+  id              String              @id @default(cuid())
+  companyId       String
+  company         Company             @relation(fields: [companyId], references: [id])
+  rfqId           String
+  rfq             Rfq                 @relation(fields: [rfqId], references: [id])
+  supplierId      String
+  supplier        Party               @relation(fields: [supplierId], references: [id])
+  supplierRef     String?
+  quoteDate       DateTime
+  validUntil      DateTime
+  deliveryDays    Int
+  freight         Float               @default(0)
+  paymentTerms    String?
+  status          String              @default("RECEIVED") // RECEIVED | SELECTED | REJECTED
+  rejectionReason String?
+  subtotal        Float               @default(0)
+  taxAmount       Float               @default(0)
+  landedTotal     Float               @default(0)
+  createdBy       String?
+  createdAt       DateTime            @default(now())
+  lines           SupplierQuoteLine[]
+
+  @@unique([rfqId, supplierId])
+  @@index([companyId, status])
+}
+
+model SupplierQuoteLine {
+  id          String        @id @default(cuid())
+  quoteId     String
+  quote       SupplierQuote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  rfqLineId   String
+  rfqLine     RfqLine       @relation(fields: [rfqLineId], references: [id])
+  rate        Float
+  discountPct Float         @default(0)
+  gstRate     Float
+  amount      Float
+
+  @@unique([quoteId, rfqLineId])
+}
+
+// ---------------------------------------------------------------------------
+// Books: chart of accounts extension, journal vouchers, TDS
+// ---------------------------------------------------------------------------
+
+/// Organisation-defined ledger (expense / income / asset / liability heads).
+/// System accounts (DEBT, CRED, STKV, ...) live in src/lib/accounting.ts.
+model LedgerAccount {
+  id        String   @id @default(cuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id])
+  code      String
+  name      String
+  group     String
+  nature    String // ASSET | LIABILITY | EQUITY | INCOME | EXPENSE
+  active    Boolean  @default(true)
+  createdBy String?
+  createdAt DateTime @default(now())
+
+  @@unique([companyId, code])
+}
+
+/// Manual double-entry journal (Dr = Cr enforced). Cancel = mirrored reversal.
+model JournalVoucher {
+  id           String        @id @default(cuid())
+  companyId    String
+  company      Company       @relation(fields: [companyId], references: [id])
+  voucherNo    String
+  date         DateTime
+  narration    String
+  status       String        @default("POSTED") // POSTED | CANCELLED
+  total        Float         @default(0)
+  cancelReason String?
+  createdBy    String?
+  cancelledBy  String?
+  createdAt    DateTime      @default(now())
+  lines        JournalLine[]
+
+  @@unique([companyId, voucherNo])
+  @@index([companyId, date])
+}
+
+model JournalLine {
+  id          String         @id @default(cuid())
+  journalId   String
+  journal     JournalVoucher @relation(fields: [journalId], references: [id], onDelete: Cascade)
+  account     String
+  accountName String
+  partyId     String?
+  debit       Float          @default(0)
+  credit      Float          @default(0)
+  remarks     String?
+
+  @@index([journalId])
+}
+
+/// TDS section master (194C, 194J, ...). Deducted on supplier payments
+/// (TDS payable) or suffered on customer receipts (TDS receivable).
+model TdsSection {
+  id              String    @id @default(cuid())
+  companyId       String
+  company         Company   @relation(fields: [companyId], references: [id])
+  section         String
+  description     String
+  ratePct         Float
+  thresholdSingle Float     @default(0)
+  thresholdAnnual Float     @default(0)
+  active          Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  payments        Payment[]
+
+  @@unique([companyId, section])
+}
+
+// ---------------------------------------------------------------------------
+// Inventory: stock adjustment with reason code and maker-checker approval
+// ---------------------------------------------------------------------------
+
+model StockAdjustment {
+  id           String                @id @default(cuid())
+  companyId    String
+  company      Company               @relation(fields: [companyId], references: [id])
+  adjNo        String
+  date         DateTime
+  warehouseId  String
+  warehouse    Warehouse             @relation(fields: [warehouseId], references: [id])
+  reasonCode   String // PHYSICAL_COUNT | DAMAGE | EXPIRY | THEFT_LOSS | FOUND | SCRAP | OTHER
+  notes        String?
+  status       String                @default("PENDING") // PENDING | APPROVED | REJECTED | CANCELLED
+  value        Float                 @default(0) // signed: + increase, - decrease (at posting rates)
+  requestedBy  String?
+  decidedBy    String?
+  decidedAt    DateTime?
+  decisionNote String?
+  cancelReason String?
+  createdAt    DateTime              @default(now())
+  lines        StockAdjustmentLine[]
+
+  @@unique([companyId, adjNo])
+  @@index([companyId, status, date])
+}
+
+model StockAdjustmentLine {
+  id           String          @id @default(cuid())
+  adjustmentId String
+  adjustment   StockAdjustment @relation(fields: [adjustmentId], references: [id], onDelete: Cascade)
+  itemId       String
+  item         Item            @relation(fields: [itemId], references: [id])
+  qtyChange    Float // + found / excess, - shortage / write-off
+  rate         Float           @default(0) // set at approval (avg cost for decreases)
+  value        Float           @default(0)
+
+  @@index([adjustmentId])
+}
+
+// ---------------------------------------------------------------------------
+// CRM: salespersons, leads and follow-up activities
+// ---------------------------------------------------------------------------
+
+model Salesperson {
+  id            String           @id @default(cuid())
+  companyId     String
+  company       Company          @relation(fields: [companyId], references: [id])
+  code          String
+  name          String
+  phone         String?
+  email         String?
+  monthlyTarget Float            @default(0)
+  active        Boolean          @default(true)
+  createdAt     DateTime         @default(now())
+  leads         Lead[]
+  quotations    SalesQuotation[]
+  salesOrders   SalesOrder[]
+  salesInvoices SalesInvoice[]
+
+  @@unique([companyId, code])
+}
+
+model Lead {
+  id                String         @id @default(cuid())
+  companyId         String
+  company           Company        @relation(fields: [companyId], references: [id])
+  leadNo            String
+  date              DateTime
+  contactName       String
+  organisation      String?
+  phone             String?
+  email             String?
+  city              String?
+  stateCode         String?
+  gstin             String?
+  source            String         @default("OTHER") // WEBSITE | REFERRAL | EXHIBITION | COLD_CALL | MARKETPLACE | EXISTING_CUSTOMER | OTHER
+  status            String         @default("NEW") // NEW | CONTACTED | QUALIFIED | PROPOSAL | WON | LOST
+  requirement       String?
+  expectedValue     Float          @default(0)
+  probability       Int            @default(10)
+  expectedCloseDate DateTime?
+  nextFollowUpAt    DateTime?
+  salespersonId     String?
+  salesperson       Salesperson?   @relation(fields: [salespersonId], references: [id])
+  partyId           String?
+  party             Party?         @relation(fields: [partyId], references: [id])
+  lostReason        String?
+  closedAt          DateTime?
+  createdBy         String?
+  createdAt         DateTime       @default(now())
+  activities        LeadActivity[]
+
+  @@unique([companyId, leadNo])
+  @@index([companyId, status])
+  @@index([companyId, nextFollowUpAt])
+}
+
+model LeadActivity {
+  id        String    @id @default(cuid())
+  leadId    String
+  lead      Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  type      String // CALL | MEETING | EMAIL | VISIT | NOTE
+  notes     String
+  dueAt     DateTime?
+  doneAt    DateTime?
+  createdBy String?
+  createdAt DateTime  @default(now())
+
+  @@index([leadId])
+}
+
+// ---------------------------------------------------------------------------
+// After-sales service calls (complaint -> assignment -> resolution -> invoice)
+// ---------------------------------------------------------------------------
+
+model ServiceCall {
+  id             String    @id @default(cuid())
+  companyId      String
+  company        Company   @relation(fields: [companyId], references: [id])
+  callNo         String
+  date           DateTime
+  partyId        String
+  party          Party     @relation(fields: [partyId], references: [id])
+  itemId         String?
+  item           Item?     @relation(fields: [itemId], references: [id])
+  serialNo       String?
+  complaint      String
+  priority       String    @default("MEDIUM") // LOW | MEDIUM | HIGH | CRITICAL
+  status         String    @default("OPEN") // OPEN | ASSIGNED | RESOLVED | CLOSED | CANCELLED
+  underWarranty  Boolean   @default(false)
+  assignedToId   String?
+  assignedTo     Employee? @relation(fields: [assignedToId], references: [id])
+  dueAt          DateTime?
+  resolution     String?
+  resolvedAt     DateTime?
+  closedAt       DateTime?
+  serviceCharge  Float     @default(0)
+  salesInvoiceId String?
+  cancelReason   String?
+  createdBy      String?
+  createdAt      DateTime  @default(now())
+
+  @@unique([companyId, callNo])
+  @@index([companyId, status])
+  @@index([partyId])
 }

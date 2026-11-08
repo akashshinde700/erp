@@ -47,11 +47,12 @@ import { EmptyState, Money, SectionHeading, StatusBadge, TableSkeleton } from '.
 import { onPreset, takeCreatePreset, type CreatePreset } from './nav'
 import { dateStr, money, PAYMENT_MODES } from '@/lib/erp'
 import { useResetOnChange } from '@/hooks/use-reset-on-change'
+import { FinanceAdjustmentsWorkspace } from './finance-workspace'
 
 type AnyInvoice = SalesInvoice | PurchaseInvoice
 
 export function AccountingView() {
-  const [tab, setTab] = useState<'payments' | 'ledger'>('payments')
+  const [tab, setTab] = useState<'payments' | 'ledger' | 'adjustments'>('payments')
   const [paymentPreset, setPaymentPreset] = useState<PaymentPreset | null>(null)
   const [ledgerPartyId, setLedgerPartyId] = useState('')
 
@@ -84,10 +85,11 @@ export function AccountingView() {
         title="Accounting"
         description="Double-entry payments with invoice allocation, and per-party ledgers with running balances."
       />
-      <Tabs value={tab} onValueChange={(v) => setTab(v as 'payments' | 'ledger')}>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as 'payments' | 'ledger' | 'adjustments')}>
         <TabsList className="h-11 w-full justify-start overflow-x-auto sm:w-auto">
           <TabsTrigger value="payments" className="h-11 sm:h-9">Payments</TabsTrigger>
           <TabsTrigger value="ledger" className="h-11 sm:h-9">Party Ledger</TabsTrigger>
+          <TabsTrigger value="adjustments" className="h-11 sm:h-9">Advances &amp; Refunds</TabsTrigger>
         </TabsList>
         <TabsContent value="payments" className="mt-4">
           <PaymentsTab preset={paymentPreset} onPresetConsumed={() => setPaymentPreset(null)} />
@@ -95,6 +97,9 @@ export function AccountingView() {
         <TabsContent value="ledger" className="mt-4">
           {/* keyed remount: a preset partyId arrives as fresh initial state */}
           <PartyLedgerTab key={ledgerPartyId} presetPartyId={ledgerPartyId} />
+        </TabsContent>
+        <TabsContent value="adjustments" className="mt-4">
+          <FinanceAdjustmentsWorkspace />
         </TabsContent>
       </Tabs>
     </div>

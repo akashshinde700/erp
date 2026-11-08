@@ -16,10 +16,14 @@ import { NextRequest, NextResponse } from 'next/server'
  * Public prefixes: auth (login/logout/bootstrap), platform admin
  * (requirePlatformAdmin gates each route), seed + company profile (first-boot
  * setup — the routes themselves enforce access once logins exist), backup
- * (platform-key/session gated at the route).
+ * (platform-key/session gated at the route), Tally connector (its route
+ * enforces connector-side auth: pairing code for 'pair', bearer token for
+ * pending/result/CLI-status, org session for UI actions — see
+ * src/app/api/tally/connector/route.ts). Without this entry the sign-in gate
+ * blocks the connector script entirely and pairing can never succeed.
  */
 
-const PUBLIC_API = ['/api/auth', '/api/platform', '/api/seed', '/api/masters/company', '/api/backup']
+const PUBLIC_API = ['/api/auth', '/api/platform', '/api/seed', '/api/masters/company', '/api/backup', '/api/tally/connector']
 
 const SESSION_COOKIE = 'forge_session'
 

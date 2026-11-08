@@ -121,6 +121,11 @@ export function OverheadAdvisorTab() {
         <Card className="p-4">
           <p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground"><Sparkles className="size-3.5" aria-hidden />Recommended</p>
           <p className="mt-1 text-2xl font-semibold tabular-nums">{fmtPct(rec.ratePct)}</p>
+          {rec.ratePct == null ? (
+            <p className="mt-1 text-xs text-muted-foreground">
+              {d.ledgers.some((l) => l.isFactoryOverhead) ? 'Book overhead spend on the tagged ledgers, or enter a budget below.' : 'Tag your factory-overhead ledgers below first (or enter a budget).'}
+            </p>
+          ) : null}
           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
             <span className={`rounded-full px-2 py-0.5 font-medium ${CONF_TONE[rec.confidence]}`}>{rec.confidence === 'NONE' ? 'No data yet' : `${rec.confidence} confidence`}</span>
             {rec.source ? <span className="text-muted-foreground">from {rec.source === 'BUDGET' ? 'your budget' : 'measured trend'}</span> : null}

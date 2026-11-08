@@ -2,9 +2,18 @@ import { fail, handleError, ok } from '@/lib/api'
 import { logAudit } from '@/lib/audit'
 import { assertCompanyAccess, assertFeature, assertMutationAccess } from '@/lib/platform'
 import { loadInvoiceVoucher, loadPaymentVoucher, vouchersToXml, getCompany, type TallyDocKind } from '@/lib/tally'
+import { db } from '@/lib/db'
+import { BusinessError } from '@/lib/accounting'
+import { runAsTenant, tenantCompany } from '@/lib/tenant'
 
 /**
  * Tally connector (PoC — in-memory store on globalThis, state lost on restart).
+ *
+ * One connector per ORGANISATION: pairing code, token and job queue are keyed by
+ * companyId. UI actions use the session's organisation; connector-side actions
+ * (no cookie) are resolved to their organisation by the hash of the pairing
+ * code / bearer token, so one org's vouchers can never reach another org's
+ * Tally, and one org cannot see or revoke another org's connector.
  * Pattern from the erpnashilk audit: hashed single-use pairing codes, bearer
  * token returned once, one job per poll, results field-whitelisted.
  *
@@ -40,6 +49,7 @@ interface Job {
 }
 
 interface Store {
+  companyId: string
   codeHash: string | null
   codeExpiresAt: number
   tokenHash: string | null
@@ -50,20 +60,28 @@ interface Store {
 }
 
 declare global {
-  var __forgeTallyConnector: Store | undefined
+  var __forgeTallyConnectors: Map<string, Store> | undefined
 }
 
-function store(): Store {
-  globalThis.__forgeTallyConnector ??= {
-    codeHash: null,
-    codeExpiresAt: 0,
-    tokenHash: null,
-    connectorVersion: null,
-    pairedAt: null,
-    lastSeenAt: null,
-    jobs: [],
+function stores(): Map<string, Store> {
+  globalThis.__forgeTallyConnectors ??= new Map()
+  return globalThis.__forgeTallyConnectors
+}
+
+function storeFor(companyId: string): Store {
+  let s = stores().get(companyId)
+  if (!s) {
+    s = { companyId, codeHash: null, codeExpiresAt: 0, tokenHash: null, connectorVersion: null, pairedAt: null, lastSeenAt: null, jobs: [] }
+    stores().set(companyId, s)
   }
-  return globalThis.__forgeTallyConnector
+  return s
+}
+
+/** The signed-in organisation's connector (call after an assert*Access()). */
+async function sessionStore(): Promise<Store> {
+  const company = await tenantCompany(db)
+  if (!company) throw new BusinessError('Operating company is not configured', 409)
+  return storeFor(company.id)
 }
 
 async function sha256(s: string): Promise<string> {
@@ -89,11 +107,14 @@ function randomToken(): string {
     .join('')}`
 }
 
-async function bearerOk(req: Request): Promise<boolean> {
+/** The connector store whose token matches the bearer, or null. */
+async function bearerStore(req: Request): Promise<Store | null> {
   const auth = req.headers.get('authorization') ?? ''
   const token = auth.replace(/^Bearer\s+/i, '').trim()
-  if (!token || !store().tokenHash) return false
-  return (await sha256(token)) === store().tokenHash
+  if (!token) return null
+  const h = await sha256(token)
+  for (const s of stores().values()) if (s.tokenHash && s.tokenHash === h) return s
+  return null
 }
 
 // ---------- handlers ----------
@@ -104,8 +125,8 @@ export async function GET(req: Request) {
 
     // Connector poll: one pending job at a time (bearer-token gated, no cookie).
     if (mode === 'pending') {
-      if (!(await bearerOk(req))) return fail('Connector token invalid or revoked', 401)
-      const s = store()
+      const s = await bearerStore(req)
+      if (!s) return fail('Connector token invalid or revoked', 401)
       s.lastSeenAt = Date.now()
       const now = Date.now()
       const job = s.jobs.find((j) => !j.doneAt && (j.startedAt ?? 0) < now - 60 * 1000) ?? s.jobs.find((j) => !j.doneAt && !j.startedAt)
@@ -116,15 +137,15 @@ export async function GET(req: Request) {
 
     // Local CLI status uses the connector bearer; UI status uses the session.
     if (mode === 'status') {
-      if (!(await bearerOk(req))) return fail('Connector token invalid or revoked', 401)
-      const s = store()
+      const s = await bearerStore(req)
+      if (!s) return fail('Connector token invalid or revoked', 401)
       const now = Date.now()
       return ok({ paired: !!s.tokenHash, online: (s.lastSeenAt ?? 0) > now - ONLINE_WINDOW_MS, pending: s.jobs.filter((j) => !j.doneAt).length })
     }
 
     // UI status
     await assertCompanyAccess()
-    const s = store()
+    const s = await sessionStore()
     const now = Date.now()
     const paired = !!s.tokenHash
     const online = paired && (s.lastSeenAt ?? 0) > now - ONLINE_WINDOW_MS
@@ -170,7 +191,7 @@ export async function POST(req: Request) {
 
     if (action === 'new-code') {
       await assertMutationAccess()
-      const s = store()
+      const s = await sessionStore()
       const code = randomCode()
       s.codeHash = await sha256(code)
       s.codeExpiresAt = Date.now() + CODE_TTL_MS
@@ -179,21 +200,23 @@ export async function POST(req: Request) {
     }
 
     if (action === 'pair') {
-      const s = store()
       const code = (body.code ?? '').trim().toUpperCase()
       if (!code) return fail('Pairing code is required', 400)
-      if (!s.codeHash || Date.now() > s.codeExpiresAt) {
+      // The code identifies the organisation that issued it.
+      const codeHash = await sha256(code)
+      const s = [...stores().values()].find((x) => x.codeHash && x.codeHash === codeHash)
+      if (!s) return fail('Pairing code invalid', 400)
+      if (Date.now() > s.codeExpiresAt) {
         s.codeHash = null // single-use: consumed even if expired
         return fail('Pairing code expired — generate a new one', 400)
       }
-      if ((await sha256(code)) !== s.codeHash) return fail('Pairing code invalid', 400)
       s.codeHash = null // single use
       const token = randomToken()
       s.tokenHash = await sha256(token)
       s.pairedAt = Date.now()
       s.lastSeenAt = Date.now()
       s.connectorVersion = body.version ?? null
-      await logAudit('CREATE', 'TallyConnector', undefined, `connector paired (v${body.version ?? '?'})`)
+      await runAsTenant(s.companyId, () => logAudit('CREATE', 'TallyConnector', undefined, `connector paired (v${body.version ?? '?'})`))
       return ok({ token }) // shown once — never again
     }
 
@@ -203,7 +226,7 @@ export async function POST(req: Request) {
       const doc = (body.doc ?? '').toUpperCase() as TallyDocKind
       const id = body.id ?? ''
       if (!id || !['SALES', 'PURCHASE', 'PAYMENT'].includes(doc)) return fail('doc and id are required', 400)
-      const s = store()
+      const s = await sessionStore()
       if (s.jobs.some((j) => j.doc === doc && j.docId === id && !j.doneAt)) return ok({ duplicate: true })
       const voucher =
         doc === 'SALES' ? await loadInvoiceVoucher('SALES', id) : doc === 'PURCHASE' ? await loadInvoiceVoucher('PURCHASE', id) : await loadPaymentVoucher(id)
@@ -228,8 +251,8 @@ export async function POST(req: Request) {
     }
 
     if (action === 'result') {
-      if (!(await bearerOk(req))) return fail('Connector token invalid or revoked', 401)
-      const s = store()
+      const s = await bearerStore(req)
+      if (!s) return fail('Connector token invalid or revoked', 401)
       s.lastSeenAt = Date.now()
       const job = s.jobs.find((j) => j.id === body.jobId)
       if (!job) return ok({ accepted: false })
@@ -239,7 +262,7 @@ export async function POST(req: Request) {
       job.altered = Math.max(0, Math.min(9999, Math.trunc(body.altered ?? 0)))
       job.errors = Math.max(0, Math.min(9999, Math.trunc(body.errors ?? 0)))
       job.errorText = String(body.errorText ?? '').slice(0, 300)
-      await logAudit(body.ok ? 'EXPORT' : 'UPDATE', 'TallyConnector', job.docNo, body.ok ? `created ${job.created}, altered ${job.altered}` : job.errorText)
+      await runAsTenant(s.companyId, () => logAudit(body.ok ? 'EXPORT' : 'UPDATE', 'TallyConnector', job.docNo, body.ok ? `created ${job.created}, altered ${job.altered}` : job.errorText))
       return ok({ accepted: true })
     }
 
@@ -252,7 +275,7 @@ export async function POST(req: Request) {
 export async function DELETE() {
   try {
     await assertMutationAccess()
-    const s = store()
+    const s = await sessionStore()
     s.tokenHash = null
     s.codeHash = null
     s.pairedAt = null

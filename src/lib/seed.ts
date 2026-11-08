@@ -447,10 +447,10 @@ export async function seedDatabase(force = false) {
     seeded: true,
     company: company.name,
     counts: {
-      parties: 6, items: 11, processes: 6, warehouses: 2, // 11 = 3 FG + 2 RM + service + 4 fabrication + FG-2001 tank
+      parties: 6, items: 13, processes: 6, warehouses: 2, // backup-drill checks these against the live tables
       purchaseInvoices: 2, salesInvoices: 4, payments: 3,
       jobworkInwards: 2, jobCards: 2, certificates: 1,
-      employees: 6, projects: 3, boms: 3, workOrders: 2, productionTasks: 15, workCenters: 6,
+      employees: 6, projects: 3, boms: 3, workOrders: 2, productionTasks: 11, workCenters: 6, // 11 = canopy 6 routed + QC, tank 4
       // Overhead absorption set by the manufacturing demo (18% of material + labour)
       overheadRatePct: 18,
       inquiries: 2, blogPosts: 2,

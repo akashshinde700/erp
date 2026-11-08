@@ -125,6 +125,7 @@ model Company {
   machineDowntimes          MachineDowntime[]
   tallyConnector            TallyConnector?
   tallyConnectorJobs        TallyConnectorJob[]
+  emailLogs                 EmailLog[]
 }
 
 // ---------- Organization logins (SaaS) ----------
@@ -2109,4 +2110,25 @@ model TallyConnectorJob {
 
   @@index([companyId, doneAt])
   @@index([companyId, queuedAt])
+}
+
+/// Every outgoing email (invoice, payment reminder, test) — sent or failed.
+/// SMTP credentials live only in the server environment, never in the database.
+model EmailLog {
+  id         String   @id @default(cuid())
+  companyId  String
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  kind       String // TEST | INVOICE | REMINDER
+  toAddress  String
+  subject    String   @db.VarChar(300)
+  status     String // SENT | FAILED
+  error      String?  @db.VarChar(300)
+  entityType String?
+  entityId   String?
+  messageId  String?  @db.VarChar(300)
+  createdBy  String?
+  createdAt  DateTime @default(now())
+
+  @@index([companyId, createdAt])
+  @@index([companyId, kind, entityId, createdAt])
 }

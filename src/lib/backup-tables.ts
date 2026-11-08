@@ -13,6 +13,8 @@
 export const WORKFLOW_MODELS_CHILDREN_FIRST = [
   // Tally connector (per organisation; only code/token HASHES are stored, so a
   // backup cannot be used to impersonate the connector — restore keeps it paired)
+  // outgoing email log (no SMTP secrets — those live only in the server env)
+  'emailLog',
   'tallyConnectorJob',
   'tallyConnector',
   // routing / capacity / OEE (children first: downtime and routing hang off

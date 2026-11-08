@@ -49,6 +49,18 @@ async function goModule(page, label) {
   }
   await settle(page)
 }
+/** Manufacturing sections live in the sidebar tree (not tabs): open the module, then pick the section. */
+async function goMfgSection(page, label) {
+  await goModule(page, 'Projects & Mfg')
+  const menu = page.getByRole('button', { name: 'Open navigation' })
+  const mobile = await menu.isVisible().catch(() => false)
+  if (mobile) await menu.click()
+  const scope = mobile ? page.locator('[role=dialog]') : page
+  const btn = scope.locator('[role=group][aria-label="Manufacturing sections"] button', { hasText: label }).first()
+  if (!(await btn.count())) { if (mobile) await page.keyboard.press('Escape'); return false }
+  await btn.click(); await settle(page, 700)
+  return true
+}
 async function overflowX(page) { return page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth) }
 async function smallTargets(page) {
   return page.evaluate(() => [...document.querySelectorAll('main button, main a[href], main [role=tab], header button')]
@@ -124,8 +136,17 @@ async function runViewport(browser, vp) {
   if (vp.mobile) check('touch targets in main content are at least 40x40 px', small.size === 0, `${small.size} small: ${[...small].join(' | ')}`)
 
   // workflow workspaces
-  const ws = [['Sales', 'Quote to Cash', /quote/i], ['Purchase', 'Procurement & Returns', /procurement/i], ['Inventory', 'Lots & Serials', /lot|serial|batch/i], ['Projects & Mfg', 'Quality', /quality|inspection/i], ['Projects & Mfg', 'FG Receipts', /work order|receipt/i], ['Accounting', 'Advances & Refunds', /advance|refund|schedule/i], ['Purchase', 'RFQ & Comparison', /RFQ|quotation/i, 'Procurement & Returns'], ['CRM & Service', 'Leads', /lead|follow-up/i], ['CRM & Service', 'Service Calls', /service call|complaint/i], ['CRM & Service', 'Performance', /salesperson|month/i], ['Inventory', 'Adjustments', /adjust/i], ['Accounting', 'Journals', /journal/i], ['Accounting', 'Chart of Accounts', /ledger|asset/i], ['Accounting', 'TDS', /TDS/], ['Accounting', 'Period Close', /period|financial year|lock/i], ['Reports', 'Aging', /due|outstanding|receivable/i], ['Reports', 'Back Orders', /back order|pending/i], ['Reports', 'P&L by Ledger', /income|expense/i]]
+  const ws = [['Sales', 'Quote to Cash', /quote/i], ['Purchase', 'Procurement & Returns', /procurement/i], ['Inventory', 'Lots & Serials', /lot|serial|batch/i], ['Projects & Mfg', 'Quality', /quality|inspection/i], ['Projects & Mfg', 'FG Receipts', /work order|receipt/i], ['Projects & Mfg', 'BOMs', /BOM|bill of material/i], ['Projects & Mfg', 'MRP', /MRP|plan|demand/i], ['Projects & Mfg', 'Capacity', /capacity|load|work cent/i], ['Projects & Mfg', 'Work Centers', /work cent|shift|calendar/i], ['Projects & Mfg', 'OEE', /OEE|availability/i], ['Projects & Mfg', 'Costing', /cost|overhead/i], ['Accounting', 'Advances & Refunds', /advance|refund|schedule/i], ['Purchase', 'RFQ & Comparison', /RFQ|quotation/i, 'Procurement & Returns'], ['CRM & Service', 'Leads', /lead|follow-up/i], ['CRM & Service', 'Service Calls', /service call|complaint/i], ['CRM & Service', 'Performance', /salesperson|month/i], ['Inventory', 'Adjustments', /adjust/i], ['Accounting', 'Journals', /journal/i], ['Accounting', 'Chart of Accounts', /ledger|asset/i], ['Accounting', 'TDS', /TDS/], ['Accounting', 'Period Close', /period|financial year|lock/i], ['Reports', 'Aging', /due|outstanding|receivable/i], ['Reports', 'Back Orders', /back order|pending/i], ['Reports', 'P&L by Ledger', /income|expense/i]]
   for (const [mod, tab, re, parent] of ws) {
+    if (mod === 'Projects & Mfg') {
+      if (!(await goMfgSection(page, tab))) { check(`${mod} → ${tab} workspace section exists`, false, 'section not found in sidebar'); continue }
+      const text = (await page.locator('main').innerText().catch(() => '')).slice(0, 4000)
+      const errorToast = await page.locator('[data-sonner-toast][data-type=error]').count()
+      check(`${mod} → ${tab} workspace loads`, re.test(text) && errorToast === 0, `errorToasts=${errorToast}`)
+      check(`${mod} → ${tab} has no page-level overflow`, (await overflowX(page)) <= 2, `+${await overflowX(page)}px`)
+      await shot(page, `ws-${tab}`)
+      continue
+    }
     await goModule(page, mod)
     if (parent) { await page.getByRole('tab', { name: new RegExp(parent, 'i') }).first().click().catch(() => {}); await settle(page, 700) }
     const t = page.getByRole('tab', { name: new RegExp(tab.replace('&', '&'), 'i') }).first()
@@ -256,8 +277,7 @@ async function runViewport(browser, vp) {
     await shot(page, 'rfq-new')
     await page.keyboard.press('Escape'); await rfqDlg.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {})
 
-    await goModule(page, 'Projects & Mfg')
-    await page.getByRole('tab', { name: /FG Receipts/i }).first().click().catch(() => {}); await settle(page, 700)
+    await goMfgSection(page, 'FG Receipts')
     const recv = page.getByRole('button', { name: /Receive FG/ })
     const nRecv = await recv.count()
     let enabled = null

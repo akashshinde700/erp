@@ -114,14 +114,18 @@ export async function overheadAdvisor(input: { months?: number; asOf?: Date; wha
   const taskCount = series.reduce((s, m) => s + m.tasks, 0)
 
   // 3. rates
-  const actualRatePct = pct(incurred, primeCost)
+  // A measured rate needs a pool AND spend booked on it. Without either, the
+  // honest answer is "unknown" — not 0 %, which reads like advice to switch
+  // absorption off.
+  const measurable = pool.length > 0 && incurred > EPS
+  const actualRatePct = measurable ? pct(incurred, primeCost) : null
   let wInc = 0, wPrime = 0
   series.forEach((m, i) => {
     const w = Math.pow(1 - TREND_ALPHA, series.length - 1 - i)
     wInc += w * m.incurred
     wPrime += w * m.primeCost
   })
-  const trendRatePct = pct(wInc, wPrime)
+  const trendRatePct = measurable ? pct(wInc, wPrime) : null
   const budgetRatePct =
     company.overheadBudgetAnnual != null && company.primeCostBudgetAnnual != null && company.primeCostBudgetAnnual > EPS
       ? r2((company.overheadBudgetAnnual / company.primeCostBudgetAnnual) * 100)
@@ -138,6 +142,7 @@ export async function overheadAdvisor(input: { months?: number; asOf?: Date; wha
   const reasons: string[] = []
   let score = 0
   if (!pool.length) reasons.push('No ledger is tagged as factory overhead yet — tag power, factory rent, plant depreciation, consumables and supervision ledgers')
+  else if (incurred <= EPS) reasons.push('The tagged overhead ledgers have no spend booked in this window — post the overhead bills or journals first')
   else score += 1
   if (monthsWithData.length >= 6) score += 2
   else if (monthsWithData.length >= 3) { score += 1; reasons.push(`Only ${monthsWithData.length} months have both overhead spend and production — 6+ give a steadier rate`) }

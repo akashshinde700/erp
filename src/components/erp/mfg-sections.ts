@@ -22,6 +22,7 @@ import {
   ListTree,
   PackageCheck,
   PackageSearch,
+  Scale,
   Users,
   Wrench,
   type LucideIcon,
@@ -41,6 +42,7 @@ export type MfgTab =
   | 'centers'
   | 'oee'
   | 'costing'
+  | 'overhead'
   | 'quality'
 
 export interface MfgSectionItem {
@@ -86,6 +88,7 @@ export const MFG_SECTION_GROUPS: MfgSectionGroup[] = [
     items: [
       { value: 'oee', label: 'OEE', icon: Activity },
       { value: 'costing', label: 'Costing', icon: Coins },
+      { value: 'overhead', label: 'Overhead', icon: Scale },
       { value: 'quality', label: 'Quality', icon: CheckCircle2 },
     ],
   },

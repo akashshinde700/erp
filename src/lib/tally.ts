@@ -16,6 +16,8 @@
 
 import { db } from './db'
 import { r2 } from './erp'
+import { tenantCompany } from './tenant'
+import { BusinessError } from './accounting'
 
 // ---------- types ----------
 
@@ -156,9 +158,9 @@ export function buildInvoiceVoucher(inv: InvoiceRow, company: TallyCompany, kind
   const L = ledgerNames(company)
   const isSales = kind === 'SALES'
   const warnings: string[] = []
-  if (inv.status === 'CANCELLED') throw new Error(`${inv.invoiceNo} is cancelled — export blocked`)
+  if (inv.status === 'CANCELLED') throw new BusinessError(`${inv.invoiceNo} is cancelled — export blocked`, 409)
   const date = utcYmd(inv.date)
-  if (!date) throw new Error(`${inv.invoiceNo} has an unusable date`)
+  if (!date) throw new BusinessError(`${inv.invoiceNo} has an unusable date`, 409)
 
   const partyName = inv.party?.name || inv.party?.code || (isSales ? 'Customer' : 'Supplier')
   if (!inv.party?.gstin) warnings.push('Party has no GSTIN — Tally ledger will be unregistered')
@@ -269,9 +271,9 @@ export function buildPaymentVoucher(
   company: TallyCompany
 ): TallyVoucher {
   const L = ledgerNames(company)
-  if (p.status === 'CANCELLED') throw new Error(`${p.paymentNo} is cancelled — export blocked`)
+  if (p.status === 'CANCELLED') throw new BusinessError(`${p.paymentNo} is cancelled — export blocked`, 409)
   const date = utcYmd(p.date)
-  if (!date) throw new Error(`${p.paymentNo} has an unusable date`)
+  if (!date) throw new BusinessError(`${p.paymentNo} has an unusable date`, 409)
   const isReceipt = p.type === 'RECEIPT'
   const moneyLedger = p.mode === 'CASH' ? L.cash : L.bank
   const partyName = p.party?.name || p.party?.code || 'Party'
@@ -532,12 +534,12 @@ export async function getCompany(): Promise<TallyCompany | null> {
   // created FIRST on a blank DB (ensurePlatformAdmin), so ordering by
   // createdAt alone resolves the WRONG company — exports would use the
   // operator's row (no GSTIN, no tally ledger overrides).
-  return db.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } })
+  return tenantCompany(db)
 }
 
 export async function loadInvoiceVoucher(kind: 'SALES' | 'PURCHASE', id: string): Promise<TallyVoucher> {
   const company = await getCompany()
-  if (!company) throw new Error('Company not set up')
+  if (!company) throw new BusinessError('Company not set up', 409)
   if (kind === 'SALES') {
     const inv = await db.salesInvoice.findUnique({
       where: { id },
@@ -546,7 +548,7 @@ export async function loadInvoiceVoucher(kind: 'SALES' | 'PURCHASE', id: string)
         items: { include: { item: { select: { code: true, name: true, hsn: true, uom: true, isService: true } } } },
       },
     })
-    if (!inv) throw new Error('Invoice not found')
+    if (!inv) throw new BusinessError('Invoice not found', 404)
     return buildInvoiceVoucher(inv, company, 'SALES')
   }
   const inv = await db.purchaseInvoice.findUnique({
@@ -556,15 +558,15 @@ export async function loadInvoiceVoucher(kind: 'SALES' | 'PURCHASE', id: string)
       items: { include: { item: { select: { code: true, name: true, hsn: true, uom: true, isService: true } } } },
     },
   })
-  if (!inv) throw new Error('Invoice not found')
+  if (!inv) throw new BusinessError('Invoice not found', 404)
   return buildInvoiceVoucher(inv, company, 'PURCHASE')
 }
 
 export async function loadPaymentVoucher(id: string): Promise<TallyVoucher> {
   const company = await getCompany()
-  if (!company) throw new Error('Company not set up')
+  if (!company) throw new BusinessError('Company not set up', 409)
   const p = await db.payment.findUnique({ where: { id }, include: { party: { select: { code: true, name: true } } } })
-  if (!p) throw new Error('Payment not found')
+  if (!p) throw new BusinessError('Payment not found', 404)
   return buildPaymentVoucher(p, company)
 }
 

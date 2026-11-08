@@ -2,9 +2,10 @@ import { Prisma } from '@prisma/client'
 import { db } from './db'
 import { BusinessError } from './accounting'
 import { EPS, r2 } from './erp'
+import { tenantCompany } from './tenant'
 
 type Tx = Prisma.TransactionClient
-async function company(tx: Tx) { const row = await tx.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } }); if (!row) throw new BusinessError('Operating company is not configured', 409); return row }
+async function company(tx: Tx) { const row = await tenantCompany(tx); if (!row) throw new BusinessError('Operating company is not configured', 409); return row }
 
 /** Lots that can be issued: available, not expired. */
 const ISSUABLE = 'AVAILABLE'
@@ -170,7 +171,7 @@ export async function recallLot(id: string, reason: string) {
 }
 
 export async function traceabilityDashboard() {
-  const org = await db.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } }); if (!org) throw new BusinessError('Operating company is not configured', 409)
+  const org = await tenantCompany(db); if (!org) throw new BusinessError('Operating company is not configured', 409)
   const lots = await db.inventoryLot.findMany({ where: { companyId: org.id }, orderBy: { createdAt: 'desc' }, include: { item: true, warehouse: true, movements: { where: { isCancelled: false } }, serials: true, parentLinks: { include: { parentLot: { include: { item: true } } } }, childLinks: { include: { childLot: { include: { item: true } } } } } })
   return lots.map((lot) => ({ ...lot, balance: r2(lot.movements.reduce((sum, row) => sum + row.qtyIn - row.qtyOut, 0)), expired: !!lot.expiryDate && lot.expiryDate < new Date(), availableSerials: lot.serials.filter((row) => row.status === 'AVAILABLE').length }))
 }

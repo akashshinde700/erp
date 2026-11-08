@@ -38,13 +38,10 @@ export async function buildSessionInfo(user: {
     plan: { name: string } | null
   }
 }): Promise<SessionInfo> {
-  const first = await db.company.findFirst({
-    where: { isPlatform: false }, // the platform company is never the operating org
-    orderBy: { createdAt: 'asc' },
-    select: { id: true, name: true },
-  })
+  // Every organisation has its own isolated workspace; only the platform
+  // operator's company has none (it uses the Platform Admin console).
   const st = accessState(user.company)
-  const operating = !!first && first.id === user.companyId
+  const operating = !user.company.isPlatform
   return {
     user: { id: user.id, name: user.name, email: user.email, role: user.role },
     company: {
@@ -55,7 +52,7 @@ export async function buildSessionInfo(user: {
       email: user.company.email,
     },
     operating,
-    operatingOrg: operating ? null : (first ?? null),
+    operatingOrg: null,
     plan: user.company.plan?.name ?? null,
     access: { state: st.state, blocked: st.blocked, message: st.message },
     paidUntil: user.company.paidUntil?.toISOString() ?? null,

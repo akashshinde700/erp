@@ -78,6 +78,27 @@ model Company {
   salesOrders          SalesOrder[]
   deliveryChallans     DeliveryChallan[]
   productionReceipts   ProductionReceipt[]
+
+  // ---- organisation-owned legacy tables (tenant isolation) ----
+  tenantAuditLogs           AuditLog[]
+  tenantPartys              Party[]
+  tenantItems               Item[]
+  tenantWarehouses          Warehouse[]
+  tenantProcesss            Process[]
+  tenantPartyProcessRates   PartyProcessRate[]
+  tenantStockLedgers        StockLedger[]
+  tenantAccountLedgers      AccountLedger[]
+  tenantSalesInvoices       SalesInvoice[]
+  tenantPurchaseInvoices    PurchaseInvoice[]
+  tenantJobworkInwards      JobworkInward[]
+  tenantJobCards            JobCard[]
+  tenantJobworkCertificates JobworkCertificate[]
+  tenantEmployees           Employee[]
+  tenantProjects            Project[]
+  tenantBoms                Bom[]
+  tenantWorkOrders          WorkOrder[]
+  tenantProductionTasks     ProductionTask[]
+  tenantPayments            Payment[]
 }
 
 // ---------- Organization logins (SaaS) ----------
@@ -160,6 +181,8 @@ model PlatformBlogPost {
 
 model AuditLog {
   id        String   @id @default(cuid())
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id])
   action    String // CREATE | UPDATE | DELETE | CANCEL | POST | EXPORT | PLATFORM | BACKUP | SEED
   entity    String // SalesInvoice | Party | Plan | …
   entityId  String?
@@ -170,13 +193,16 @@ model AuditLog {
   @@index([createdAt])
   @@index([entity])
   @@index([actor])
+  @@index([companyId, createdAt])
 }
 
 // ---------- Masters ----------
 
 model Party {
   id          String   @id @default(cuid())
-  code        String   @unique
+  companyId   String   @default("") // filled by the tenant extension; "" fails the FK
+  company     Company  @relation(fields: [companyId], references: [id])
+  code        String
   name        String
   types       String   @default("CUSTOMER") // CSV: CUSTOMER,SUPPLIER,JOBWORKER
   gstin       String?
@@ -205,12 +231,15 @@ model Party {
   paymentSchedules PaymentSchedule[]
   partyAdvances    PartyAdvance[]
 
+  @@unique([companyId, code])
   @@index([types])
 }
 
 model Item {
   id           String   @id @default(cuid())
-  code         String   @unique
+  companyId    String   @default("") // filled by the tenant extension; "" fails the FK
+  company      Company  @relation(fields: [companyId], references: [id])
+  code         String
   name         String
   groupName    String   @default("General")
   hsn          String?
@@ -245,11 +274,15 @@ model Item {
   inventoryLots      InventoryLot[]
   serialNumbers      SerialNumber[]
   lotMovements       LotMovement[]
+
+  @@unique([companyId, code])
 }
 
 model Warehouse {
   id        String   @id @default(cuid())
-  code      String   @unique
+  companyId String   @default("") // filled by the tenant extension; "" fails the FK
+  company   Company  @relation(fields: [companyId], references: [id])
+  code      String
   name      String
   location  String?
   active    Boolean  @default(true)
@@ -263,11 +296,15 @@ model Warehouse {
   inventoryLots      InventoryLot[]
   serialNumbers      SerialNumber[]
   lotMovements       LotMovement[]
+
+  @@unique([companyId, code])
 }
 
 model Process {
   id        String  @id @default(cuid())
-  code      String  @unique
+  companyId String  @default("") // filled by the tenant extension; "" fails the FK
+  company   Company @relation(fields: [companyId], references: [id])
+  code      String
   name      String
   seq       Int     @default(0) // routing order
   basis     String  @default("WEIGHT") // WEIGHT (per KG) | QTY (per piece)
@@ -277,10 +314,14 @@ model Process {
 
   partyRates PartyProcessRate[]
   cardRows   JobCardProcess[]
+
+  @@unique([companyId, code])
 }
 
 model PartyProcessRate {
   id        String  @id @default(cuid())
+  companyId String  @default("") // filled by the tenant extension; "" fails the FK
+  company   Company @relation(fields: [companyId], references: [id])
   partyId   String
   party     Party   @relation(fields: [partyId], references: [id], onDelete: Cascade)
   processId String
@@ -289,12 +330,15 @@ model PartyProcessRate {
   lotCharge Float   @default(0)
 
   @@unique([partyId, processId])
+  @@index([companyId])
 }
 
 // ---------- Ledgers (append-only; cancel writes reversal rows) ----------
 
 model StockLedger {
   id          String    @id @default(cuid())
+  companyId   String    @default("") // filled by the tenant extension; "" fails the FK
+  company     Company   @relation(fields: [companyId], references: [id])
   postingDate DateTime
   voucherType String // OPENING | PURCHASE | SALES | JOBWORK_IN | ADJUST
   voucherNo   String
@@ -312,10 +356,13 @@ model StockLedger {
   @@index([itemId, warehouseId, postingDate])
   @@index([voucherNo])
   @@index([postingDate])
+  @@index([companyId, itemId, warehouseId])
 }
 
 model AccountLedger {
   id          String   @id @default(cuid())
+  companyId   String   @default("") // filled by the tenant extension; "" fails the FK
+  company     Company  @relation(fields: [companyId], references: [id])
   date        DateTime
   account     String // chart code, see src/lib/accounting.ts
   accountName String
@@ -332,13 +379,16 @@ model AccountLedger {
   @@index([voucherNo])
   @@index([partyId, isCancelled])
   @@index([voucherType, partyId])
+  @@index([companyId, account, date])
 }
 
 // ---------- Sales ----------
 
 model SalesInvoice {
   id                String   @id @default(cuid())
-  invoiceNo         String   @unique
+  companyId         String   @default("") // filled by the tenant extension; "" fails the FK
+  company           Company  @relation(fields: [companyId], references: [id])
+  invoiceNo         String
   date              DateTime
   partyId           String
   party             Party    @relation(fields: [partyId], references: [id])
@@ -366,6 +416,7 @@ model SalesInvoice {
 
   items SalesInvoiceItem[]
 
+  @@unique([companyId, invoiceNo])
   @@index([partyId])
   @@index([date])
 }
@@ -396,7 +447,9 @@ model SalesInvoiceItem {
 
 model PurchaseInvoice {
   id                      String   @id @default(cuid())
-  invoiceNo               String   @unique
+  companyId               String   @default("") // filled by the tenant extension; "" fails the FK
+  company                 Company  @relation(fields: [companyId], references: [id])
+  invoiceNo               String
   date                    DateTime
   partyId                 String
   party                   Party    @relation(fields: [partyId], references: [id])
@@ -427,6 +480,7 @@ model PurchaseInvoice {
   items PurchaseInvoiceItem[]
 
   @@unique([partyId, activeSupplierInvoiceNo])
+  @@unique([companyId, invoiceNo])
   @@index([partyId, supplierInvoiceNo])
   @@index([partyId])
   @@index([date])
@@ -458,7 +512,9 @@ model PurchaseInvoiceItem {
 
 model JobworkInward {
   id          String   @id @default(cuid())
-  inwardNo    String   @unique
+  companyId   String   @default("") // filled by the tenant extension; "" fails the FK
+  company     Company  @relation(fields: [companyId], references: [id])
+  inwardNo    String
   date        DateTime
   partyId     String
   party       Party    @relation(fields: [partyId], references: [id])
@@ -472,6 +528,7 @@ model JobworkInward {
   jobCards     JobCard[]
   certificates JobworkCertificate[]
 
+  @@unique([companyId, inwardNo])
   @@index([partyId])
 }
 
@@ -493,7 +550,9 @@ model JobworkInwardItem {
 
 model JobCard {
   id          String        @id @default(cuid())
-  cardNo      String        @unique
+  companyId   String        @default("") // filled by the tenant extension; "" fails the FK
+  company     Company       @relation(fields: [companyId], references: [id])
+  cardNo      String
   inwardId    String
   inward      JobworkInward @relation(fields: [inwardId], references: [id])
   date        DateTime
@@ -503,6 +562,8 @@ model JobCard {
   createdAt   DateTime      @default(now())
 
   processes JobCardProcess[]
+
+  @@unique([companyId, cardNo])
 }
 
 model JobCardProcess {
@@ -523,7 +584,9 @@ model JobCardProcess {
 
 model JobworkCertificate {
   id          String        @id @default(cuid())
-  certNo      String        @unique
+  companyId   String        @default("") // filled by the tenant extension; "" fails the FK
+  company     Company       @relation(fields: [companyId], references: [id])
+  certNo      String
   inwardId    String
   inward      JobworkInward @relation(fields: [inwardId], references: [id])
   date        DateTime
@@ -533,6 +596,8 @@ model JobworkCertificate {
   status      String        @default("ISSUED") // ISSUED | CANCELLED
   details     String?       @db.Text // process-wise summary (JSON string)
   createdAt   DateTime      @default(now())
+
+  @@unique([companyId, certNo])
 }
 
 // ---------- Manufacturing (Project → BOM → Work Order → Production Tasks) ----------
@@ -545,7 +610,9 @@ model JobworkCertificate {
 
 model Employee {
   id         String   @id @default(cuid())
-  code       String   @unique
+  companyId  String   @default("") // filled by the tenant extension; "" fails the FK
+  company    Company  @relation(fields: [companyId], references: [id])
+  code       String
   name       String
   role       String   @default("WORKER") // WORKER | SUPERVISOR | MANAGER
   skill      String? // e.g. Welder, CNC Operator, Fitter, Painter
@@ -557,11 +624,15 @@ model Employee {
   createdAt  DateTime @default(now())
 
   tasks ProductionTask[]
+
+  @@unique([companyId, code])
 }
 
 model Project {
   id          String    @id @default(cuid())
-  projectNo   String    @unique // PRJ-0001 (global counter, not FY-based)
+  companyId   String    @default("") // filled by the tenant extension; "" fails the FK
+  company     Company   @relation(fields: [companyId], references: [id])
+  projectNo   String // PRJ-0001 (global counter, not FY-based)
   name        String
   partyId     String
   party       Party     @relation(fields: [partyId], references: [id])
@@ -580,13 +651,16 @@ model Project {
   boms       Bom[]
   workOrders WorkOrder[]
 
+  @@unique([companyId, projectNo])
   @@index([partyId])
   @@index([status])
 }
 
 model Bom {
   id          String    @id @default(cuid())
-  bomNo       String    @unique // BOM-2526-001 (FY-aware)
+  companyId   String    @default("") // filled by the tenant extension; "" fails the FK
+  company     Company   @relation(fields: [companyId], references: [id])
+  bomNo       String // BOM-2526-001 (FY-aware)
   projectId   String
   project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
   productName String // product / assembly name
@@ -599,6 +673,7 @@ model Bom {
   items      BomItem[]
   workOrders WorkOrder[]
 
+  @@unique([companyId, bomNo])
   @@index([projectId])
 }
 
@@ -625,7 +700,9 @@ model BomItem {
 
 model WorkOrder {
   id          String    @id @default(cuid())
-  woNo        String    @unique // WO-2526-001 (FY-aware)
+  companyId   String    @default("") // filled by the tenant extension; "" fails the FK
+  company     Company   @relation(fields: [companyId], references: [id])
+  woNo        String // WO-2526-001 (FY-aware)
   projectId   String
   project     Project   @relation(fields: [projectId], references: [id])
   bomId       String?
@@ -643,6 +720,7 @@ model WorkOrder {
   tasks              ProductionTask[]
   productionReceipts ProductionReceipt[]
 
+  @@unique([companyId, woNo])
   @@index([projectId])
   @@index([status])
 }
@@ -662,7 +740,9 @@ model WorkOrderLine {
 
 model ProductionTask {
   id             String    @id @default(cuid())
-  taskNo         String    @unique // TASK-2526-001 (FY-aware)
+  companyId      String    @default("") // filled by the tenant extension; "" fails the FK
+  company        Company   @relation(fields: [companyId], references: [id])
+  taskNo         String // TASK-2526-001 (FY-aware)
   workOrderId    String
   workOrder      WorkOrder @relation(fields: [workOrderId], references: [id], onDelete: Cascade)
   seq            Int       @default(0) // operation order
@@ -687,6 +767,7 @@ model ProductionTask {
   notes          String?   @db.Text
   createdAt      DateTime  @default(now())
 
+  @@unique([companyId, taskNo])
   @@index([workOrderId])
   @@index([status])
   @@index([employeeId])
@@ -1345,7 +1426,9 @@ model RefundAllocation {
 
 model Payment {
   id        String   @id @default(cuid())
-  paymentNo String   @unique
+  companyId String   @default("") // filled by the tenant extension; "" fails the FK
+  company   Company  @relation(fields: [companyId], references: [id])
+  paymentNo String
   date      DateTime
   type      String // RECEIPT | PAYMENT
   partyId   String
@@ -1361,6 +1444,7 @@ model Payment {
   advances    PartyAdvance[]
   refunds     RefundAllocation[]
 
+  @@unique([companyId, paymentNo])
   @@index([partyId])
   @@index([date])
 }

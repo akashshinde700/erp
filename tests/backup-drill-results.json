@@ -1,0 +1,99 @@
+{
+  "ranAt": "2026-11-08T00:31:46.986Z",
+  "baseUrl": "http://127.0.0.1:3012",
+  "total": 18,
+  "passed": 18,
+  "failed": 0,
+  "results": [
+    {
+      "name": "force reseed succeeds (200)",
+      "pass": true,
+      "detail": "status=200 {\"success\":true,\"data\":{\"seeded\":true,\"company\":\"Shree Forge Industries\",\"counts\":{\"parties\":6,\"items\":11,\"processes\":6,"
+    },
+    {
+      "name": "seeded row counts reconcile with seedDatabase() summary",
+      "pass": true,
+      "detail": "17 tables checked"
+    },
+    {
+      "name": "account ledger balances after seed (Dr == Cr)",
+      "pass": true,
+      "detail": "Dr=2115665.21 Cr=2115665.21"
+    },
+    {
+      "name": "no negative stock balance after seed",
+      "pass": true,
+      "detail": "all item/warehouse balances >= 0"
+    },
+    {
+      "name": "no orphan invoice lines or stock rows",
+      "pass": true,
+      "detail": "invoiceLines=0 stockRows=0"
+    },
+    {
+      "name": "seeded completed work order has a posted production receipt",
+      "pass": true,
+      "detail": "receipts=1 acceptedQty=2288"
+    },
+    {
+      "name": "backup downloads (200, v5)",
+      "pass": true,
+      "detail": "status=200 version=5"
+    },
+    {
+      "name": "snapshot covers every physical table",
+      "pass": true,
+      "detail": "60 tables"
+    },
+    {
+      "name": "snapshot row counts equal live table counts",
+      "pass": true,
+      "detail": "all equal"
+    },
+    {
+      "name": "snapshot carries workflow rows (not an empty section)",
+      "pass": true,
+      "detail": "4 workflow rows"
+    },
+    {
+      "name": "second force reseed succeeds (fresh ids)",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "reseed produced different row ids than the snapshot",
+      "pass": true,
+      "detail": "snapshot invoice id present=0"
+    },
+    {
+      "name": "restore of v5 snapshot succeeds (200)",
+      "pass": true,
+      "detail": "status=200 {\"success\":true,\"data\":{\"restored\":true,\"version\":5}}"
+    },
+    {
+      "name": "after restore every table count equals the snapshot",
+      "pass": true,
+      "detail": "all equal"
+    },
+    {
+      "name": "restored rows carry the original ids",
+      "pass": true,
+      "detail": "snapshot invoice id present=1"
+    },
+    {
+      "name": "invoice numbers and totals identical after restore",
+      "pass": true,
+      "detail": "4 invoices"
+    },
+    {
+      "name": "ledger still balanced after restore",
+      "pass": true,
+      "detail": "Dr=2115665.21 Cr=2115665.21 (seed Dr=2115665.21)"
+    },
+    {
+      "name": "v3 snapshot refused while workflow rows exist (400)",
+      "pass": true,
+      "detail": "status=400 This is a v3 snapshot from before the procurement / quote-to-cash / QC / traceability tables existed"
+    }
+  ]
+}

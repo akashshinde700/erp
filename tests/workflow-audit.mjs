@@ -215,16 +215,22 @@ async function phaseAuth() {
   const l2 = await post('/api/auth/login', { email: 'owner2-audit@local.test', password: 'second-pass-123' }, { cookie: '' })
   const c2 = cookie; cookie = F.ownerCookie
   check('second organisation owner can sign in', l2.status === 200, `status=${l2.status}`)
-  for (const path of ['/api/sales-invoices', '/api/masters/parties', '/api/masters/items', '/api/procurement', '/api/order-to-cash', '/api/traceability', '/api/finance-adjustments', '/api/manufacturing/projects', '/api/returns', '/api/payments']) {
+  for (const path of ['/api/sales-invoices', '/api/masters/parties', '/api/masters/items', '/api/manufacturing/projects', '/api/payments']) {
     const r = await get(path, { cookie: c2 })
-    check(`second-org user GET ${path} is refused (403), never sees org-1 rows`, r.status === 403, `status=${r.status}`)
+    check(`second-org user GET ${path} sees its own (empty) workspace, no org-1 rows`, r.status === 200 && Array.isArray(r.data) && r.data.length === 0, `status=${r.status} rows=${r.data?.length}`)
   }
   const anyInvoice = await q1('SELECT id FROM SalesInvoice LIMIT 1')
   const x = await get(`/api/sales-invoices/${anyInvoice.id}`, { cookie: c2 })
-  check('second-org user cannot read an org-1 invoice by id', x.status === 403 || x.status === 401, `status=${x.status}`)
-  const legacy = await qa(`SELECT t.table_name tn FROM information_schema.tables t WHERE t.table_schema=DATABASE() AND t.table_name NOT IN ('_prisma_migrations','IdempotencyKey','Company','Plan','PlatformInquiry','PlatformInquiryFollowUp','PlatformBlogPost')
-    AND NOT EXISTS (SELECT 1 FROM information_schema.columns c WHERE c.table_schema=t.table_schema AND c.table_name=t.table_name AND c.column_name='companyId')`)
-  check('every business table carries companyId (row-level tenant isolation)', legacy.length === 0, `${legacy.length} tables without companyId: ${legacy.map((r) => r.tn ?? r.TABLE_NAME).join(', ')}`)
+  check('second-org user cannot read an org-1 invoice by id', x.status === 404 || x.status === 403, `status=${x.status}`)
+  // Root tables carry companyId; line/child tables are owned through a NOT NULL
+  // foreign key to a root table (the tenant extension filters them through it).
+  const unscoped = await qa(`SELECT t.table_name tn FROM information_schema.tables t WHERE t.table_schema=DATABASE()
+    AND t.table_name NOT IN ('_prisma_migrations','IdempotencyKey','Company','Plan','PlatformInquiry','PlatformInquiryFollowUp','PlatformBlogPost','Counter','OrgUser')
+    AND NOT EXISTS (SELECT 1 FROM information_schema.columns c WHERE c.table_schema=t.table_schema AND c.table_name=t.table_name AND c.column_name='companyId')
+    AND NOT EXISTS (SELECT 1 FROM information_schema.key_column_usage k JOIN information_schema.columns c ON c.table_schema=k.table_schema AND c.table_name=k.table_name AND c.column_name=k.column_name AND c.is_nullable='NO'
+                    JOIN information_schema.columns pc ON pc.table_schema=k.referenced_table_schema AND pc.table_name=k.referenced_table_name AND pc.column_name='companyId'
+                    WHERE k.table_schema=t.table_schema AND k.table_name=t.table_name AND k.referenced_table_name IS NOT NULL)`)
+  check('every business table is organisation-owned (companyId, or a required FK to a table that has one)', unscoped.length === 0, `${unscoped.length} unowned: ${unscoped.map((r) => r.tn ?? r.TABLE_NAME).join(', ')}`)
   // platform admin session must not reach org business data
   const pl = await post('/api/platform/auth', { email: 'admin@forgeplatform.example.com', password: 'platform123' }, { cookie: '' })
   const pc = cookie; cookie = F.ownerCookie

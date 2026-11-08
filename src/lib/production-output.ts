@@ -3,9 +3,10 @@ import { db } from './db'
 import { BusinessError, cancelGlForVoucher, postGl, AccountCode } from './accounting'
 import { EPS, fyCode, r2 } from './erp'
 import { cancelLotMovementsTx, linkLotGenealogyTx, receiveLotTx } from './traceability'
+import { tenantCompany } from './tenant'
 
 type Tx = Prisma.TransactionClient
-async function org(tx: Tx) { const row = await tx.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } }); if (!row) throw new BusinessError('Operating company is not configured', 409); return row }
+async function org(tx: Tx) { const row = await tenantCompany(tx); if (!row) throw new BusinessError('Operating company is not configured', 409); return row }
 async function nextNo(tx: Tx, companyId: string, date: Date) { const key = `MRC-${fyCode(date)}`; const row = await tx.counter.upsert({ where: { key: `${companyId}:${key}` }, create: { key: `${companyId}:${key}`, value: 1 }, update: { value: { increment: 1 } } }); return `${key}-${String(row.value).padStart(3, '0')}` }
 
 export async function postProductionReceipt(input: { workOrderId: string; outputItemId: string; warehouseId: string; date?: Date; batchNo?: string; manufacturedAt?: Date; expiryDate?: Date; producedQty: number; acceptedQty: number; rejectedQty?: number; reworkQty?: number; scrapQty?: number; qcNotes?: string; serialNumbers?: string[]; parentLots?: { parentLotId: string; consumedQty: number }[]; createdBy?: string }) {
@@ -73,6 +74,6 @@ export async function cancelProductionReceipt(id: string) {
 }
 
 export async function listProductionReceipts(workOrderId?: string) {
-  const company = await db.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } }); if (!company) throw new BusinessError('Operating company is not configured', 409)
+  const company = await tenantCompany(db); if (!company) throw new BusinessError('Operating company is not configured', 409)
   return db.productionReceipt.findMany({ where: { companyId: company.id, ...(workOrderId ? { workOrderId } : {}) }, orderBy: { date: 'desc' }, include: { workOrder: { select: { woNo: true } }, outputItem: { select: { code: true, name: true, uom: true } }, warehouse: { select: { code: true, name: true } } } })
 }

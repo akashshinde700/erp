@@ -5,6 +5,7 @@ import { gstinChecksumValid } from '@/lib/erp'
 import { gstStateCode } from '@/lib/validation'
 import { accessState, assertCompanyAccess, assertMutationAccess, operatingCompany, orgLoginCount } from '@/lib/platform'
 import { logAudit } from '@/lib/audit'
+import { tenantCompany } from '@/lib/tenant'
 
 /**
  * GET /api/masters/company — the operating org's profile (incl. bank details
@@ -64,7 +65,7 @@ export async function PUT(req: Request) {
     // create the company anonymously — exactly once. After that this is a
     // privileged mutation (bank details feed every printed invoice): a
     // signed-in OWNER/ACCOUNTANT session is required (VIEWER is read-only).
-    const existing = await db.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } })
+    const existing = await tenantCompany(db)
     const logins = await orgLoginCount()
     let actorEmail: string | null = null
     if (logins > 0) {

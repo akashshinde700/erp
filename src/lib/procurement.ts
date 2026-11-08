@@ -3,12 +3,13 @@ import { db } from './db'
 import { BusinessError, postGl, AccountCode, nextSharedInvoiceNo } from './accounting'
 import { computeInvoiceTotals, fyCode, r2, EPS } from './erp'
 import { cancelLotMovementsTx, receiveLotTx } from './traceability'
+import { tenantCompany } from './tenant'
 
 export type ProcurementLineInput = { itemId: string; qty: number; rate?: number; remarks?: string }
 type Tx = Prisma.TransactionClient
 
 async function contextCompany(tx: Tx) {
-  const company = await tx.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } })
+  const company = await tenantCompany(tx)
   if (!company) throw new BusinessError('Operating company is not configured', 409)
   return company
 }
@@ -283,7 +284,7 @@ export async function cancelGoodsReceipt(id: string) {
 }
 
 export async function procurementDashboard() {
-  const company = await db.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } })
+  const company = await tenantCompany(db)
   if (!company) throw new BusinessError('Operating company is not configured', 409)
   const [requisitions, orders, receipts, controlledInvoices] = await Promise.all([
     db.purchaseRequisition.findMany({ where: { companyId: company.id }, orderBy: { date: 'desc' }, include: { lines: { include: { item: true } } } }),

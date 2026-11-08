@@ -1,0 +1,2481 @@
+{
+  "ranAt": "2026-11-08T00:31:37.558Z",
+  "baseUrl": "http://127.0.0.1:3012",
+  "database": "forgeerp_audit_t",
+  "seconds": 26,
+  "total": 404,
+  "passed": 404,
+  "failed": 0,
+  "byPhase": {
+    "setup": {
+      "pass": 28,
+      "fail": 0
+    },
+    "P5-auth": {
+      "pass": 40,
+      "fail": 0
+    },
+    "P6-p2p": {
+      "pass": 72,
+      "fail": 0
+    },
+    "P7-q2c": {
+      "pass": 68,
+      "fail": 0
+    },
+    "P8-mfg": {
+      "pass": 50,
+      "fail": 0
+    },
+    "P9-quality": {
+      "pass": 35,
+      "fail": 0
+    },
+    "P10-lots": {
+      "pass": 42,
+      "fail": 0
+    },
+    "P11-finance": {
+      "pass": 38,
+      "fail": 0
+    },
+    "P12-gst": {
+      "pass": 12,
+      "fail": 0
+    },
+    "P13-fuzz": {
+      "pass": 5,
+      "fail": 0
+    },
+    "final": {
+      "pass": 14,
+      "fail": 0
+    }
+  },
+  "results": [
+    {
+      "phase": "setup",
+      "name": "force reseed of disposable DB",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "setup",
+      "name": "owner login",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "setup",
+      "name": "create second warehouse",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "setup",
+      "name": "create party AUD-S1",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "setup",
+      "name": "create party AUD-S2",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "setup",
+      "name": "create party AUD-C1",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "setup",
+      "name": "create party AUD-C2",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "setup",
+      "name": "create party AUD-J1",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "setup",
+      "name": "create item AUD-RM",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "setup",
+      "name": "create item AUD-FG",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "setup",
+      "name": "create item AUD-FG2",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "setup",
+      "name": "create item AUD-JWM",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "setup",
+      "name": "opening stock (owned, MAIN)",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "setup",
+      "name": "jobwork inward of customer-owned material into JW store",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "setup:reconcile",
+      "name": "baseline: every voucher balanced (Dr = Cr, active and cancelled sets)",
+      "pass": true,
+      "detail": "all balanced"
+    },
+    {
+      "phase": "setup:reconcile",
+      "name": "baseline: trial balance Dr = Cr",
+      "pass": true,
+      "detail": "Dr=1239065.21 Cr=1239065.21"
+    },
+    {
+      "phase": "setup:reconcile",
+      "name": "baseline: no negative stock balance",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "setup:reconcile",
+      "name": "baseline: no negative lot balance",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "setup:reconcile",
+      "name": "baseline: lot balances never exceed stock-ledger balance per item/warehouse",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "setup:reconcile",
+      "name": "baseline: invoice header = sum(lines) + round-off",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "setup:reconcile",
+      "name": "baseline: invoice paidAmount = active allocations",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "setup:reconcile",
+      "name": "baseline: no invoice paid beyond its total",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "setup:reconcile",
+      "name": "baseline: advance applied within [0, original]",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "setup:reconcile",
+      "name": "baseline: refunds never exceed credit/debit-note value",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "setup:reconcile",
+      "name": "baseline: GRN billed <= accepted and accepted + rejected = received",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "setup:reconcile",
+      "name": "baseline: challan invoiced <= accepted",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "setup:reconcile",
+      "name": "baseline: completed work orders have WIP fully settled",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "setup:reconcile",
+      "name": "baseline: no duplicate document numbers",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "anonymous GET /api/sales-invoices -> 401",
+      "pass": true,
+      "detail": "status=401"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "anonymous GET /api/procurement -> 401",
+      "pass": true,
+      "detail": "status=401"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "anonymous GET /api/order-to-cash -> 401",
+      "pass": true,
+      "detail": "status=401"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "anonymous GET /api/quality -> 401",
+      "pass": true,
+      "detail": "status=401"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "anonymous GET /api/traceability -> 401",
+      "pass": true,
+      "detail": "status=401"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "anonymous GET /api/finance-adjustments -> 401",
+      "pass": true,
+      "detail": "status=401"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "anonymous GET /api/returns -> 401",
+      "pass": true,
+      "detail": "status=401"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "anonymous GET /api/manufacturing/receipts -> 401",
+      "pass": true,
+      "detail": "status=401"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "anonymous POST /api/procurement -> 401",
+      "pass": true,
+      "detail": "status=401"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "anonymous POST /api/order-to-cash -> 401",
+      "pass": true,
+      "detail": "status=401"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "anonymous POST /api/returns -> 401",
+      "pass": true,
+      "detail": "status=401"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "anonymous POST /api/finance-adjustments -> 401",
+      "pass": true,
+      "detail": "status=401"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "anonymous POST /api/quality -> 401",
+      "pass": true,
+      "detail": "status=401"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "anonymous POST /api/traceability -> 401",
+      "pass": true,
+      "detail": "status=401"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "anonymous POST /api/manufacturing/receipts -> 401",
+      "pass": true,
+      "detail": "status=401"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "anonymous POST /api/sales-invoices -> 401",
+      "pass": true,
+      "detail": "status=401"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "forged session cookie -> 401",
+      "pass": true,
+      "detail": "status=401"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "accountant login works before revocation",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "phase": "P5-auth",
+      "name": "revoked session (tokenVersion bumped) -> 401",
+      "pass": true,
+      "detail": "status=401"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "viewer can read workflow dashboards (200)",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "viewer mutation /api/procurement -> 403",
+      "pass": true,
+      "detail": "status=403"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "viewer mutation /api/order-to-cash -> 403",
+      "pass": true,
+      "detail": "status=403"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "viewer mutation /api/finance-adjustments -> 403",
+      "pass": true,
+      "detail": "status=403"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "viewer mutation /api/quality -> 403",
+      "pass": true,
+      "detail": "status=403"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "viewer mutation /api/traceability -> 403",
+      "pass": true,
+      "detail": "status=403"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "viewer mutation /api/returns -> 403",
+      "pass": true,
+      "detail": "status=403"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "viewer mutation /api/manufacturing/receipts -> 403",
+      "pass": true,
+      "detail": "status=403"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "suspended organisation -> 403",
+      "pass": true,
+      "detail": "status=403 This organization is suspended — contact the platform administrator."
+    },
+    {
+      "phase": "P5-auth",
+      "name": "expired subscription -> 403",
+      "pass": true,
+      "detail": "status=403 The subscription has expired — renew to continue."
+    },
+    {
+      "phase": "P5-auth",
+      "name": "platform admin creates a second organisation",
+      "pass": true,
+      "detail": "status=200 undefined"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "second organisation owner can sign in",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "second-org user GET /api/sales-invoices sees its own (empty) workspace, no org-1 rows",
+      "pass": true,
+      "detail": "status=200 rows=0"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "second-org user GET /api/masters/parties sees its own (empty) workspace, no org-1 rows",
+      "pass": true,
+      "detail": "status=200 rows=0"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "second-org user GET /api/masters/items sees its own (empty) workspace, no org-1 rows",
+      "pass": true,
+      "detail": "status=200 rows=0"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "second-org user GET /api/manufacturing/projects sees its own (empty) workspace, no org-1 rows",
+      "pass": true,
+      "detail": "status=200 rows=0"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "second-org user GET /api/payments sees its own (empty) workspace, no org-1 rows",
+      "pass": true,
+      "detail": "status=200 rows=0"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "second-org user cannot read an org-1 invoice by id",
+      "pass": true,
+      "detail": "status=404"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "every business table is organisation-owned (companyId, or a required FK to a table that has one)",
+      "pass": true,
+      "detail": "0 unowned: "
+    },
+    {
+      "phase": "P5-auth",
+      "name": "platform admin session cannot read organisation invoices",
+      "pass": true,
+      "detail": "status=403"
+    },
+    {
+      "phase": "P5-auth",
+      "name": "organisation owner cannot call platform-admin routes",
+      "pass": true,
+      "detail": "status=401"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "create material requisition",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "1 PO against a DRAFT requisition is rejected",
+      "pass": true,
+      "detail": "status=409 error=Purchase order requires an approved requisition"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "requisition cannot be APPROVED straight from DRAFT",
+      "pass": true,
+      "detail": "status=400 error=Cannot approve a DRAFT requisition"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "submit requisition",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "approve requisition",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "2 PO quantity above approved requisition is rejected",
+      "pass": true,
+      "detail": "status=400 error=Order quantity exceeds approved requisition for Audit Raw Steel"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "3 customer used as PO supplier is rejected",
+      "pass": true,
+      "detail": "status=404 error=Active supplier not found"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "create PO from approved requisition",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "requisition orderedQty tracks the PO (100)",
+      "pass": true,
+      "detail": "{\"orderedQty\":100}"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "GRN against an unapproved PO is rejected",
+      "pass": true,
+      "detail": "status=400 error=Cannot receive against a DRAFT purchase order"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "approve PO",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "5 partial GRN #1 (60 of 100)",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "GRN does not move stock before QC",
+      "pass": true,
+      "detail": "before=200"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "4 over-receipt beyond 5% tolerance is rejected (60 + 50 > 105)",
+      "pass": true,
+      "detail": "status=400 error=Receipt exceeds PO quantity/tolerance for line cmw73jy4f0153vgqw3ofi02ms"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "6 duplicate PO line inside one GRN is rejected",
+      "pass": true,
+      "detail": "status=400 error=A PO line may occur only once in a GRN"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "7 duplicate supplier challan number for the same supplier is rejected",
+      "pass": true,
+      "detail": "status=409 error=Supplier challan AUD-DC-1 from this supplier is already received as GRN-2627-001 — cancel that GRN first if it was entered by mistake"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "5 partial GRN #2 (40 more)",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "8 accepted + rejected must equal received",
+      "pass": true,
+      "detail": "status=400 error=Accepted + rejected must equal received quantity for Audit Raw Steel"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "9 rejection without reason is rejected",
+      "pass": true,
+      "detail": "status=400 error=Rejection reason is required for Audit Raw Steel"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "inward QC GRN #1: 50 accepted, 10 rejected",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "10/11 only accepted 50 enter owned stock (rejected 10 do not)",
+      "pass": true,
+      "detail": "now=250 before=200"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "supplier lot SUPLOT-1 created with accepted qty only (50)",
+      "pass": true,
+      "detail": "balance=50"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "inward QC GRN #2: 40 accepted",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "12 invoice above unbilled accepted quantity is rejected",
+      "pass": true,
+      "detail": "status=400 error=Billing quantity exceeds unbilled QC-accepted quantity for Audit Raw Steel"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "GRN-backed purchase invoice for 30",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "15 GRN-backed invoice does not duplicate stock",
+      "pass": true,
+      "detail": "after=290 before=290"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "13 same supplier invoice number is rejected",
+      "pass": true,
+      "detail": "status=409 error=Supplier invoice AUD-SINV-1 is already posted as PIN-2627-003"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "14 two concurrent invoices for the last 20 units: exactly one posts",
+      "pass": true,
+      "detail": "statuses=200/409 errors=|GRN billing changed concurrently; refresh and retry"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "14 concurrent loser gets a controlled 4xx, not 500",
+      "pass": true,
+      "detail": "statuses=200/409"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "GRN #1 billed = 50 (no double billing)",
+      "pass": true,
+      "detail": "{\"billedQty\":50}"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "GRN #2 invoiced at 110 against PO rate 100",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "16/17 three-way match reports +10 rate variance for GRN #2",
+      "pass": true,
+      "detail": "[{\"grnNo\":\"GRN-2627-002\",\"itemCode\":\"AUD-RM\",\"acceptedQty\":40,\"billedQty\":40,\"quantityVariance\":0,\"rateVariance\":[10],\"invoices\":[\"AUD-SINV-3\"]}]"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "18 supplier payment allocation above outstanding is rejected",
+      "pass": true,
+      "detail": "status=400 error=Invoice PIN-2627-003 outstanding is only 3540"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "supplier payment of 1000 against PIN #1",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "19 purchase return above invoiced quantity is rejected",
+      "pass": true,
+      "detail": "status=400 error=Return exceeds original invoice quantity for Audit Raw Steel"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "20 purchase return needs stock in the chosen warehouse",
+      "pass": true,
+      "detail": "status=400 error=Insufficient stock to return Audit Raw Steel: 0 available"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "purchase return of 10 with debit note",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "purchase return issues 10 out of stock",
+      "pass": true,
+      "detail": "now=280"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "19 cumulative purchase return (10 + 25 > 30) is rejected",
+      "pass": true,
+      "detail": "status=400 error=Return exceeds original invoice quantity for Audit Raw Steel"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "21 debit-note voucher balances",
+      "pass": true,
+      "detail": "{\"dr\":1180,\"cr\":1180}"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "22 supplier refund above debit-note value is rejected",
+      "pass": true,
+      "detail": "status=400 error=Refundable amount is 1180"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "P11-19 four concurrent supplier refunds of 60% each: exactly one posts",
+      "pass": true,
+      "detail": "statuses=200,409,409,409"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "P11-19 race losers get controlled 4xx",
+      "pass": true,
+      "detail": "statuses=200,409,409,409"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "23 billed GRN cannot be cancelled",
+      "pass": true,
+      "detail": "status=400 error=GRN has billed quantities; cancel the linked purchase invoice first"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "cancel the concurrent-winner purchase invoice (20)",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "25 invoice cancellation releases billed GRN quantity (50 -> 30)",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "GRN #3 (4 units into AUDW2)",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "QC GRN #3 accepted",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "sell 3 of the GRN #3 units from AUDW2",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "24 GRN whose stock was consumed cannot be cancelled",
+      "pass": true,
+      "detail": "status=400 error=Cannot cancel GRN-2627-003: Audit Raw Steel stock has already been consumed/sold"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "cancel that sale to free the stock",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "cancel GRN #3 (unbilled, unconsumed)",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "26 GRN cancellation is append-only (original kept + mirror row, both flagged)",
+      "pass": true,
+      "detail": "[{\"qtyIn\":4,\"qtyOut\":0,\"isCancelled\":1},{\"qtyIn\":0,\"qtyOut\":4,\"isCancelled\":1}]"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "another supplier may use the same challan number (AUD-DC-1)",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "a cancelled GRN challan number (AUD-DC-3) can be received again",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "the supplier invoice number of a CANCELLED bill can be entered again (correction)",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "purchase invoice with a posted debit note cannot be cancelled",
+      "pass": true,
+      "detail": "status=400 error=Invoice has payments against it — cancel those payments first"
+    },
+    {
+      "phase": "P6-p2p",
+      "name": "P10-5 GRN cancellation reverses the lot receipt (balance 0)",
+      "pass": true,
+      "detail": "balance=0"
+    },
+    {
+      "phase": "P6-p2p:reconcile",
+      "name": "after P2P: every voucher balanced (Dr = Cr, active and cancelled sets)",
+      "pass": true,
+      "detail": "all balanced"
+    },
+    {
+      "phase": "P6-p2p:reconcile",
+      "name": "after P2P: trial balance Dr = Cr",
+      "pass": true,
+      "detail": "Dr=1250685.21 Cr=1250685.21"
+    },
+    {
+      "phase": "P6-p2p:reconcile",
+      "name": "after P2P: no negative stock balance",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P6-p2p:reconcile",
+      "name": "after P2P: no negative lot balance",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P6-p2p:reconcile",
+      "name": "after P2P: lot balances never exceed stock-ledger balance per item/warehouse",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P6-p2p:reconcile",
+      "name": "after P2P: invoice header = sum(lines) + round-off",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P6-p2p:reconcile",
+      "name": "after P2P: invoice paidAmount = active allocations",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P6-p2p:reconcile",
+      "name": "after P2P: no invoice paid beyond its total",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P6-p2p:reconcile",
+      "name": "after P2P: advance applied within [0, original]",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P6-p2p:reconcile",
+      "name": "after P2P: refunds never exceed credit/debit-note value",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P6-p2p:reconcile",
+      "name": "after P2P: GRN billed <= accepted and accepted + rejected = received",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P6-p2p:reconcile",
+      "name": "after P2P: challan invoiced <= accepted",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P6-p2p:reconcile",
+      "name": "after P2P: completed work orders have WIP fully settled",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P6-p2p:reconcile",
+      "name": "after P2P: no duplicate document numbers",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "create quotation",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "revise quotation",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "1 revision creates a new immutable version (rev 1 keeps its totals)",
+      "pass": true,
+      "detail": "[{\"revisionNo\":1,\"status\":\"SUPERSEDED\",\"grandTotal\":11800},{\"revisionNo\":2,\"status\":\"DRAFT\",\"grandTotal\":11328}]"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "2 previous version becomes SUPERSEDED",
+      "pass": true,
+      "detail": "{\"revisionNo\":1,\"status\":\"SUPERSEDED\",\"grandTotal\":11800}"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "superseded version cannot be submitted",
+      "pass": true,
+      "detail": "status=400 error=Cannot submit a SUPERSEDED quotation"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "create an already-expired quotation",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "3 expired quotation cannot be approved",
+      "pass": true,
+      "detail": "status=400 error=Expired quotation cannot be approved"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "submit revision",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "approve revision",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "convert approved quotation to sales order",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "4 duplicate SO from the same quotation is blocked",
+      "pass": true,
+      "detail": "status=400 error=Only an approved quotation can become a sales order"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "6 SO approval beyond credit limit is blocked",
+      "pass": true,
+      "detail": "status=409 error=Credit limit exceeded: current exposure 400, order 1180, limit 1000"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "5 credit exposure includes the 400 opening balance",
+      "pass": true,
+      "detail": "Credit limit exceeded: current exposure 400, order 1180, limit 1000"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "P11-12 schedule total must equal SO total",
+      "pass": true,
+      "detail": "status=400 error=Schedule total 11228 must equal sales order total 11328"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "P11-13 duplicate milestone names are rejected",
+      "pass": true,
+      "detail": "status=400 error=Payment milestone names must be unique"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "valid two-milestone schedule",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "P11-15 past-due milestone derives OVERDUE",
+      "pass": true,
+      "detail": "{\"id\":\"cmw73k0pu01b7vgqww92m4kjd\",\"companyId\":\"cmw73jt8300s3vgqwtlqat7dv\",\"salesOrderId\":\"cmw73k0es01awvgqw4dj8bz2a\",\"pa"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "approve SO within credit limit",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "10 insufficient warehouse stock is rejected",
+      "pass": true,
+      "detail": "status=400 error=Insufficient stock for Audit Bracket"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "9 over-dispatch beyond the order is rejected",
+      "pass": true,
+      "detail": "status=400 error=Dispatch exceeds pending order quantity for Audit Bracket: 20 pending (0 already on challans awaiting QC)"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "duplicate SO line in one challan is rejected",
+      "pass": true,
+      "detail": "status=400 error=An order line may occur only once per challan"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "7 partial delivery challan #1 (8 of 20)",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "8 second challan against the same SO (12)",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "pending 0: third challan for 1 more is rejected",
+      "pass": true,
+      "detail": "status=400 error=Dispatch exceeds pending order quantity for Audit Bracket: 0 pending (20 already on challans awaiting QC)"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "11 accepted + rejected must equal planned dispatch",
+      "pass": true,
+      "detail": "status=400 error=Accepted + rejected must equal planned quantity for Audit Bracket"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "12 rejected dispatch needs QC notes",
+      "pass": true,
+      "detail": "status=400 error=QC notes required for rejected Audit Bracket"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "dispatch QC challan #1: 7 accepted, 1 rejected",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "13 only accepted dispatch (7) issues stock",
+      "pass": true,
+      "detail": "now=93 before=100"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "dispatch QC challan #2: 12 accepted",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "14 invoice above accepted unbilled dispatch is rejected",
+      "pass": true,
+      "detail": "status=400 error=Invoice quantity exceeds unbilled dispatched quantity for Audit Bracket"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "16 two concurrent invoices for challan #1: exactly one posts",
+      "pass": true,
+      "detail": "statuses=409/200 Challan billing changed concurrently; refresh and retry|"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "16 concurrent loser gets controlled 4xx",
+      "pass": true,
+      "detail": "statuses=409/200"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "15 dispatch invoice does not issue stock twice",
+      "pass": true,
+      "detail": "now=81 before=81"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "17 fully invoiced challan closes (INVOICED)",
+      "pass": true,
+      "detail": "INVOICED"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "invoice challan #2 (12)",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "SO line dispatched 19 / invoiced 19 (1 rejected at dispatch QC stays pending)",
+      "pass": true,
+      "detail": "{\"status\":\"PART_DISPATCHED\",\"qty\":20,\"dispatchedQty\":19,\"invoicedQty\":19}"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "QC-rejected dispatch quantity returns to pending (challan for 1 allowed)",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "18 fully dispatched + invoiced SO closes",
+      "pass": true,
+      "detail": "CLOSED"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "cancel invoice of challan #2",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "19 invoice cancellation releases challan billed quantity",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "20 billed challan cannot be cancelled",
+      "pass": true,
+      "detail": "status=400 error=Delivery challan has invoiced quantities; cancel linked sales invoices first"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "21 unbilled challan #2 can be cancelled",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "21 challan cancellation reverses its 12-unit stock issue",
+      "pass": true,
+      "detail": "now=92"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "22 sales return above invoiced quantity is rejected",
+      "pass": true,
+      "detail": "status=400 error=Return exceeds original invoice quantity for Audit Bracket"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "P11-3 rejected return quantity needs QC notes",
+      "pass": true,
+      "detail": "status=400 error=QC notes are required for rejected return quantity of Audit Bracket"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "sales return: 3 restocked, 1 rejected",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "22 cumulative sales return (3 + 5 > 7) is rejected",
+      "pass": true,
+      "detail": "status=400 error=Return exceeds original invoice quantity for Audit Bracket"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "23 credit-note voucher balances",
+      "pass": true,
+      "detail": "{\"dr\":1699.2,\"cr\":1699.2}"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "24 customer refund above credit-note value is rejected",
+      "pass": true,
+      "detail": "status=400 error=Refundable amount is 1699"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "customer refund of 100",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "P11-16 customer refund GL: Dr DEBT 100 / Cr CASH 100",
+      "pass": true,
+      "detail": "[{\"account\":\"DEBT\",\"debit\":100,\"credit\":0},{\"account\":\"CASH\",\"debit\":0,\"credit\":100}]"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "sales invoice with a posted credit note cannot be cancelled",
+      "pass": true,
+      "detail": "status=409 error=Credit note CN-2627-002 is posted against this invoice — cancel the return first"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "a refund payment cannot be cancelled through the generic payment cancel",
+      "pass": true,
+      "detail": "status=409 error=This is a refund — cancel it from the return document (Cancel refund) so the refundable balance is restored"
+    },
+    {
+      "phase": "P7-q2c",
+      "name": "P11-17 supplier refund GL: Dr BANK / Cr CRED",
+      "pass": true,
+      "detail": "[{\"account\":\"BANK\",\"debit\":708,\"credit\":0},{\"account\":\"CRED\",\"debit\":0,\"credit\":708}]"
+    },
+    {
+      "phase": "P7-q2c:reconcile",
+      "name": "after Q2C: every voucher balanced (Dr = Cr, active and cancelled sets)",
+      "pass": true,
+      "detail": "all balanced"
+    },
+    {
+      "phase": "P7-q2c:reconcile",
+      "name": "after Q2C: trial balance Dr = Cr",
+      "pass": true,
+      "detail": "Dr=1258785.81 Cr=1258785.81"
+    },
+    {
+      "phase": "P7-q2c:reconcile",
+      "name": "after Q2C: no negative stock balance",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P7-q2c:reconcile",
+      "name": "after Q2C: no negative lot balance",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P7-q2c:reconcile",
+      "name": "after Q2C: lot balances never exceed stock-ledger balance per item/warehouse",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P7-q2c:reconcile",
+      "name": "after Q2C: invoice header = sum(lines) + round-off",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P7-q2c:reconcile",
+      "name": "after Q2C: invoice paidAmount = active allocations",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P7-q2c:reconcile",
+      "name": "after Q2C: no invoice paid beyond its total",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P7-q2c:reconcile",
+      "name": "after Q2C: advance applied within [0, original]",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P7-q2c:reconcile",
+      "name": "after Q2C: refunds never exceed credit/debit-note value",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P7-q2c:reconcile",
+      "name": "after Q2C: GRN billed <= accepted and accepted + rejected = received",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P7-q2c:reconcile",
+      "name": "after Q2C: challan invoiced <= accepted",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P7-q2c:reconcile",
+      "name": "after Q2C: completed work orders have WIP fully settled",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P7-q2c:reconcile",
+      "name": "after Q2C: no duplicate document numbers",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "create project",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "create BOM",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "approve BOM",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "work order from approved BOM",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "1 duplicate active WO from the same BOM is blocked",
+      "pass": true,
+      "detail": "status=409 error=WO-2627-003 is already active for BOM-2627-004 — use that work order instead of duplicating demand"
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "task 1 (CUTTING, seq 1)",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "task 2 (WELDING, seq 2)",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "2 routing: seq 2 cannot start before seq 1 completes",
+      "pass": true,
+      "detail": "status=409 error=Complete predecessor TASK-2627-013 (sequence 1, Material Cutting) before starting this task"
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "3 assigned task cannot complete without Start",
+      "pass": true,
+      "detail": "status=400 error=Start the task before recording production completion"
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "start task 1",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "4 material issue above owned available stock is rejected",
+      "pass": true,
+      "detail": "status=400 error=Insufficient stock for \"Audit Raw Steel\": available 280 KG, consumption 100000 KG — receive material first (GRN/Purchase)"
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "5 customer jobwork stock cannot be consumed by own production",
+      "pass": true,
+      "detail": "status=400 error=Insufficient stock for \"Audit Customer Casting\": available 0 PCS, consumption 5 PCS — receive material first (GRN/Purchase)"
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "6 concurrent completion of the same task: exactly one succeeds",
+      "pass": true,
+      "detail": "statuses=200/409 |This task was completed or cancelled by another user — refresh and try again"
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "6 material issued exactly once",
+      "pass": true,
+      "detail": "issue rows=1"
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "7 task completion posts Dr WIP = material + labour",
+      "pass": true,
+      "detail": "[{\"account\":\"WIP\",\"dr\":1300,\"cr\":0},{\"account\":\"STKV\",\"dr\":0,\"cr\":1000},{\"account\":\"LABP\",\"dr\":0,\"cr\":300}]"
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "7 credits are Inventory (STKV) and labour absorbed",
+      "pass": true,
+      "detail": "[{\"account\":\"WIP\",\"dr\":1300,\"cr\":0},{\"account\":\"STKV\",\"dr\":0,\"cr\":1000},{\"account\":\"LABP\",\"dr\":0,\"cr\":300}]"
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "FG receipt blocked while an operation is still open",
+      "pass": true,
+      "detail": "status=400 error=Complete every active operation before receiving finished goods"
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "complete task 2 (labour only)",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "17 WO cannot close without accepted FG",
+      "pass": true,
+      "detail": "status=400 error=Receive QC-accepted finished goods before closing this work order"
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "8 accepted + rejected + rework + scrap must equal produced",
+      "pass": true,
+      "detail": "status=400 error=Accepted + rejected + rework + scrap must equal produced quantity"
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "9 rejection without QC notes is rejected",
+      "pass": true,
+      "detail": "status=400 error=QC notes are required for rejection, rework or scrap"
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "10 zero accepted FG cannot be received",
+      "pass": true,
+      "detail": "status=400 error=At least one finished unit must pass QC before stock receipt"
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "FG receipt A (4 of 10)",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "12 expected cost comes from BOM (4/10 of BOM est cost)",
+      "pass": true,
+      "detail": "expected=400 bom=1000"
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "13 actual cost is 4/10 of material + labour",
+      "pass": true,
+      "detail": "actual=700 total=1750"
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "14 variance = actual - expected",
+      "pass": true,
+      "detail": "{\"a\":700,\"e\":400,\"v\":300}"
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "20 cancel FG receipt A (stock still on hand)",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "20 cancellation reverses FG stock",
+      "pass": true,
+      "detail": "now=0"
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "20 cancellation writes a mirrored GL reversal (no active rows left)",
+      "pass": true,
+      "detail": "[{\"isCancelled\":1,\"dr\":1400,\"cr\":1400,\"n\":6}]"
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "FG receipt B (4 of 10)",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "FG receipt C (produced 6: 5 accepted, 1 rejected)",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "15/16 producing the full planned 10 settles all WIP even with a QC rejection",
+      "pass": true,
+      "detail": "settled=1750 actual=1750 residue=0.00"
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "WO closes once FG is received and WIP settled",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "18 WO cannot close with unsettled WIP (3 of 10 received)",
+      "pass": true,
+      "detail": "status=400 error=WIP is not fully settled: actual cost 600, settled 180"
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "sell all 12 FG from AUDW2",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P8-mfg",
+      "name": "19 FG receipt cancellation blocked after stock was sold",
+      "pass": true,
+      "detail": "status=400 error=Finished goods were already consumed/sold; receipt cancellation is blocked"
+    },
+    {
+      "phase": "P8-mfg:reconcile",
+      "name": "after manufacturing: every voucher balanced (Dr = Cr, active and cancelled sets)",
+      "pass": true,
+      "detail": "all balanced"
+    },
+    {
+      "phase": "P8-mfg:reconcile",
+      "name": "after manufacturing: trial balance Dr = Cr",
+      "pass": true,
+      "detail": "Dr=1270145.81 Cr=1270145.81"
+    },
+    {
+      "phase": "P8-mfg:reconcile",
+      "name": "after manufacturing: no negative stock balance",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P8-mfg:reconcile",
+      "name": "after manufacturing: no negative lot balance",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P8-mfg:reconcile",
+      "name": "after manufacturing: lot balances never exceed stock-ledger balance per item/warehouse",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P8-mfg:reconcile",
+      "name": "after manufacturing: invoice header = sum(lines) + round-off",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P8-mfg:reconcile",
+      "name": "after manufacturing: invoice paidAmount = active allocations",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P8-mfg:reconcile",
+      "name": "after manufacturing: no invoice paid beyond its total",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P8-mfg:reconcile",
+      "name": "after manufacturing: advance applied within [0, original]",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P8-mfg:reconcile",
+      "name": "after manufacturing: refunds never exceed credit/debit-note value",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P8-mfg:reconcile",
+      "name": "after manufacturing: GRN billed <= accepted and accepted + rejected = received",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P8-mfg:reconcile",
+      "name": "after manufacturing: challan invoiced <= accepted",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P8-mfg:reconcile",
+      "name": "after manufacturing: completed work orders have WIP fully settled",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P8-mfg:reconcile",
+      "name": "after manufacturing: no duplicate document numbers",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P9-quality",
+      "name": "1 template needs at least one parameter",
+      "pass": true,
+      "detail": "status=400 error=At least one QC parameter is required"
+    },
+    {
+      "phase": "P9-quality",
+      "name": "2 duplicate parameter names are rejected",
+      "pass": true,
+      "detail": "status=400 error=QC parameter names must be unique"
+    },
+    {
+      "phase": "P9-quality",
+      "name": "3 numeric min above max is rejected",
+      "pass": true,
+      "detail": "status=400 error=Thickness: minimum cannot exceed maximum"
+    },
+    {
+      "phase": "P9-quality",
+      "name": "4 required text parameter needs expected text",
+      "pass": true,
+      "detail": "status=400 error=Finish: expected text is required"
+    },
+    {
+      "phase": "P9-quality",
+      "name": "create template v1 (number/text/boolean)",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P9-quality",
+      "name": "9 in-range numeric + matching text + true boolean passes",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P9-quality",
+      "name": "9/11 inspection status PASSED, default disposition ACCEPT",
+      "pass": true,
+      "detail": "{\"s\":\"PASSED\",\"d\":\"ACCEPT\"}"
+    },
+    {
+      "phase": "P9-quality",
+      "name": "7 missing required measurement is rejected",
+      "pass": true,
+      "detail": "status=400 error=Thickness is required"
+    },
+    {
+      "phase": "P9-quality",
+      "name": "8 wrong measurement type is rejected",
+      "pass": true,
+      "detail": "status=400 error=Thickness requires a numeric value"
+    },
+    {
+      "phase": "P9-quality",
+      "name": "10/14 out-of-range numeric fails and defaults to QUARANTINE",
+      "pass": true,
+      "detail": "{\"s\":\"FAILED\",\"d\":\"QUARANTINE\"}"
+    },
+    {
+      "phase": "P9-quality",
+      "name": "11 expected-text mismatch fails",
+      "pass": true,
+      "detail": "FAILED"
+    },
+    {
+      "phase": "P9-quality",
+      "name": "12 boolean false fails",
+      "pass": true,
+      "detail": "FAILED"
+    },
+    {
+      "phase": "P9-quality",
+      "name": "13 failed inspection cannot be dispositioned ACCEPT",
+      "pass": true,
+      "detail": "status=400 error=Failed inspection cannot have ACCEPT disposition"
+    },
+    {
+      "phase": "P9-quality",
+      "name": "15 inspector, time and every measurement persist",
+      "pass": true,
+      "detail": "{\"inspectedBy\":\"owner@shreeforge.example.com\",\"inspectedAt\":\"2026-11-07T19:01:25.238Z\",\"n\":3}"
+    },
+    {
+      "phase": "P9-quality",
+      "name": "create template v2 (same code)",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P9-quality",
+      "name": "5 new version deactivates the previous one",
+      "pass": true,
+      "detail": "[{\"version\":1,\"active\":0},{\"version\":2,\"active\":1}]"
+    },
+    {
+      "phase": "P9-quality",
+      "name": "inspection against the inactive v1 is refused",
+      "pass": true,
+      "detail": "status=404 error=Active QC template not found"
+    },
+    {
+      "phase": "P9-quality",
+      "name": "6 historical inspections still reference v1",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "phase": "P9-quality",
+      "name": "16 quality dashboard counts reconcile with the database",
+      "pass": true,
+      "detail": "api={\"total\":7,\"passed\":2,\"failed\":3,\"quarantined\":4} db={\"t\":7,\"p\":2,\"f\":3,\"q\":4}"
+    },
+    {
+      "phase": "P9-quality",
+      "name": "source of truth: GRN line cannot be QC-accepted after its parameterised inspection FAILED",
+      "pass": true,
+      "detail": "status=409 error=Inspection QI-2627-005 for this item FAILED — record the quantity as rejected, or re-inspect before accepting it"
+    },
+    {
+      "phase": "P9-quality",
+      "name": "the same GRN line can be recorded as rejected",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P9-quality:reconcile",
+      "name": "after quality: every voucher balanced (Dr = Cr, active and cancelled sets)",
+      "pass": true,
+      "detail": "all balanced"
+    },
+    {
+      "phase": "P9-quality:reconcile",
+      "name": "after quality: trial balance Dr = Cr",
+      "pass": true,
+      "detail": "Dr=1270145.81 Cr=1270145.81"
+    },
+    {
+      "phase": "P9-quality:reconcile",
+      "name": "after quality: no negative stock balance",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P9-quality:reconcile",
+      "name": "after quality: no negative lot balance",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P9-quality:reconcile",
+      "name": "after quality: lot balances never exceed stock-ledger balance per item/warehouse",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P9-quality:reconcile",
+      "name": "after quality: invoice header = sum(lines) + round-off",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P9-quality:reconcile",
+      "name": "after quality: invoice paidAmount = active allocations",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P9-quality:reconcile",
+      "name": "after quality: no invoice paid beyond its total",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P9-quality:reconcile",
+      "name": "after quality: advance applied within [0, original]",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P9-quality:reconcile",
+      "name": "after quality: refunds never exceed credit/debit-note value",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P9-quality:reconcile",
+      "name": "after quality: GRN billed <= accepted and accepted + rejected = received",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P9-quality:reconcile",
+      "name": "after quality: challan invoiced <= accepted",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P9-quality:reconcile",
+      "name": "after quality: completed work orders have WIP fully settled",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P9-quality:reconcile",
+      "name": "after quality: no duplicate document numbers",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P10-lots",
+      "name": "3 serial count must equal accepted quantity",
+      "pass": true,
+      "detail": "status=400 error=Serial count must equal received quantity"
+    },
+    {
+      "phase": "P10-lots",
+      "name": "serials without a batch number are rejected",
+      "pass": true,
+      "detail": "status=400 error=A batch/lot number is required when receiving serialised finished goods"
+    },
+    {
+      "phase": "P10-lots",
+      "name": "duplicate serial inside one receipt is rejected",
+      "pass": true,
+      "detail": "status=400 error=Each serial number may appear only once in a receipt"
+    },
+    {
+      "phase": "P10-lots",
+      "name": "11 FG lot with 3 serials and supplier parent lot SUPLOT-1",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P10-lots",
+      "name": "3/4 serial rows equal tracked quantity and lot balance equals movements",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "phase": "P10-lots",
+      "name": "11 parent -> child genealogy persists",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "phase": "P10-lots",
+      "name": "2 duplicate serial number across lots is rejected (4xx, not 500)",
+      "pass": true,
+      "detail": "status=409 error=Serial number already exists for this item: PMP-001"
+    },
+    {
+      "phase": "P10-lots",
+      "name": "12 a lot cannot be its own parent (receipt into the parent lot)",
+      "pass": true,
+      "detail": "status=400 error=A lot cannot be its own parent"
+    },
+    {
+      "phase": "P10-lots",
+      "name": "multi-hop genealogy cycle (child lot as ancestor of its parent) is rejected",
+      "pass": true,
+      "detail": "status=400 error=This parent lot already descends from the lot being produced — the genealogy would form a cycle"
+    },
+    {
+      "phase": "P10-lots",
+      "name": "FG lot that is already expired",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P10-lots",
+      "name": "7 dispatch cannot issue an expired lot",
+      "pass": true,
+      "detail": "status=400 error=Lot EXP-LOT is expired"
+    },
+    {
+      "phase": "P10-lots",
+      "name": "FG lot FG-LOT-M (2 units) in MAIN",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P10-lots",
+      "name": "9 dispatch cannot exceed the lot balance",
+      "pass": true,
+      "detail": "status=400 error=Lot FG-LOT-M balance is 2, requested 5"
+    },
+    {
+      "phase": "P10-lots",
+      "name": "serial-tracked lot cannot be dispatched without serial numbers",
+      "pass": true,
+      "detail": "status=400 error=Lot PUMP-LOT-1 is serial-tracked — enter the 1 serial number(s) being issued"
+    },
+    {
+      "phase": "P10-lots",
+      "name": "unknown serial number is rejected at dispatch",
+      "pass": true,
+      "detail": "status=409 error=One or more serial numbers are unavailable, already issued or belong to another lot"
+    },
+    {
+      "phase": "P10-lots",
+      "name": "dispatch 1 unit from the serialised lot PUMP-LOT-1",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P10-lots",
+      "name": "10 dispatching from a serialised lot moves exactly one serial out of AVAILABLE",
+      "pass": true,
+      "detail": "[{\"status\":\"AVAILABLE\",\"c\":2},{\"status\":\"ISSUED\",\"c\":1}]"
+    },
+    {
+      "phase": "P10-lots",
+      "name": "10 the same serial cannot be issued twice",
+      "pass": true,
+      "detail": "status=409 error=One or more serial numbers are unavailable, already issued or belong to another lot"
+    },
+    {
+      "phase": "P10-lots",
+      "name": "recall supplier lot SUPLOT-1",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P10-lots",
+      "name": "13 recursive recall reaches the descendant FG lot",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "phase": "P10-lots",
+      "name": "14 recall marks the remaining available serials RECALLED",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "phase": "P10-lots",
+      "name": "8 dispatch cannot issue a recalled lot",
+      "pass": true,
+      "detail": "status=400 error=Lot PUMP-LOT-1 is RECALLED and cannot be issued"
+    },
+    {
+      "phase": "P10-lots",
+      "name": "cancel the earlier dispatch from the (now recalled) lot",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P10-lots",
+      "name": "16 dispatch cancellation does not revive a recalled lot",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "phase": "P10-lots",
+      "name": "16 the serial returned by that cancellation comes back as RECALLED, not AVAILABLE",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "phase": "P10-lots",
+      "name": "plain sales invoice cannot sell units held in a recalled batch",
+      "pass": true,
+      "detail": "status=409 error=Only 215 can be issued without naming a batch; the rest is held in SUPLOT-1 (RECALLED, 50). Issue a specific batch or release the hold first."
+    },
+    {
+      "phase": "P10-lots",
+      "name": "1 one lot row per (company, item, warehouse, lotNo)",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "phase": "P10-lots",
+      "name": "15 every lot balance non-negative and derived from movements",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P10-lots:reconcile",
+      "name": "after lots: every voucher balanced (Dr = Cr, active and cancelled sets)",
+      "pass": true,
+      "detail": "all balanced"
+    },
+    {
+      "phase": "P10-lots:reconcile",
+      "name": "after lots: trial balance Dr = Cr",
+      "pass": true,
+      "detail": "Dr=1270945.81 Cr=1270945.81"
+    },
+    {
+      "phase": "P10-lots:reconcile",
+      "name": "after lots: no negative stock balance",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P10-lots:reconcile",
+      "name": "after lots: no negative lot balance",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P10-lots:reconcile",
+      "name": "after lots: lot balances never exceed stock-ledger balance per item/warehouse",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P10-lots:reconcile",
+      "name": "after lots: invoice header = sum(lines) + round-off",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P10-lots:reconcile",
+      "name": "after lots: invoice paidAmount = active allocations",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P10-lots:reconcile",
+      "name": "after lots: no invoice paid beyond its total",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P10-lots:reconcile",
+      "name": "after lots: advance applied within [0, original]",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P10-lots:reconcile",
+      "name": "after lots: refunds never exceed credit/debit-note value",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P10-lots:reconcile",
+      "name": "after lots: GRN billed <= accepted and accepted + rejected = received",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P10-lots:reconcile",
+      "name": "after lots: challan invoiced <= accepted",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P10-lots:reconcile",
+      "name": "after lots: completed work orders have WIP fully settled",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P10-lots:reconcile",
+      "name": "after lots: no duplicate document numbers",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P11-finance",
+      "name": "6 unallocated customer receipt",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P11-finance",
+      "name": "6 unallocated receipt creates a CUSTOMER advance of 5000",
+      "pass": true,
+      "detail": "{\"id\":\"cmw73k90w01tcvgqwglqlg6nd\",\"advanceType\":\"CUSTOMER\",\"originalAmount\":5000}"
+    },
+    {
+      "phase": "P11-finance",
+      "name": "7 customer advance cannot settle a purchase invoice",
+      "pass": true,
+      "detail": "status=400 error=customer advance cannot settle a purchase invoice"
+    },
+    {
+      "phase": "P11-finance",
+      "name": "sales invoice of 5900 for advance tests",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P11-finance",
+      "name": "9 application above available advance is rejected",
+      "pass": true,
+      "detail": "status=400 error=Advance available is 5000"
+    },
+    {
+      "phase": "P11-finance",
+      "name": "10 application above invoice outstanding is rejected",
+      "pass": true,
+      "detail": "status=400 error=Invoice outstanding is only 118"
+    },
+    {
+      "phase": "P11-finance",
+      "name": "P11 four concurrent advance applications (3000 each of 5000): exactly one succeeds",
+      "pass": true,
+      "detail": "statuses=200,409,409,409"
+    },
+    {
+      "phase": "P11-finance",
+      "name": "advance appliedAmount = 3000 after the race",
+      "pass": true,
+      "detail": "{\"appliedAmount\":3000,\"status\":\"PART_APPLIED\"}"
+    },
+    {
+      "phase": "P11-finance",
+      "name": "invoice paidAmount = 3000 after the race",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "phase": "P11-finance",
+      "name": "11 payment cancellation blocked after its advance was applied",
+      "pass": true,
+      "detail": "status=400 error=Advance was already applied to invoices — reverse those applications first"
+    },
+    {
+      "phase": "P11-finance",
+      "name": "invoice cancellation blocked while an advance is applied to it",
+      "pass": true,
+      "detail": "status=400 error=Invoice has payments against it — cancel those payments first"
+    },
+    {
+      "phase": "P11-finance",
+      "name": "reverse an advance application",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P11-finance",
+      "name": "reversal restores invoice outstanding (paidAmount 0)",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "phase": "P11-finance",
+      "name": "reversal restores available advance (applied 0, status OPEN)",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "phase": "P11-finance",
+      "name": "reversal keeps the allocation row (append-only) and records who/why",
+      "pass": true,
+      "detail": "row must stay with reversedAt set"
+    },
+    {
+      "phase": "P11-finance",
+      "name": "reversal writes an audit record",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "phase": "P11-finance",
+      "name": "reversing the same application twice is rejected",
+      "pass": true,
+      "detail": "status=409 error=This advance application is already reversed"
+    },
+    {
+      "phase": "P11-finance",
+      "name": "payment can be cancelled once its applications are reversed",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P11-finance",
+      "name": "cancel a customer refund",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P11-finance",
+      "name": "refund cancellation restores the refundable balance",
+      "pass": true,
+      "detail": "before=100 after=0"
+    },
+    {
+      "phase": "P11-finance",
+      "name": "refund cancellation posts a mirrored GL reversal",
+      "pass": true,
+      "detail": "[{\"isCancelled\":1,\"dr\":200,\"cr\":200}]"
+    },
+    {
+      "phase": "P11-finance",
+      "name": "cancelling the same refund twice is rejected",
+      "pass": true,
+      "detail": "status=409 error=This refund is already cancelled"
+    },
+    {
+      "phase": "P11-finance",
+      "name": "return cancellation blocked while a refund is still posted against it",
+      "pass": true,
+      "detail": "status=409 error=708 has been refunded against DN-2627-001 — cancel those refunds first"
+    },
+    {
+      "phase": "P11-finance",
+      "name": "5 sales-return cancellation succeeds while restocked units are on hand",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "phase": "P11-finance:reconcile",
+      "name": "after finance: every voucher balanced (Dr = Cr, active and cancelled sets)",
+      "pass": true,
+      "detail": "all balanced"
+    },
+    {
+      "phase": "P11-finance:reconcile",
+      "name": "after finance: trial balance Dr = Cr",
+      "pass": true,
+      "detail": "Dr=1275164.61 Cr=1275164.61"
+    },
+    {
+      "phase": "P11-finance:reconcile",
+      "name": "after finance: no negative stock balance",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P11-finance:reconcile",
+      "name": "after finance: no negative lot balance",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P11-finance:reconcile",
+      "name": "after finance: lot balances never exceed stock-ledger balance per item/warehouse",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P11-finance:reconcile",
+      "name": "after finance: invoice header = sum(lines) + round-off",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P11-finance:reconcile",
+      "name": "after finance: invoice paidAmount = active allocations",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P11-finance:reconcile",
+      "name": "after finance: no invoice paid beyond its total",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P11-finance:reconcile",
+      "name": "after finance: advance applied within [0, original]",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P11-finance:reconcile",
+      "name": "after finance: refunds never exceed credit/debit-note value",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P11-finance:reconcile",
+      "name": "after finance: GRN billed <= accepted and accepted + rejected = received",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P11-finance:reconcile",
+      "name": "after finance: challan invoiced <= accepted",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P11-finance:reconcile",
+      "name": "after finance: completed work orders have WIP fully settled",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P11-finance:reconcile",
+      "name": "after finance: no duplicate document numbers",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "P12-gst",
+      "name": "GSTR-1 report",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P12-gst",
+      "name": "GSTR-3B (books) report",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P12-gst",
+      "name": "HSN/SAC summary",
+      "pass": true,
+      "detail": "status=200 "
+    },
+    {
+      "phase": "P12-gst",
+      "name": "GSTR-3B output tax per head = posted sales books minus credit notes",
+      "pass": true,
+      "detail": "report={\"taxable\":80604.07,\"cgst\":4316.4,\"sgst\":4316.4,\"igst\":5875.94,\"grandTotal\":95113} books={\"c\":4361.4,\"s\":4361.4,\"i\":5875.94} cn={\"c\":45,\"s\":45,\"i\":0}"
+    },
+    {
+      "phase": "P12-gst",
+      "name": "GSTR-3B ITC per head = posted purchase books minus debit notes",
+      "pass": true,
+      "detail": "report={\"taxable\":88900,\"cgst\":8001,\"sgst\":8001,\"igst\":0,\"grandTotal\":104902} books={\"c\":8091,\"s\":8091,\"i\":0} dn={\"c\":90,\"s\":90,\"i\":0}"
+    },
+    {
+      "phase": "P12-gst",
+      "name": "GSTR-3B net and excess ITC reconcile by tax head",
+      "pass": true,
+      "detail": "{\"net\":{\"cgst\":0,\"sgst\":0,\"igst\":5875.94,\"total\":5875.94},\"ex\":{\"cgst\":3684.6,\"sgst\":3684.6,\"igst\":0,\"total\":7369.2}}"
+    },
+    {
+      "phase": "P12-gst",
+      "name": "GSTR-1 lists the month credit notes (CDNR + CDNUR)",
+      "pass": true,
+      "detail": "report=1 db=1"
+    },
+    {
+      "phase": "P12-gst",
+      "name": "GSTR-3B is labelled books-based, not portal-filing-ready",
+      "pass": true,
+      "detail": "{\"month\":\"2026-11\",\"salesInvoiceCount\":8,\"purchaseInvoiceCount\":3,\"creditNoteCount\":1,\"debitNoteCount\":1,\"outwardInvoices\":{\"taxable\":81104.07,\"cgst\":4361.4,\"sg"
+    },
+    {
+      "phase": "P12-gst",
+      "name": "GSTR-1 excludes cancelled invoices",
+      "pass": true,
+      "detail": "INV-2627-005"
+    },
+    {
+      "phase": "P12-gst",
+      "name": "e-Invoice JSON export responds (200 or controlled 4xx with pre-validation errors)",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "phase": "P12-gst",
+      "name": "e-Way Bill requires valid transport inputs",
+      "pass": true,
+      "detail": "status=405 error=null"
+    },
+    {
+      "phase": "P12-gst",
+      "name": "exports write audit records",
+      "pass": true,
+      "detail": "before=137"
+    },
+    {
+      "phase": "P13-fuzz",
+      "name": "304 malformed/hostile requests to workflow APIs all return controlled 4xx (no 2xx, no 500)",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "phase": "P13-fuzz",
+      "name": "concurrent duplicate create with the same Idempotency-Key creates one document",
+      "pass": true,
+      "detail": "created=1 statuses=200,409"
+    },
+    {
+      "phase": "P13-fuzz",
+      "name": "a retry with the same key replays the original response (same document id)",
+      "pass": true,
+      "detail": "status=200"
+    },
+    {
+      "phase": "P13-fuzz",
+      "name": "the same key with a different body is refused (422)",
+      "pass": true,
+      "detail": "status=422"
+    },
+    {
+      "phase": "P13-fuzz",
+      "name": "triple-submitted sales invoice with one key posts exactly one invoice",
+      "pass": true,
+      "detail": ""
+    },
+    {
+      "phase": "final:reconcile",
+      "name": "final: every voucher balanced (Dr = Cr, active and cancelled sets)",
+      "pass": true,
+      "detail": "all balanced"
+    },
+    {
+      "phase": "final:reconcile",
+      "name": "final: trial balance Dr = Cr",
+      "pass": true,
+      "detail": "Dr=1275754.61 Cr=1275754.61"
+    },
+    {
+      "phase": "final:reconcile",
+      "name": "final: no negative stock balance",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "final:reconcile",
+      "name": "final: no negative lot balance",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "final:reconcile",
+      "name": "final: lot balances never exceed stock-ledger balance per item/warehouse",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "final:reconcile",
+      "name": "final: invoice header = sum(lines) + round-off",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "final:reconcile",
+      "name": "final: invoice paidAmount = active allocations",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "final:reconcile",
+      "name": "final: no invoice paid beyond its total",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "final:reconcile",
+      "name": "final: advance applied within [0, original]",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "final:reconcile",
+      "name": "final: refunds never exceed credit/debit-note value",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "final:reconcile",
+      "name": "final: GRN billed <= accepted and accepted + rejected = received",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "final:reconcile",
+      "name": "final: challan invoiced <= accepted",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "final:reconcile",
+      "name": "final: completed work orders have WIP fully settled",
+      "pass": true,
+      "detail": "[]"
+    },
+    {
+      "phase": "final:reconcile",
+      "name": "final: no duplicate document numbers",
+      "pass": true,
+      "detail": "[]"
+    }
+  ]
+}

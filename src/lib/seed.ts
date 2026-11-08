@@ -20,6 +20,7 @@ import {
   syncPartyOpeningBalance,
 } from './services'
 import { seedManufacturingDemo } from './seed-manufacturing'
+import { runAsTenant } from './tenant'
 import { WORKFLOW_MODELS_CHILDREN_FIRST, delegate } from './backup-tables'
 
 const daysAgo = (n: number): Date => {
@@ -104,6 +105,8 @@ export async function seedDatabase(force = false) {
     },
   })
 
+  // Every business row below belongs to this organisation (tenant extension).
+  return runAsTenant(company.id, async () => {
   // ---------- Demo organization login (owner) ----------
   await db.orgUser.create({
     data: {
@@ -456,4 +459,5 @@ export async function seedDatabase(force = false) {
     trialBalanceDr: Math.round(dr * 100) / 100,
     trialBalanceCr: Math.round(cr * 100) / 100,
   }
+  })
 }

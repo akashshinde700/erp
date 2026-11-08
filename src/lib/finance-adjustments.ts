@@ -2,9 +2,10 @@ import { Prisma } from '@prisma/client'
 import { db } from './db'
 import { AccountCode, BusinessError, cancelGlForVoucher, postGl } from './accounting'
 import { EPS, fyCode, r2 } from './erp'
+import { tenantCompany } from './tenant'
 
 type Tx = Prisma.TransactionClient
-async function org(tx: Tx) { const row = await tx.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } }); if (!row) throw new BusinessError('Operating company is not configured', 409); return row }
+async function org(tx: Tx) { const row = await tenantCompany(tx); if (!row) throw new BusinessError('Operating company is not configured', 409); return row }
 async function nextPaymentNo(tx: Tx, companyId: string, type: 'REFUND' | 'SUPPLIER_REFUND', date: Date) { const prefix = type === 'REFUND' ? 'RFN' : 'SRF'; const display = `${prefix}-${fyCode(date)}`; const row = await tx.counter.upsert({ where: { key: `${companyId}:${display}` }, create: { key: `${companyId}:${display}`, value: 1 }, update: { value: { increment: 1 } } }); return `${display}-${String(row.value).padStart(3, '0')}` }
 const advanceStatus = (applied: number, original: number) => (applied <= EPS ? 'OPEN' : applied + EPS >= original ? 'APPLIED' : 'PART_APPLIED')
 
@@ -38,7 +39,7 @@ export async function applyAdvance(input: { advanceId: string; invoiceType: 'SAL
     const amount = r2(input.amount)
     if (!(amount > 0) || advance.appliedAmount + amount > advance.originalAmount + EPS) throw new BusinessError(`Advance available is ${r2(advance.originalAmount - advance.appliedAmount)}`)
     const expected = advance.advanceType === 'CUSTOMER' ? 'SALES' : 'PURCHASE'; if (input.invoiceType !== expected) throw new BusinessError(`${advance.advanceType.toLowerCase()} advance cannot settle a ${input.invoiceType.toLowerCase()} invoice`)
-    const invoice = input.invoiceType === 'SALES' ? await tx.salesInvoice.findUnique({ where: { invoiceNo: input.invoiceNo } }) : await tx.purchaseInvoice.findUnique({ where: { invoiceNo: input.invoiceNo } })
+    const invoice = input.invoiceType === 'SALES' ? await tx.salesInvoice.findFirst({ where: { invoiceNo: input.invoiceNo } }) : await tx.purchaseInvoice.findFirst({ where: { invoiceNo: input.invoiceNo } })
     if (!invoice || invoice.partyId !== advance.partyId || invoice.status !== 'POSTED') throw new BusinessError('Active invoice for this advance party not found', 404)
     const outstanding = r2(invoice.grandTotal - invoice.paidAmount); if (amount > outstanding + EPS) throw new BusinessError(`Invoice outstanding is only ${outstanding}`)
     const advanceRows = await tx.partyAdvance.updateMany({
@@ -131,7 +132,7 @@ export async function cancelRefund(input: { paymentId: string; reason: string })
 }
 
 export async function financeAdjustmentsDashboard() {
-  const company = await db.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } }); if (!company) throw new BusinessError('Operating company is not configured', 409)
+  const company = await tenantCompany(db); if (!company) throw new BusinessError('Operating company is not configured', 409)
   const now = new Date()
   await db.paymentSchedule.updateMany({ where: { companyId: company.id, status: { in: ['PENDING', 'PART_PAID'] }, dueDate: { lt: now } }, data: { status: 'OVERDUE' } })
   const [schedules, advances, refunds] = await Promise.all([

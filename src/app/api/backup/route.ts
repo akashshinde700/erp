@@ -17,6 +17,8 @@ import { WORKFLOW_MODELS_CHILDREN_FIRST, delegate } from '@/lib/backup-tables'
  * v4: adds the workflow tables (procurement, quote-to-cash, QC, lots/serials,
  *     production receipts, schedules, advances, refunds) under data.workflow,
  *     keyed by Prisma model name (see src/lib/backup-tables.ts).
+ * v5: every organisation-owned row carries companyId (tenant isolation). The
+ *     snapshot is platform-wide: it covers all organisations.
  */
 export async function GET(req: Request) {
   try {
@@ -83,9 +85,9 @@ export async function GET(req: Request) {
     )
     const workflow = Object.fromEntries(workflowEntries) as Record<string, unknown[]>
     const workflowCounts = Object.fromEntries(workflowEntries.map(([model, rows]) => [model, rows.length]))
-    await logAudit('BACKUP', 'Backup', undefined, 'snapshot downloaded (v4, full schema)', 'platform-admin')
+    await logAudit('BACKUP', 'Backup', undefined, 'snapshot downloaded (v5, all organisations)', 'platform-admin')
     return ok({
-      version: 4,
+      version: 5,
       takenAt: new Date().toISOString(),
       counts: {
         company: company.length, plans: plans.length, orgUsers: orgUsers.length, parties: parties.length,

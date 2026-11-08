@@ -87,7 +87,7 @@ async function main() {
 
   // 2. backup covers every table
   const bk = await api('GET', '/api/backup')
-  check('backup downloads (200, v4)', bk.status === 200 && bk.json?.data?.version === 4, `status=${bk.status} version=${bk.json?.data?.version}`)
+  check('backup downloads (200, v5)', bk.status === 200 && bk.json?.data?.version === 5, `status=${bk.status} version=${bk.json?.data?.version}`)
   const snap = bk.json.data
   const snapCounts = snapshotCounts(snap)
   const liveNow = await tableCounts()
@@ -107,7 +107,7 @@ async function main() {
   const afterReseed = await db.get('SELECT COUNT(*) c FROM SalesInvoice WHERE id=?', [firstId])
   check('reseed produced different row ids than the snapshot', Number(afterReseed.c) === 0, `snapshot invoice id present=${afterReseed.c}`)
   const rs = await api('POST', '/api/backup/restore', { confirm: 'RESTORE', snapshot: snap })
-  check('restore of v4 snapshot succeeds (200)', rs.status === 200, `status=${rs.status} ${JSON.stringify(rs.json).slice(0, 160)}`)
+  check('restore of v5 snapshot succeeds (200)', rs.status === 200, `status=${rs.status} ${JSON.stringify(rs.json).slice(0, 160)}`)
   const liveAfter = await tableCounts()
   const d2 = diffCounts(snapCounts, liveAfter).filter((x) => !x.startsWith('AuditLog: '))
   check('after restore every table count equals the snapshot', d2.length === 0, d2.join('; ') || 'all equal')

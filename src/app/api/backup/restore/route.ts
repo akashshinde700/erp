@@ -2,6 +2,7 @@ import { handleError, ok, fail } from '@/lib/api'
 import { db } from '@/lib/db'
 import { logAudit } from '@/lib/audit'
 import { requirePlatformAdmin } from '@/lib/platform'
+import { runAsTenant } from '@/lib/tenant'
 import { WORKFLOW_MODELS_CHILDREN_FIRST, WORKFLOW_MODELS_PARENTS_FIRST, delegate } from '@/lib/backup-tables'
 
 /**
@@ -28,7 +29,7 @@ export async function POST(req: Request) {
     const body = (await req.json()) as { confirm?: string; snapshot?: Snapshot }
     if (body.confirm !== 'RESTORE') return fail('Type RESTORE to confirm the destructive restore', 400)
     const snap = body.snapshot
-    if (!snap || ![1, 2, 3, 4].includes(snap.version ?? 0) || !snap.data) {
+    if (!snap || ![1, 2, 3, 4, 5].includes(snap.version ?? 0) || !snap.data) {
       return fail('Invalid snapshot — export a backup first', 400)
     }
     // A restore that would leave ZERO org logins re-opens the anonymous
@@ -116,6 +117,19 @@ export async function POST(req: Request) {
         // ---- parents → children insert ----
         if (d.plans?.length) await tx.plan.createMany({ data: d.plans as never })
         if (d.company?.length) await tx.company.createMany({ data: d.company as never })
+
+        // Snapshots before v5 predate tenant isolation: their rows have no
+        // companyId and belong to the single organisation of that install, so
+        // they are inserted as that organisation (the tenant extension fills
+        // companyId) and its document counters get the organisation prefix.
+        const companies = (d.company ?? []) as { id: string; isPlatform?: boolean; createdAt?: string }[]
+        const legacyOrg = (snap.version ?? 1) < 5
+          ? companies.filter((c) => !c.isPlatform).sort((a, b) => String(a.createdAt ?? '').localeCompare(String(b.createdAt ?? '')))[0]?.id ?? null
+          : null
+        if (legacyOrg && d.counters?.length) {
+          d.counters = (d.counters as { key: string; value: number }[]).map((c) => (c.key.includes(':') ? c : { ...c, key: `${legacyOrg}:${c.key}` }))
+        }
+        const insertBusinessRows = async () => {
         if (d.parties?.length) await tx.party.createMany({ data: d.parties as never })
         if (d.items?.length) await tx.item.createMany({ data: d.items as never })
         if (d.warehouses?.length) await tx.warehouse.createMany({ data: d.warehouses as never })
@@ -193,6 +207,9 @@ export async function POST(req: Request) {
         if (d.counters?.length) await tx.counter.createMany({ data: d.counters as never })
         if (d.orgUsers?.length) await tx.orgUser.createMany({ data: d.orgUsers as never })
         if (d.auditLogs?.length) await tx.auditLog.createMany({ data: d.auditLogs as never })
+        }
+        if (legacyOrg) await runAsTenant(legacyOrg, insertBusinessRows)
+        else await runAsTenant(null, insertBusinessRows)
       },
       // Full-database restore is heavier than the 5s interactive default.
       { timeout: 60_000 }

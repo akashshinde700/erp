@@ -1,4 +1,4 @@
-import { ok, handleError } from '@/lib/api'
+import { ok, handleError, fail } from '@/lib/api'
 import { db } from '@/lib/db'
 import { cancelJobworkInward } from '@/lib/services'
 import { assertCompanyAccess, assertMutationAccess } from '@/lib/platform'
@@ -20,6 +20,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
         certificates: { orderBy: { date: 'desc' } },
       },
     })
+    if (!inward) return fail('Inward not found', 404)
     return ok(inward)
   } catch (e) {
     return handleError(e)

@@ -21,6 +21,7 @@ import {
   startTask,
   completeTask,
 } from './manufacturing'
+import { tenantCompany } from './tenant'
 
 const daysAgo = (n: number): Date => {
   const d = new Date()
@@ -232,7 +233,7 @@ export async function seedManufacturingDemo(deps: ManufacturingSeedDeps) {
  * opening stock (posted through the real service, so the ledger stays honest).
  */
 export async function seedManufacturingIfEmpty() {
-  const company = await db.company.findFirst({ where: { isPlatform: false } })
+  const company = await tenantCompany(db)
   if (!company) return { seeded: false, reason: 'No company yet — run the full demo seed first' }
   const [employees, projects] = await Promise.all([db.employee.count(), db.project.count()])
   if (employees > 0 || projects > 0) {
@@ -253,7 +254,7 @@ export async function seedManufacturingIfEmpty() {
   const items: Record<string, Ref> = {}
   const created: { itemId: string; qty: number; rate: number }[] = []
   for (const def of FABRICATION_ITEMS) {
-    let item = await db.item.findUnique({ where: { code: def.code } })
+    let item = await db.item.findFirst({ where: { code: def.code } })
     if (!item) {
       item = await db.item.create({
         data: { code: def.code, name: def.name, groupName: def.groupName, hsn: def.hsn, uom: def.uom, gstRate: 18, saleRate: def.saleRate, costRate: def.costRate, reorderLevel: def.reorderLevel },

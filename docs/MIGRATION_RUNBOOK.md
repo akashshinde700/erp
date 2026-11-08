@@ -51,6 +51,13 @@ prisma/migrations/
   20261108140000_rfq_supplier_quotes/
     migration.sql                           5 new tables (Rfq, RfqLine, RfqSupplier,
                                             SupplierQuote, SupplierQuoteLine). Additive only.
+  20261109090000_mapsoft_parity/
+    migration.sql                           10 new tables (LedgerAccount, JournalVoucher,
+                                            JournalLine, TdsSection, StockAdjustment(+Line),
+                                            Salesperson, Lead, LeadActivity, ServiceCall);
+                                            nullable/defaulted columns Company.booksLocked*,
+                                            Party.creditDays, Payment.tds*, salespersonId on
+                                            quotation/order/invoice. Additive only.
 ```
 
 `db:push` is **not** used anywhere any more: `deploy.py` runs

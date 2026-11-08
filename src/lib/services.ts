@@ -11,6 +11,7 @@ import { Prisma } from '@prisma/client'
 import { r2, fyCode, computeInvoiceTotals, EPS, DEFAULT_WAREHOUSE_CODE } from './erp'
 import { isValidDateString } from './validation'
 import { BusinessError, AccountCode, postGl, cancelGlForVoucher } from './accounting'
+import { cancelLotMovementsTx, consumeLotsFefoTx } from './traceability'
 
 type Tx = Prisma.TransactionClient
 
@@ -116,6 +117,7 @@ async function cancelStockForVoucher(tx: Tx, voucherType: string, voucherNo: str
     where: { voucherType, voucherNo, isCancelled: false },
     data: { isCancelled: true },
   })
+  await cancelLotMovementsTx(tx, voucherType, voucherNo)
 }
 
 /** Never let an unparseable/rolled-over date reach Prisma (FY numbering and
@@ -247,6 +249,9 @@ export async function postSalesInvoiceTx(tx: Tx, input: PostSalesInput) {
     for (const [itemId, q] of qtyByItem) {
       const it = itemMap.get(itemId)!
       await requireAvailability(tx, itemId, it.name, warehouseId, q)
+      // Batch-tracked stock leaves FEFO through its lots (never from a recalled,
+      // quarantined or expired batch), keeping lot balances inside the stock ledger.
+      await consumeLotsFefoTx(tx, { itemId, warehouseId, qty: q, voucherType: 'SALES', voucherNo: invoiceNo })
       const { avgCost } = await stockStats(tx, itemId, warehouseId)
       await tx.stockLedger.create({
         data: {
@@ -288,6 +293,8 @@ export async function cancelSalesInvoice(id: string) {
     if (inv.paidAmount > 0.004) {
       throw new BusinessError('Invoice has payments against it — cancel those payments first')
     }
+    const notes = await tx.returnDocument.findMany({ where: { sourceInvoiceId: inv.id, returnType: 'SALES_RETURN', status: 'POSTED' }, select: { adjustmentNo: true } })
+    if (notes.length) throw new BusinessError(`Credit note ${notes.map((n) => n.adjustmentNo).join(', ')} is posted against this invoice — cancel the return first`, 409)
     const now = new Date()
     await cancelStockForVoucher(tx, 'SALES', inv.invoiceNo, now)
     await cancelGlForVoucher(tx, 'SALES_INVOICE', inv.invoiceNo, now)
@@ -450,6 +457,8 @@ export async function cancelPurchaseInvoice(id: string) {
     if (inv.paidAmount > 0.004) {
       throw new BusinessError('Invoice has payments against it — cancel those payments first')
     }
+    const notes = await tx.returnDocument.findMany({ where: { sourceInvoiceId: inv.id, returnType: 'PURCHASE_RETURN', status: 'POSTED' }, select: { adjustmentNo: true } })
+    if (notes.length) throw new BusinessError(`Debit note ${notes.map((n) => n.adjustmentNo).join(', ')} is posted against this invoice — cancel the return first`, 409)
     const now = new Date()
     await cancelStockForVoucher(tx, 'PURCHASE', inv.invoiceNo, now)
     await cancelGlForVoucher(tx, 'PURCHASE_INVOICE', inv.invoiceNo, now)
@@ -463,7 +472,8 @@ export async function cancelPurchaseInvoice(id: string) {
       await tx.goodsReceiptLine.update({ where: { id: receiptLine.id }, data: { billedQty: { decrement: line.qty } } })
       await tx.purchaseOrderLine.update({ where: { id: receiptLine.purchaseOrderLineId }, data: { billedQty: { decrement: line.qty } } })
     }
-    return tx.purchaseInvoice.update({ where: { id }, data: { status: 'CANCELLED' } })
+    // Free the supplier invoice number so the corrected bill can be entered again.
+    return tx.purchaseInvoice.update({ where: { id }, data: { status: 'CANCELLED', activeSupplierInvoiceNo: null } })
   })
 }
 
@@ -595,9 +605,11 @@ export async function cancelPayment(id: string) {
     const pay = await tx.payment.findUnique({ where: { id }, include: { allocations: true, advances: true, refunds: true } })
     if (!pay) throw new BusinessError('Payment not found', 404)
     if (pay.status === 'CANCELLED') throw new BusinessError('Payment is already cancelled')
+    if (pay.refunds.length) throw new BusinessError('This is a refund — cancel it from the return document (Cancel refund) so the refundable balance is restored', 409)
     if (pay.advances.some((advance) => advance.appliedAmount > EPS)) throw new BusinessError('Advance was already applied to invoices — reverse those applications first')
     await tx.partyAdvance.updateMany({ where: { paymentId: pay.id }, data: { status: 'CANCELLED' } })
     for (const a of pay.allocations) {
+      if (a.reversedAt) continue // reversed applications already gave the amount back
       if (a.invoiceType === 'SALES') {
         await tx.salesInvoice.updateMany({
           where: { invoiceNo: a.invoiceNo },

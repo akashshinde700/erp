@@ -76,6 +76,7 @@ export async function POST(req: Request) {
         // ---- children → parents wipe (FK-safe, full schema) ----
         // Workflow tables first: they reference payments, work orders, items,
         // parties and warehouses (order from src/lib/backup-tables.ts).
+        await tx.idempotencyKey.deleteMany({}) // operational cache, never restored
         for (const model of WORKFLOW_MODELS_CHILDREN_FIRST) await delegate(tx, model).deleteMany({})
         await tx.paymentAllocation.deleteMany({})
         await tx.jobCardProcess.deleteMany({})

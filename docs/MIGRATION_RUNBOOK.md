@@ -23,6 +23,18 @@ prisma/migrations/
                                             advances, refunds) + 6 columns + 1 unique index
                                             + 73 FKs. Purely additive: 0 DROP, 0 MODIFY,
                                             every new column is NULLable or DEFAULT 0.
+  20261108090000_finance_reversal_and_document_uniqueness/
+    migration.sql                           hand-staged (generated SQL rejected, see
+                                            docs/FULL_RUNTIME_AUDIT_2026-11-08.md §5):
+                                            ReturnDocument.refundedAmount (backfilled from
+                                            POSTED refunds), PaymentAllocation.kind/reversedAt/
+                                            reversalReason, PurchaseInvoice.activeSupplierInvoiceNo
+                                            and GoodsReceipt.supplierDocKey (backfilled for
+                                            non-cancelled rows), IdempotencyKey table; the
+                                            unique keys on supplier invoice/challan numbers
+                                            become active-only. New indexes are created before
+                                            the old unique keys are dropped, so no FK loses its
+                                            supporting index.
 ```
 
 `db:push` is **not** used anywhere any more: `deploy.py` runs
@@ -89,6 +101,12 @@ SELECT partyId, supplierInvoiceNo, COUNT(*) FROM PurchaseInvoice
 -- must return no rows; otherwise fix the duplicates before deploying
 ```
 
+Pre-flight for `20261108090000_*` (read-only): none needed for uniqueness — the
+new keys are strict subsets of the old unique keys. Known limitation: advance
+applications made **before** this migration stay `kind = PAYMENT` and cannot be
+reversed through `reverse-advance-application` (no column distinguished them).
+The live database had no advance applications when this was written.
+
 `deploy.py` dumps the database to `~/backups/predeploy/<stamp>.sql.gz` before
 step 1 (`--no-backup` skips it — do not). Rollback of the code is
 `python deploy.py --rollback`; rollback of the schema is restoring that dump
@@ -121,6 +139,10 @@ is only valid while there is exactly one operating company).
 4. a v3-shaped snapshot is refused with 400 while workflow rows exist.
 
 ## 7. What was verified on 2026-11-07 (and what was not)
+
+Superseded for the third migration and the workflow runtime by
+`docs/FULL_RUNTIME_AUDIT_2026-11-08.md` (fresh-database replay, backfill fixture,
+408/409 workflow checks, 68/68 browser checks).
 
 | Step | Result |
 |---|---|

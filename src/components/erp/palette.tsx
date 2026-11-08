@@ -31,6 +31,7 @@ import { Table, TableBody, TableCell, TableRow } from '@/components/ui/table'
 import { setCreatePreset, readRecent, SHORTCUTS_HELP, GOTO_KEYS } from './nav'
 import { useErpUi, type ErpView } from './store'
 import { money } from '@/lib/erp'
+import { useResetOnChange } from '@/hooks/use-reset-on-change'
 
 interface SearchResults {
   parties: { id: string; code: string; name: string; stateCode: string; types: string }[]
@@ -78,7 +79,7 @@ const RECENT_LABELS: Record<string, string> = {
 export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
   const { setView } = useErpUi()
   const [query, setQuery] = useState('')
-  const [results, setResults] = useState<SearchResults | null>(null)
+  const [fetched, setResults] = useState<SearchResults | null>(null)
   const [searching, setSearching] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   const recents = useMemo(() => readRecent().filter((v) => RECENT_LABELS[v]), [open])
@@ -86,10 +87,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   // Live search (debounced) for queries of 2+ characters
   useEffect(() => {
     const q = query.trim()
-    if (!open || q.length < 2) {
-      setResults(null)
-      return
-    }
+    if (!open || q.length < 2) return
     const t = setTimeout(async () => {
       abortRef.current?.abort()
       const ac = new AbortController()
@@ -109,12 +107,12 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   }, [query, open])
 
   // Reset on close
-  useEffect(() => {
-    if (!open) {
-      setQuery('')
-      setResults(null)
-    }
-  }, [open])
+  useResetOnChange(!open, [], () => {
+    setQuery('')
+    setResults(null)
+  })
+  // Results only apply to the current query (2+ characters, palette open).
+  const results = open && query.trim().length >= 2 ? fetched : null
 
   const go = (view: ErpView, params?: Record<string, string>) => {
     setView(view, params)

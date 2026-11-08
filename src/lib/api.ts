@@ -13,6 +13,8 @@ export function fail(error: string, status = 400) {
 
 export function handleError(e: unknown) {
   if (e instanceof BusinessError) return fail(e.message, e.status)
+  // req.json() on a malformed body throws SyntaxError — that is the client's fault.
+  if (e instanceof SyntaxError) return fail('Request body is not valid JSON', 400)
   if (e instanceof ZodError) {
     return fail(e.issues.map((i) => `${i.path.join('.') || 'body'}: ${i.message}`).join('; '), 400)
   }

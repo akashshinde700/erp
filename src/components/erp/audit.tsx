@@ -86,7 +86,7 @@ export function AuditView() {
           <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search entity / details…" className="h-11 pl-8" aria-label="Search audit log" />
         </div>
         <Select value={entity} onValueChange={setEntity}>
-          <SelectTrigger className="h-11 w-full sm:w-44" aria-label="Filter by entity">
+          <SelectTrigger className="h-11 data-[size=default]:h-11 w-full sm:w-44" aria-label="Filter by entity">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -99,7 +99,7 @@ export function AuditView() {
           </SelectContent>
         </Select>
         <Select value={action} onValueChange={setAction}>
-          <SelectTrigger className="h-11 w-full sm:w-40" aria-label="Filter by action">
+          <SelectTrigger className="h-11 data-[size=default]:h-11 w-full sm:w-40" aria-label="Filter by action">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>

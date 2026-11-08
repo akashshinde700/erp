@@ -1,8 +1,8 @@
 import { Prisma } from '@prisma/client'
 import { db } from './db'
-import { BusinessError, postGl, AccountCode } from './accounting'
+import { BusinessError, postGl, AccountCode, nextSharedInvoiceNo } from './accounting'
 import { computeInvoiceTotals, EPS, fyCode, r2 } from './erp'
-import { cancelLotMovementsTx, issueLotTx } from './traceability'
+import { cancelLotMovementsTx, consumeLotsFefoTx, issueLotTx } from './traceability'
 
 type Tx = Prisma.TransactionClient
 type Line = { itemId: string; qty: number; rate: number; discountPct?: number; remarks?: string }
@@ -102,11 +102,16 @@ export async function createDeliveryChallan(input: { salesOrderId: string; wareh
     if (!order || !['APPROVED', 'PART_DISPATCHED'].includes(order.status)) throw new BusinessError('Approved sales order not found', 404)
     const warehouse = await tx.warehouse.findFirst({ where: { id: input.warehouseId, active: true } }); if (!warehouse) throw new BusinessError('Dispatch warehouse not found', 404)
     if (!input.lines.length) throw new BusinessError('At least one challan line is required')
+    // Quantity already on challans that are still waiting for dispatch QC counts
+    // against the order too, otherwise several open challans can over-commit it.
+    const openRows = await tx.deliveryChallanLine.groupBy({ by: ['salesOrderLineId'], where: { deliveryChallan: { salesOrderId: order.id, status: 'PENDING_QC' } }, _sum: { plannedQty: true } })
+    const onOpenChallans = new Map(openRows.map((row) => [row.salesOrderLineId, row._sum.plannedQty ?? 0]))
     const seen = new Set<string>()
     for (const requested of input.lines) {
       if (seen.has(requested.salesOrderLineId)) throw new BusinessError('An order line may occur only once per challan'); seen.add(requested.salesOrderLineId)
       const line = order.lines.find((row) => row.id === requested.salesOrderLineId); if (!line) throw new BusinessError('Challan line does not belong to sales order')
-      if (!(requested.qty > 0) || line.dispatchedQty + requested.qty > line.qty + EPS) throw new BusinessError(`Dispatch exceeds pending order quantity for ${line.item.name}`)
+      const pending = r2(line.qty - line.dispatchedQty - (onOpenChallans.get(line.id) ?? 0))
+      if (!(requested.qty > 0) || requested.qty > pending + EPS) throw new BusinessError(`Dispatch exceeds pending order quantity for ${line.item.name}: ${Math.max(0, pending)} pending (${r2(onOpenChallans.get(line.id) ?? 0)} already on challans awaiting QC)`)
       if (!line.item.isService && line.item.isStockItem) {
         const stock = await tx.stockLedger.aggregate({ where: { itemId: line.itemId, warehouseId: warehouse.id, isCancelled: false }, _sum: { qtyIn: true, qtyOut: true } })
         if (r2((stock._sum.qtyIn ?? 0) - (stock._sum.qtyOut ?? 0)) + EPS < requested.qty) throw new BusinessError(`Insufficient stock for ${line.item.name}`)
@@ -118,7 +123,7 @@ export async function createDeliveryChallan(input: { salesOrderId: string; wareh
   })
 }
 
-export async function inspectAndDispatch(input: { deliveryChallanId: string; actor?: string; lines: { deliveryChallanLineId: string; acceptedQty: number; rejectedQty: number; qcNotes?: string }[] }) {
+export async function inspectAndDispatch(input: { deliveryChallanId: string; actor?: string; lines: { deliveryChallanLineId: string; acceptedQty: number; rejectedQty: number; qcNotes?: string; serialNumbers?: string[] }[] }) {
   return db.$transaction(async (tx) => {
     const company = await org(tx); const dc = await tx.deliveryChallan.findFirst({ where: { id: input.deliveryChallanId, companyId: company.id }, include: { salesOrder: { include: { lines: true } }, lines: { include: { item: true } } } })
     if (!dc || dc.status !== 'PENDING_QC') throw new BusinessError('Pending dispatch QC document not found', 404)
@@ -134,12 +139,14 @@ export async function inspectAndDispatch(input: { deliveryChallanId: string; act
       if (result.acceptedQty > EPS) {
         await tx.salesOrderLine.update({ where: { id: line.salesOrderLineId }, data: { dispatchedQty: { increment: result.acceptedQty } } })
         if (!line.item.isService && line.item.isStockItem) {
-          await tx.stockLedger.create({ data: { postingDate: new Date(), voucherType: 'DELIVERY_CHALLAN', voucherNo: dc.challanNo, itemId: line.itemId, warehouseId: dc.warehouseId, qtyOut: result.acceptedQty, rate: line.item.costRate, remarks: `Dispatch against ${dc.salesOrder.orderNo}` } })
           if (line.batchNo?.trim()) {
             const lot = await tx.inventoryLot.findFirst({ where: { companyId: company.id, itemId: line.itemId, warehouseId: dc.warehouseId, lotNo: line.batchNo } })
-            if (!lot) throw new BusinessError(`Batch ${line.batchNo} not found for ${line.item.name}`)
-            await issueLotTx(tx, { lotId: lot.id, qty: result.acceptedQty, voucherType: 'DELIVERY_CHALLAN', voucherNo: dc.challanNo, referenceId: line.id })
+            if (!lot) throw new BusinessError(`Batch ${line.batchNo} not found for ${line.item.name} in the dispatch warehouse`)
+            await issueLotTx(tx, { lotId: lot.id, qty: result.acceptedQty, voucherType: 'DELIVERY_CHALLAN', voucherNo: dc.challanNo, referenceId: line.id, serialNumbers: result.serialNumbers })
+          } else {
+            await consumeLotsFefoTx(tx, { itemId: line.itemId, warehouseId: dc.warehouseId, qty: result.acceptedQty, voucherType: 'DELIVERY_CHALLAN', voucherNo: dc.challanNo, referenceId: line.id })
           }
+          await tx.stockLedger.create({ data: { postingDate: new Date(), voucherType: 'DELIVERY_CHALLAN', voucherNo: dc.challanNo, itemId: line.itemId, warehouseId: dc.warehouseId, qtyOut: result.acceptedQty, rate: line.item.costRate, remarks: `Dispatch against ${dc.salesOrder.orderNo}` } })
         }
       }
     }
@@ -168,7 +175,7 @@ export async function invoiceDispatchedChallan(input: { deliveryChallanId: strin
     })
     const interState = dc.salesOrder.party.stateCode !== company.stateCode
     const totals = computeInvoiceTotals(selected.map(({ request, line }) => ({ qty: request.qty, rate: line.salesOrderLine.rate, discPct: 0, gstRate: line.salesOrderLine.gstRate })), { taxInclusive: false, interState })
-    const date = input.date ?? new Date(); const invoiceNo = await number(tx, company.id, 'INV', date)
+    const date = input.date ?? new Date(); const invoiceNo = await nextSharedInvoiceNo(tx, 'INV', date)
     const invoice = await tx.salesInvoice.create({ data: {
       invoiceNo, date, partyId: dc.salesOrder.partyId, poNo: dc.salesOrder.customerPoNo, pos: dc.salesOrder.party.stateCode, interState,
       taxable: totals.taxable, discount: totals.discount, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst, roundOff: totals.roundOff, grandTotal: totals.grandTotal,

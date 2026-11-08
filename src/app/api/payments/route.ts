@@ -1,4 +1,5 @@
 import { ok, handleError } from '@/lib/api'
+import { withIdempotency } from '@/lib/idempotency'
 import { db } from '@/lib/db'
 import { z } from 'zod'
 import { optionalDate } from '@/lib/validation'
@@ -50,7 +51,7 @@ const postSchema = z.object({
     .optional(),
 })
 
-export async function POST(req: Request) {
+async function handlePost(req: Request) {
   try {
     const actor = await assertMutationAccess()
     const res = await postPayment(postSchema.parse(await req.json()))
@@ -59,4 +60,8 @@ export async function POST(req: Request) {
   } catch (e) {
     return handleError(e)
   }
+}
+
+export async function POST(req: Request) {
+  return withIdempotency(req, 'payments', () => handlePost(req))
 }

@@ -10,6 +10,19 @@
  *  - effective reports filter isCancelled = false → net zero, full audit trail retained
  */
 import { Prisma } from '@prisma/client'
+import { fyCode } from './erp'
+
+/**
+ * Invoice number from the SHARED legacy series (counter key "PIN-2627", "INV-2627").
+ * Direct invoices (services.ts) and controlled ones (GRN-backed purchase invoices,
+ * dispatch-backed sales invoices) must draw from one counter: separate counters both
+ * start at 001 and collide on the unique invoiceNo as soon as either series exists.
+ */
+export async function nextSharedInvoiceNo(tx: Prisma.TransactionClient, prefix: 'INV' | 'PIN', date: Date): Promise<string> {
+  const key = `${prefix}-${fyCode(date)}`
+  const counter = await tx.counter.upsert({ where: { key }, create: { key, value: 1 }, update: { value: { increment: 1 } } })
+  return `${key}-${String(counter.value).padStart(3, '0')}`
+}
 import { r2 } from './erp'
 
 export const ACCOUNTS = {

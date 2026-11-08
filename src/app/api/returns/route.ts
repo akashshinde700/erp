@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { withIdempotency } from '@/lib/idempotency'
 import { fail, handleError, ok } from '@/lib/api'
 import { assertCompanyAccess, assertMutationAccess } from '@/lib/platform'
 import { cancelReturn, listReturns, postReturn } from '@/lib/returns'
@@ -7,7 +8,7 @@ export async function GET() {
   try { await assertCompanyAccess(); return ok(await listReturns()) } catch (error) { return handleError(error) }
 }
 
-export async function POST(req: Request) {
+async function handlePost(req: Request) {
   try {
     const actor = await assertMutationAccess()
     const body = await req.json()
@@ -24,4 +25,8 @@ export async function POST(req: Request) {
     if (!parsed.success) return fail(parsed.error.issues[0]?.message ?? 'Invalid return')
     return ok(await postReturn({ ...parsed.data, date: parsed.data.date ? new Date(`${parsed.data.date}T00:00:00.000Z`) : undefined, createdBy: actor?.email ?? undefined }))
   } catch (error) { return handleError(error) }
+}
+
+export async function POST(req: Request) {
+  return withIdempotency(req, 'returns', () => handlePost(req))
 }

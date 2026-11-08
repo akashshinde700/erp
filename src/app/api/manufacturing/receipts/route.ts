@@ -2,10 +2,22 @@ import { z } from 'zod'
 import { withIdempotency } from '@/lib/idempotency'
 import { fail, handleError, ok } from '@/lib/api'
 import { assertCompanyAccess, assertMutationAccess } from '@/lib/platform'
-import { cancelProductionReceipt, listProductionReceipts, postProductionReceipt } from '@/lib/production-output'
+import { cancelProductionReceipt, listProductionReceipts, postProductionReceipt, previewProductionReceipt, workOrderReadiness } from '@/lib/production-output'
 
 const date = z.string().date().optional().transform((value) => value ? new Date(`${value}T00:00:00.000Z`) : undefined)
-export async function GET(req: Request) { try { await assertCompanyAccess(); return ok(await listProductionReceipts(new URL(req.url).searchParams.get('workOrderId') ?? undefined)) } catch (error) { return handleError(error) } }
+export async function GET(req: Request) {
+  try {
+    await assertCompanyAccess()
+    const sp = new URL(req.url).searchParams
+    if (sp.get('readiness') === '1') return ok(await workOrderReadiness())
+    if (sp.get('preview') === '1') {
+      const p = z.object({ workOrderId: z.string().min(1), producedQty: z.coerce.number().positive('Produced quantity must be positive').finite(), acceptedQty: z.coerce.number().nonnegative().finite() }).safeParse(Object.fromEntries(sp))
+      if (!p.success) return fail(p.error.issues[0]?.message ?? 'Invalid preview')
+      return ok(await previewProductionReceipt(p.data))
+    }
+    return ok(await listProductionReceipts(sp.get('workOrderId') ?? undefined))
+  } catch (error) { return handleError(error) }
+}
 async function handlePost(req: Request) {
   try {
     const actor = await assertMutationAccess(); const body = await req.json()

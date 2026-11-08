@@ -43,6 +43,20 @@ prisma/migrations/
                                             until a rate is set; then WIP and receipt cost
                                             rise by the absorbed amount for work completed
                                             afterwards (docs/MANUFACTURING_COSTING.md).
+  20261113100000_shift_calendar_work_center_unique/
+    migration.sql                           additive: unique index on
+                                            ShiftCalendar.workCenterId (1:1 with WorkCenter)
+                                            that 20261111100000 omitted. Fails loudly if a
+                                            centre has two calendars — resolve by hand.
+  20261114100000_bom_line_basis/
+    migration.sql                           additive: Bom.lineBasis (BATCH | UNIT, default
+                                            BATCH) and Bom.batchQty (default 1). Existing
+                                            revisions = BATCH of 1, exactly as before.
+  20261115100000_tally_connector_store/
+    migration.sql                           additive: TallyConnector (one per organisation,
+                                            hashes only) and TallyConnectorJob. Both cascade
+                                            with Company and are included in backups (token
+                                            hashes cannot authenticate).
   20261111100000_routing_work_centers_oee/
     migration.sql                           additive: WorkCenter, ShiftCalendar, Shift,
                                             ShiftHoliday, RoutingOperation, MachineDowntime;

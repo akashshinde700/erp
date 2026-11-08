@@ -120,6 +120,14 @@ Builder `taxable != rate × qty` hone par quantity ko `taxable / rate` se replac
 
 ### P1-2. Pairing/queue global in-memory hai, durable aur tenant-scoped nahi
 
+> **Status (2026-11-08): mostly resolved.** Connector state ab DB mein hai
+> (`TallyConnector`, `TallyConnectorJob`, migration `20261115100000`), har row
+> par `companyId`; pairing code issuing org se bind hai; bearer token sirf apni
+> org ki jobs dekhta hai; job claim atomic hai (conditional update), pairing code
+> atomically single-use. Restart/redeploy ab pairing ya queue nahi mitata.
+> **Abhi bhi open:** retry/backoff policy, 30-min TTL ke baad undelivered jobs
+> silently trim hote hain, re-pair purani pending jobs clear nahi karta.
+
 **File:** `src/app/api/tally/connector/route.ts:42-67,92-96,163-218`
 
 - Server restart par pairing aur jobs chale jaate hain.

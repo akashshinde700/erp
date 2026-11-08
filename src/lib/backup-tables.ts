@@ -11,6 +11,10 @@
  * with P2003 — and a backup will silently drop its rows.
  */
 export const WORKFLOW_MODELS_CHILDREN_FIRST = [
+  // Tally connector (per organisation; only code/token HASHES are stored, so a
+  // backup cannot be used to impersonate the connector — restore keeps it paired)
+  'tallyConnectorJob',
+  'tallyConnector',
   // routing / capacity / OEE (children first: downtime and routing hang off
   // work centres and BOM revisions; tasks reference work centres)
   'shiftHoliday',

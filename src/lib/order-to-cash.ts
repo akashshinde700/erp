@@ -30,15 +30,16 @@ async function items(tx: Tx, lines: Line[]) {
   return map
 }
 
-export async function createQuotation(input: { partyId: string; date?: Date; validUntil: Date; terms?: string; createdBy?: string; lines: Line[] }) {
+export async function createQuotation(input: { partyId: string; date?: Date; validUntil: Date; terms?: string; createdBy?: string; salespersonId?: string | null; lines: Line[] }) {
   return db.$transaction(async (tx) => {
     const company = await org(tx); const date = input.date ?? new Date()
+    if (input.salespersonId && !(await tx.salesperson.findFirst({ where: { id: input.salespersonId, active: true } }))) throw new BusinessError('Salesperson not found or inactive', 404)
     const party = await tx.party.findFirst({ where: { id: input.partyId, active: true } })
     if (!party || !party.types.split(',').includes('CUSTOMER')) throw new BusinessError('Active customer not found', 404)
     if (input.validUntil < date) throw new BusinessError('Quotation validity cannot end before quotation date')
     const map = await items(tx, input.lines)
     const totals = computeInvoiceTotals(input.lines.map((line) => ({ qty: line.qty, rate: line.rate, discPct: line.discountPct ?? 0, gstRate: map.get(line.itemId)!.gstRate })), { taxInclusive: false, interState: party.stateCode !== company.stateCode })
-    return tx.salesQuotation.create({ data: { companyId: company.id, quotationNo: await number(tx, company.id, 'QT', date), date, validUntil: input.validUntil, partyId: party.id, taxable: totals.taxable, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst, grandTotal: totals.grandTotal, terms: input.terms, createdBy: input.createdBy,
+    return tx.salesQuotation.create({ data: { companyId: company.id, quotationNo: await number(tx, company.id, 'QT', date), date, validUntil: input.validUntil, partyId: party.id, taxable: totals.taxable, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst, grandTotal: totals.grandTotal, terms: input.terms, createdBy: input.createdBy, salespersonId: input.salespersonId ?? null,
       lines: { create: input.lines.map((line, index) => ({ itemId: line.itemId, qty: line.qty, uom: map.get(line.itemId)!.uom, rate: line.rate, discountPct: line.discountPct ?? 0, gstRate: map.get(line.itemId)!.gstRate, taxable: totals.lines[index].taxable, total: totals.lines[index].total, remarks: line.remarks })) } }, include: { party: true, lines: { include: { item: true } } } })
   })
 }
@@ -50,7 +51,7 @@ export async function reviseQuotation(id: string, input: { validUntil: Date; ter
     if (!old || ['ACCEPTED', 'CANCELLED', 'SUPERSEDED'].includes(old.status)) throw new BusinessError('Quotation cannot be revised', 409)
     const map = await items(tx, input.lines)
     const totals = computeInvoiceTotals(input.lines.map((line) => ({ qty: line.qty, rate: line.rate, discPct: line.discountPct ?? 0, gstRate: map.get(line.itemId)!.gstRate })), { taxInclusive: false, interState: old.party.stateCode !== company.stateCode })
-    const revision = await tx.salesQuotation.create({ data: { companyId: company.id, quotationNo: old.quotationNo, revisionNo: old.revisionNo + 1, supersedesId: old.id, date: new Date(), validUntil: input.validUntil, partyId: old.partyId, taxable: totals.taxable, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst, grandTotal: totals.grandTotal, terms: input.terms, createdBy: input.createdBy,
+    const revision = await tx.salesQuotation.create({ data: { companyId: company.id, quotationNo: old.quotationNo, revisionNo: old.revisionNo + 1, supersedesId: old.id, date: new Date(), validUntil: input.validUntil, partyId: old.partyId, salespersonId: old.salespersonId, taxable: totals.taxable, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst, grandTotal: totals.grandTotal, terms: input.terms, createdBy: input.createdBy,
       lines: { create: input.lines.map((line, index) => ({ itemId: line.itemId, qty: line.qty, uom: map.get(line.itemId)!.uom, rate: line.rate, discountPct: line.discountPct ?? 0, gstRate: map.get(line.itemId)!.gstRate, taxable: totals.lines[index].taxable, total: totals.lines[index].total, remarks: line.remarks })) } }, include: { lines: true } })
     await tx.salesQuotation.update({ where: { id: old.id }, data: { status: 'SUPERSEDED' } })
     return revision
@@ -76,7 +77,7 @@ export async function quotationToOrder(id: string, input: { deliveryDate?: Date;
     const existing = await tx.salesOrder.findFirst({ where: { quotationId: quote.id, status: { not: 'CANCELLED' } } })
     if (existing) throw new BusinessError(`Quotation is already linked to ${existing.orderNo}`, 409)
     const date = new Date()
-    const order = await tx.salesOrder.create({ data: { companyId: company.id, orderNo: await number(tx, company.id, 'SO', date), date, deliveryDate: input.deliveryDate, partyId: quote.partyId, quotationId: quote.id, customerPoNo: input.customerPoNo, taxable: quote.taxable, taxAmount: r2(quote.cgst + quote.sgst + quote.igst), grandTotal: quote.grandTotal, createdBy: input.actor,
+    const order = await tx.salesOrder.create({ data: { companyId: company.id, orderNo: await number(tx, company.id, 'SO', date), date, deliveryDate: input.deliveryDate, partyId: quote.partyId, salespersonId: quote.salespersonId, quotationId: quote.id, customerPoNo: input.customerPoNo, taxable: quote.taxable, taxAmount: r2(quote.cgst + quote.sgst + quote.igst), grandTotal: quote.grandTotal, createdBy: input.actor,
       lines: { create: quote.lines.map((line) => ({ itemId: line.itemId, qty: line.qty, uom: line.uom, rate: line.rate, gstRate: line.gstRate, taxable: line.taxable, total: line.total, remarks: line.remarks })) } }, include: { lines: true, party: true } })
     await tx.salesQuotation.update({ where: { id: quote.id }, data: { status: 'ACCEPTED' } })
     return order
@@ -180,7 +181,7 @@ export async function invoiceDispatchedChallan(input: { deliveryChallanId: strin
     const invoice = await tx.salesInvoice.create({ data: {
       invoiceNo, date, partyId: dc.salesOrder.partyId, poNo: dc.salesOrder.customerPoNo, pos: dc.salesOrder.party.stateCode, interState,
       taxable: totals.taxable, discount: totals.discount, cgst: totals.cgst, sgst: totals.sgst, igst: totals.igst, roundOff: totals.roundOff, grandTotal: totals.grandTotal,
-      source: 'DELIVERY_CHALLAN', deliveryChallanId: dc.id, remarks: input.remarks,
+      source: 'DELIVERY_CHALLAN', deliveryChallanId: dc.id, remarks: input.remarks, salespersonId: dc.salesOrder.salespersonId,
       items: { create: selected.map(({ request, line }, index) => ({ itemId: line.itemId, detail: `Delivery challan ${dc.challanNo}`, hsn: line.item.hsn, uom: line.item.uom, qty: request.qty, rate: line.salesOrderLine.rate, discPct: 0, discAmt: totals.lines[index].discAmt, taxable: totals.lines[index].taxable, gstRate: line.salesOrderLine.gstRate, cgst: totals.lines[index].cgst, sgst: totals.lines[index].sgst, igst: totals.lines[index].igst, total: totals.lines[index].total, deliveryChallanLineId: line.id })) },
     }, include: { items: true } })
     for (const { request, line } of selected) {

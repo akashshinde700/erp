@@ -20,6 +20,18 @@ import {
   partyLedgerReport,
   jobworkPendingReport,
 } from '@/lib/reports'
+import { agingReport, backOrderReport, pnlByLedgerReport, projectProfitabilityReport, purchaseBySupplierReport, salesAnalysisReport } from '@/lib/reports-extra'
+
+/** from/to query range; defaults to the current financial year up to today. */
+function range(sp: URLSearchParams): { from: Date; to: Date } | string {
+  const now = new Date()
+  const fyStart = now.getUTCMonth() >= 3 ? now.getUTCFullYear() : now.getUTCFullYear() - 1
+  const from = sp.get('from') ?? `${fyStart}-04-01`
+  const to = sp.get('to') ?? now.toISOString().slice(0, 10)
+  const err = dateRangeError(from, to)
+  if (err) return err
+  return { from: new Date(`${from}T00:00:00.000Z`), to: new Date(`${to}T23:59:59.999Z`) }
+}
 
 export async function GET(req: Request) {
   try {
@@ -103,8 +115,32 @@ export async function GET(req: Request) {
       }
       case 'jobwork-pending':
         return ok(await jobworkPendingReport())
+      case 'back-orders':
+        return ok(await backOrderReport())
+      case 'aging': {
+        const kind = (sp.get('kind') ?? 'sales').toLowerCase()
+        if (kind !== 'sales' && kind !== 'purchase') return fail('kind is sales or purchase')
+        return ok(await agingReport(kind === 'sales' ? 'SALES' : 'PURCHASE'))
+      }
+      case 'sales-analysis': {
+        const r = range(sp)
+        if (typeof r === 'string') return fail(r)
+        return ok(await salesAnalysisReport(r.from, r.to))
+      }
+      case 'purchase-by-supplier': {
+        const r = range(sp)
+        if (typeof r === 'string') return fail(r)
+        return ok(await purchaseBySupplierReport(r.from, r.to))
+      }
+      case 'pnl-ledger': {
+        const r = range(sp)
+        if (typeof r === 'string') return fail(r)
+        return ok(await pnlByLedgerReport(r.from, r.to))
+      }
+      case 'project-profitability':
+        return ok(await projectProfitabilityReport())
       default:
-        return fail('Unknown report type. Use: stock-ledger, stock-summary, inventory-planning, supplier-performance, customer-performance, production-cost-variance, production-efficiency, action-center, gstr1, gstr3b, trial-balance, outstanding, cash-bank-book, pnl, party-ledger, jobwork-pending')
+        return fail('Unknown report type. Use: stock-ledger, stock-summary, inventory-planning, supplier-performance, customer-performance, production-cost-variance, production-efficiency, action-center, gstr1, gstr3b, trial-balance, outstanding, cash-bank-book, pnl, party-ledger, jobwork-pending, back-orders, aging, sales-analysis, purchase-by-supplier, pnl-ledger, project-profitability')
     }
   } catch (e) {
     return handleError(e)

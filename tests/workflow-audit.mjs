@@ -1285,11 +1285,72 @@ async function phaseFuzz() {
   check('triple-submitted sales invoice with one key posts exactly one invoice', num((await q1('SELECT COUNT(*) c FROM SalesInvoice')).c) - sBefore === 1)
 }
 
+// ---------------------------------------------------------------- Phase 12e: BOM line basis (per unit / per batch)
+async function phaseBomBasis() {
+  phase = 'P12e-basis'
+  const M = '/api/manufacturing', R = `${M}/receipts`
+  const T = (id) => `${M}/tasks/${id}/actions`
+  const emp = (await q1('SELECT id FROM Employee LIMIT 1')).id
+  const rate = num((await q1('SELECT overheadRatePct FROM Company WHERE isPlatform=0 ORDER BY createdAt LIMIT 1')).overheadRatePct)
+  const mk = async (code) => (await post('/api/masters/items', { code, name: `Audit basis ${code}`, uom: 'PCS', costRate: 400, saleRate: 900, gstRate: 18, hsn: '732690' })).data.id
+  const fgU = await mk('AUD-BAS-U'), fgB = await mk('AUD-BAS-B'), fgX = await mk('AUD-BAS-X')
+
+  // validation
+  expectReject('basis: an unknown line basis is refused', await post(`${M}/boms`, { projectId: F.prj, itemId: fgX, lineBasis: 'LOT', lines: [{ itemId: F.rm, qty: 1, uom: 'KG', rate: 100 }] }), /line basis/i)
+  expectReject('basis: a zero batch size is refused', await post(`${M}/boms`, { projectId: F.prj, itemId: fgX, lineBasis: 'BATCH', batchQty: 0, lines: [{ itemId: F.rm, qty: 1, uom: 'KG', rate: 100 }] }), /batch size/i)
+  const legacy = await post(`${M}/boms`, { projectId: F.prj, itemId: fgX, lines: [{ itemId: F.rm, qty: 1, uom: 'KG', rate: 100 }] })
+  check('basis: a BOM created without a basis defaults to BATCH of 1 (legacy behaviour)', legacy.data?.lineBasis === 'BATCH' && num(legacy.data?.batchQty) === 1, JSON.stringify({ b: legacy.data?.lineBasis, q: legacy.data?.batchQty }))
+
+  // UNIT: 2 KG per finished piece
+  const bu = await post(`${M}/boms`, { projectId: F.prj, itemId: fgU, productName: 'Audit per-unit bracket', lineBasis: 'UNIT', batchQty: 50, lines: [{ itemId: F.rm, qty: 2, uom: 'KG', rate: 100 }] })
+  expectOk('basis: create a per-unit BOM', bu)
+  check('basis: a UNIT BOM always stores batch size 1', bu.data?.lineBasis === 'UNIT' && num(bu.data?.batchQty) === 1, JSON.stringify({ b: bu.data?.lineBasis, q: bu.data?.batchQty }))
+  expectOk('basis: approve the per-unit BOM', await post(`${M}/boms/${bu.data.id}/actions`, { action: 'approve' }))
+  // BATCH: 8 KG makes a batch of 4 pieces (= 2 KG per piece)
+  const bb = await post(`${M}/boms`, { projectId: F.prj, itemId: fgB, productName: 'Audit batch bracket', lineBasis: 'BATCH', batchQty: 4, lines: [{ itemId: F.rm, qty: 8, uom: 'KG', rate: 100 }] })
+  expectOk('basis: create a per-batch BOM (batch of 4)', bb)
+  expectOk('basis: approve the per-batch BOM', await post(`${M}/boms/${bb.data.id}/actions`, { action: 'approve' }))
+
+  const woU = await post(`${M}/work-orders`, { projectId: F.prj, bomId: bu.data.id, outputQty: 5 })
+  const woB = await post(`${M}/work-orders`, { projectId: F.prj, bomId: bb.data.id, outputQty: 6 })
+  expectOk('basis: work order for 5 units from the UNIT BOM', woU); expectOk('basis: work order for 6 units from the BATCH BOM', woB)
+  const reqU = num((await q1('SELECT SUM(plannedQty) q FROM WorkOrderLine WHERE workOrderId=?', [woU.data.id])).q)
+  const reqB = num((await q1('SELECT SUM(plannedQty) q FROM WorkOrderLine WHERE workOrderId=?', [woB.data.id])).q)
+  check('basis: UNIT requirement = line × order qty (2 × 5 = 10 KG)', near(reqU, 10), `planned=${reqU}`)
+  check('basis: BATCH requirement = line × order qty ÷ batch size (8 × 6 ÷ 4 = 12 KG)', near(reqB, 12), `planned=${reqB}`)
+
+  const cu = await get(`${M}/costing/${woU.data.id}`), cb = await get(`${M}/costing/${woB.data.id}`)
+  check('basis: standard material per unit is 200 for both bases', near(cu.data?.standard?.material, 200) && near(cb.data?.standard?.material, 200), `unit=${cu.data?.standard?.material} batch=${cb.data?.standard?.material}`)
+
+  const rev = await post(`${M}/boms/${bb.data.id}/actions`, { action: 'revise', notes: 'basis carries over' })
+  check('basis: a revision inherits the line basis and batch size', rev.data?.lineBasis === 'BATCH' && num(rev.data?.batchQty) === 4, JSON.stringify({ b: rev.data?.lineBasis, q: rev.data?.batchQty }))
+
+  // UNIT receipt is valued at the FULL standard (material + labour + overhead)
+  const t = await post(`${M}/tasks`, { workOrderId: woU.data.id, operation: 'ASSEMBLY', seq: 1, plannedQty: 5 })
+  expectOk('basis: task on the UNIT work order', t)
+  await post(T(t.data.id), { action: 'assign', employeeId: emp }); await post(T(t.data.id), { action: 'start' })
+  expectOk('basis: complete the UNIT operation', await post(T(t.data.id), { action: 'complete', actualQty: 5, hours: 2, labourRate: 150, materialItemId: F.rm, materialQty: 11 }))
+  const actual = num((await q1("SELECT SUM(materialCost+labourCost+overheadCost) s FROM ProductionTask WHERE workOrderId=? AND status='COMPLETED'", [woU.data.id])).s)
+  const pv = await get(`${R}?preview=1&workOrderId=${woU.data.id}&producedQty=5&acceptedQty=5`)
+  const stdPerUnit = Math.round((200 + 200 * rate / 100) * 100) / 100 // no routing → no labour standard
+  check('basis: UNIT receipt preview uses the order quantity as planned output', near(pv.data?.planned, 5) && pv.data?.basis === 'UNIT', JSON.stringify({ p: pv.data?.planned, b: pv.data?.basis }))
+  const rc = await post(R, { workOrderId: woU.data.id, outputItemId: fgU, warehouseId: F.main, producedQty: 5, acceptedQty: 5 })
+  expectOk('basis: receive 5 finished units', rc)
+  check('basis: UNIT receipt expected cost = full standard per unit × accepted', near(rc.data?.expectedCost, stdPerUnit * 5), `expected=${rc.data?.expectedCost} std/unit=${stdPerUnit}`)
+  check('basis: UNIT receipt settles all WIP of the order', near(rc.data?.actualCost, actual), `settled=${rc.data?.actualCost} actual=${actual}`)
+  const fgRate = num((await q1("SELECT rate FROM StockLedger WHERE voucherType='MFG_RECEIPT' AND voucherNo=? AND isCancelled=0", [rc.data.receiptNo])).rate)
+  check('basis: finished stock is valued at the full unit standard', near(fgRate, stdPerUnit), `rate=${fgRate}`)
+  const mfgv = await q1("SELECT ROUND(COALESCE(SUM(debit-credit),0),2) v FROM AccountLedger WHERE voucherType='MFG_RECEIPT' AND voucherNo=? AND account='MFGV' AND isCancelled=0", [rc.data.receiptNo])
+  check('basis: MFGV carries only actual − full standard', near(num(mfgv.v), actual - stdPerUnit * 5), `MFGV=${mfgv.v} expectedVar=${(actual - stdPerUnit * 5).toFixed(2)}`)
+  expectOk('basis: UNIT work order closes', await post(`${M}/work-orders/${woU.data.id}/actions`, { action: 'complete' }))
+  await reconcile('after BOM basis')
+}
+
 // ---------------------------------------------------------------- main
 async function main() {
   const t0 = Date.now()
   await setup()
-  const phases = [phaseAuth, phaseP2P, phaseRfq, phaseQ2C, phaseMfg, phaseQuality, phaseLots, phaseFinance, phaseGst, phaseMrp, phaseOps, phaseCosting, phaseFuzz]
+  const phases = [phaseAuth, phaseP2P, phaseRfq, phaseQ2C, phaseMfg, phaseQuality, phaseLots, phaseFinance, phaseGst, phaseMrp, phaseOps, phaseCosting, phaseBomBasis, phaseFuzz]
   for (const fn of phases) {
     try { await fn() } catch (e) { check(`${fn.name} completed without a harness exception`, false, e?.stack?.split('\n').slice(0, 3).join(' ') ?? String(e)) }
   }

@@ -89,18 +89,24 @@ difference (`MFG_OVERHEAD_TRUEUP`).
   write-off.
 - **No scrap accounting.** Rejected quantities consume material through task
   completion and land in `MFGV` at receipt; there is no scrap account.
-- **The finished-goods receipt is still valued at the material standard only.**
-  Receipt `expectedCost` = BOM material standard pro-rated to the receipt, priced
-  as it always was; the labour and overhead credited out of WIP therefore land in
-  `MFGV` (manufacturing cost variance) instead of in inventory. That understates
-  stock and overstates expense for orders with real labour content. It is not
-  fixed here because the fix depends on an unresolved modelling question — is a
-  BOM line *per output unit* or *per batch*? Legacy revisions are per batch (their
-  `WorkOrder.outputQty` defaults to 1), so scaling the per-unit labour standard
-  by `acceptedQty / outputQty` would be wrong for them and right for new ones.
-  Until that is decided, `GET /api/manufacturing/costing` is the accurate
-  per-unit standard-vs-actual view; the receipt's `variance` column is a
-  material-vs-standard number and must not be read as total job variance.
+- **Finished-goods receipt valuation depends on the BOM line basis.** Every
+  BOM revision now says what its component quantities are for
+  (`Bom.lineBasis`, `Bom.batchQty`, migration `20261114100000_bom_line_basis`):
+  - **UNIT** — each line is the quantity for one finished unit. A work order for
+    N units needs line × N. The receipt treats `WorkOrder.outputQty` as planned
+    output and values accepted units at the **full standard**: material per unit
+    + frozen routed labour per unit + overhead at the company rate. Stock carries
+    what a unit should cost; `MFGV` holds only the true job variance.
+  - **BATCH** — each line is the quantity for one batch of `batchQty` finished
+    units. A work order for N units needs line × N ÷ `batchQty`. The receipt keeps
+    the historical rule: material standard pro-rated over planned output (largest
+    task quantity), so labour and overhead land in `MFGV`. Every revision that
+    existed before this change is BATCH of 1 and posts exactly as before.
+  Material standard per unit in `GET /api/manufacturing/costing` and the
+  production cost & variance report is the BOM material ÷ units per set for both
+  bases. New BOMs created from the UI default to UNIT; the API default stays
+  BATCH of 1 so existing integrations are unchanged. A revision inherits its
+  basis; change it on the draft before approval.
 
 ## Migration
 

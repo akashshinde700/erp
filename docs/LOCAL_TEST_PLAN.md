@@ -174,7 +174,7 @@ KEY=$(cat db/platform-key.key)                   # the server creates it on firs
 curl -s -X POST -H "x-platform-key: $KEY" localhost:3011/api/seed | head -c 600
 ```
 
-The seed now claims `productionTasks: 15, workCenters: 6, overheadRatePct: 18`.
+The seed now claims `productionTasks: 11, workCenters: 6, overheadRatePct: 18`.
 If `workCenters` is missing from the response, you are running stale code.
 
 ---

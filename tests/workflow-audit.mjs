@@ -604,12 +604,12 @@ async function phaseMfg() {
   expectReject('8 accepted + rejected + rework + scrap must equal produced', await post(R, { workOrderId: F.wo, outputItemId: F.fg, warehouseId: F.w2, producedQty: 4, acceptedQty: 3 }), /must equal produced/i)
   expectReject('9 rejection without QC notes is rejected', await post(R, { workOrderId: F.wo, outputItemId: F.fg, warehouseId: F.w2, producedQty: 4, acceptedQty: 3, rejectedQty: 1 }), /notes/i)
   expectReject('10 zero accepted FG cannot be received', await post(R, { workOrderId: F.wo, outputItemId: F.fg, warehouseId: F.w2, producedQty: 4, acceptedQty: 0, scrapQty: 4, qcNotes: 'all scrap' }), /at least one/i)
-  const actualTotal = num((await q1("SELECT SUM(materialCost+labourCost) s FROM ProductionTask WHERE workOrderId=? AND status='COMPLETED'", [F.wo])).s)
+  const actualTotal = num((await q1("SELECT SUM(materialCost+labourCost+overheadCost) s FROM ProductionTask WHERE workOrderId=? AND status='COMPLETED'", [F.wo])).s)
   const bomCost = num((await q1('SELECT SUM(estCost) s FROM BomItem WHERE bomId=?', [F.bom])).s)
   const ra = await post(R, { workOrderId: F.wo, outputItemId: F.fg, warehouseId: F.w2, producedQty: 4, acceptedQty: 4, batchNo: 'FGLOT-A', manufacturedAt: today })
   expectOk('FG receipt A (4 of 10)', ra)
   check('12 expected cost comes from BOM (4/10 of BOM est cost)', near(ra.data.expectedCost, bomCost * 0.4), `expected=${ra.data?.expectedCost} bom=${bomCost}`)
-  check('13 actual cost is 4/10 of material + labour', near(ra.data.actualCost, actualTotal * 0.4), `actual=${ra.data?.actualCost} total=${actualTotal}`)
+  check('13 actual cost is 4/10 of material + labour + absorbed overhead', near(ra.data.actualCost, actualTotal * 0.4), `actual=${ra.data?.actualCost} total=${actualTotal}`)
   check('14 variance = actual - expected', near(ra.data.variance, num(ra.data.actualCost) - num(ra.data.expectedCost)), JSON.stringify({ a: ra.data?.actualCost, e: ra.data?.expectedCost, v: ra.data?.variance }))
   const w2Pre = await stockNet(F.fg, F.w2)
   expectOk('20 cancel FG receipt A (stock still on hand)', await post(R, { action: 'cancel', id: ra.data.id }))
@@ -706,8 +706,10 @@ async function phaseLots() {
   const R = '/api/manufacturing/receipts', M = '/api/manufacturing'
   const emp = (await q1('SELECT id FROM Employee LIMIT 1')).id
   const T = (id) => `${M}/tasks/${id}/actions`
+  let lotSeq = 0
   async function readyWo(name, plannedQty) {
-    const bom = await post(`${M}/boms`, { projectId: F.prj, itemId: F.bomOut3, productName: name, lines: [{ itemId: F.rm, qty: 1, uom: 'KG', rate: 100 }] })
+    const out = (await post('/api/masters/items', { code: `AUD-LOT-FG${++lotSeq}`, name: `${name} (output)`, uom: 'PCS', costRate: 400, saleRate: 800, gstRate: 18, hsn: '732690' })).data.id
+    const bom = await post(`${M}/boms`, { projectId: F.prj, itemId: out, productName: name, lines: [{ itemId: F.rm, qty: 1, uom: 'KG', rate: 100 }] })
     await post(`${M}/boms/${bom.data.id}/actions`, { action: 'approve' })
     const wo = await post(`${M}/work-orders`, { projectId: F.prj, bomId: bom.data.id })
     const t = await post(`${M}/tasks`, { workOrderId: wo.data.id, operation: 'ASSEMBLY', seq: 1, plannedQty })
@@ -923,7 +925,7 @@ async function phaseMrp() {
   const bomV1 = bom1.data
   check('MRP: first revision is revision 1', num(bomV1?.revision) === 1, `revision=${bomV1?.revision}`)
   expectOk('MRP: approve rev 1', await post(`${M}/boms/${bomV1.id}/actions`, { action: 'approve' }))
-  expectReject('MRP: an approved revision cannot be edited in place', await api('PUT', `${M}/boms/${bomV1.id}`, { lines: [{ itemId: F.rm, qty: 1, uom: 'KG', rate: 10 }] }), /draft/i)
+  expectReject('MRP: an approved revision cannot be edited in place', await api('PUT', `${M}/boms/${bomV1.id}`, { lines: [{ itemId: F.rm, qty: 1, uom: 'KG', rate: 10 }] }), /draft|immutable/i)
   expectReject('MRP: a second live BOM for the same output item is refused', await post(`${M}/boms`, { projectId: pid, itemId: F.sellable, productName: 'duplicate', lines: [{ itemId: F.rm, qty: 1, uom: 'KG', rate: 10 }] }), /already exists/i)
   const subBom = await post(`${M}/boms`, { projectId: pid, itemId: F.subAsm, productName: 'Audit Sub Assembly v1', lines: [{ itemId: F.rm, qty: 3, uom: 'KG', rate: 100 }] })
   expectOk('MRP: create sub-assembly BOM', subBom)
@@ -1094,16 +1096,22 @@ async function phaseOps() {
     check('ops: load per work centre is reported against calendar capacity', !!cutLoad && cutLoad.capacityMinutes > 0 && cutLoad.utilisationPct >= 0, JSON.stringify(cutLoad))
 
     // ---- downtime + OEE ----------------------------------------------------
-    const start = new Date(Date.now() - 3 * 60 * 60_000).toISOString()
-    const rec = await post(`${M}/downtime`, { action: 'record', workCenterId: weld.id, reason: 'BREAKDOWN', startedAt: start })
+    // Downtime only costs availability inside a shift (Mon–Sat, day shift), so
+    // start the stoppage at 10:00 on the most recent working day before today.
+    const sd = new Date(); sd.setDate(sd.getDate() - 1)
+    while (sd.getDay() === 0) sd.setDate(sd.getDate() - 1)
+    sd.setHours(10, 0, 0, 0)
+    const start = sd.toISOString()
+    const asm = (centers.data ?? []).find((c) => c.code === 'WC-ASM') ?? weld
+    const rec = await post(`${M}/downtime`, { action: 'record', workCenterId: asm.id, reason: 'BREAKDOWN', startedAt: start })
     expectOk('ops: record an open breakdown', rec)
-    expectReject('ops: overlapping downtime on the same centre is refused', await post(`${M}/downtime`, { action: 'record', workCenterId: weld.id, reason: 'POWER', startedAt: start }), /already has downtime|close/i)
+    expectReject('ops: overlapping downtime on the same centre is refused', await post(`${M}/downtime`, { action: 'record', workCenterId: asm.id, reason: 'POWER', startedAt: start }), /already has downtime|close/i)
     expectOk('ops: close the breakdown', await post(`${M}/downtime`, { action: 'close', id: rec.data.id }))
     expectReject('ops: closing twice is refused', await post(`${M}/downtime`, { action: 'close', id: rec.data.id }), /already closed/i)
 
     const oee = await get(`${M}/oee?from=${daysFromNow(-7)}&to=${today}`)
     expectOk('ops: OEE report responds', oee)
-    const weldRow = (oee.data?.byWorkCenter ?? []).find((r) => r.workCenter.includes('WC-WELD'))
+    const weldRow = (oee.data?.byWorkCenter ?? []).find((r) => r.workCenter.includes(asm.code))
     check('ops: OEE availability falls with recorded downtime', weldRow && weldRow.downtimeMinutes > 0 && weldRow.availabilityPct < 100, JSON.stringify(weldRow && { d: weldRow.downtimeMinutes, a: weldRow.availabilityPct }))
     const summary = oee.data?.summary
     check('ops: OEE is the product of its three factors', summary && near(summary.oeePct, (summary.availabilityPct / 100) * (summary.performancePct / 100) * (summary.qualityPct / 100) * 100, 0.05), JSON.stringify(summary))
@@ -1155,7 +1163,7 @@ async function phaseCosting() {
   })
   const routed = await get(`${M}/costing?bomId=${bom.data.id}`)
   const expectedLabour = (6 / 60) * num(cut.costPerHour) + (12 / 60) * num(weld.costPerHour)
-  check('costing: labour standard = routed minutes × work-centre rate', near(routed.data?.standard?.labourCost, expectedLabour, 0.05), `labour=${routed.data?.standard?.labourCost} expected=${r2(expectedLabour)}`)
+  check('costing: labour standard = routed minutes × work-centre rate', near(routed.data?.standard?.labourCost, expectedLabour, 0.05), `labour=${routed.data?.standard?.labourCost} expected=${expectedLabour.toFixed(2)}`)
   check('costing: overhead standard = rate × prime cost', near(routed.data?.standard?.overheadCost, (routed.data.standard.materialCost + routed.data.standard.labourCost) * (num(company.overheadRatePct) / 100), 0.05), `overhead=${routed.data?.standard?.overheadCost}`)
 
   expectOk('costing: approve the routed BOM', await post(`${M}/boms/${bom.data.id}/actions`, { action: 'approve' }))
@@ -1184,7 +1192,9 @@ async function phaseCosting() {
   const prime = num(taskRow.materialCost) + num(taskRow.labourCost)
   check('costing: completion absorbs overhead at the company rate', near(num(taskRow.overheadCost), prime * (num(company.overheadRatePct) / 100), 0.02), `prime=${prime} overhead=${taskRow.overheadCost}`)
   check('costing: absorbed overhead is posted to the accrual ledger', true, 'asserted in reconcile')
-  const gl = await q1("SELECT ROUND(COALESCE(SUM(debit-credit),0),2) net FROM AccountLedger WHERE account='OVHA' AND voucherNo=?", [done.data?.taskNo ?? (await q1('SELECT taskNo FROM ProductionTask WHERE id=?', [first.id])).taskNo])
+  // The overhead voucher is numbered by the work order (MFG_OVERHEAD, voucherNo = WO no); its remarks name the task.
+  const firstTaskNo = done.data?.taskNo ?? (await q1('SELECT taskNo FROM ProductionTask WHERE id=?', [first.id])).taskNo
+  const gl = await q1("SELECT ROUND(COALESCE(SUM(debit-credit),0),2) net FROM AccountLedger WHERE account='OVHA' AND voucherType='MFG_OVERHEAD' AND isCancelled=0 AND remarks LIKE ?", [`%${firstTaskNo}`])
   check('costing: the overhead voucher credits OVHA (accelerated WIP)', num(gl.net) < 0, `OVHA net=${gl.net}`)
 
   const cost = await get(`${M}/costing/${wo.data.id}`)

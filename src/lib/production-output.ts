@@ -23,11 +23,17 @@ function receiptCosts(wo: WoForCosting, input: { producedQty: number; acceptedQt
   const planned = active.length ? Math.max(...active.map((task) => task.plannedQty)) : 0
   const alreadyAccepted = r2(posted.reduce((sum, receipt) => sum + receipt.acceptedQty, 0))
   const alreadyProduced = r2(posted.reduce((sum, receipt) => sum + receipt.producedQty, 0))
-  const actualTotal = r2(active.reduce((sum, task) => sum + task.materialCost + task.labourCost, 0))
+  const actualTotal = r2(active.reduce((sum, task) => sum + task.materialCost + task.labourCost + task.overheadCost, 0))
   const priorSettled = r2(posted.reduce((sum, receipt) => sum + receipt.actualCost, 0))
   const remainingActual = Math.max(0, r2(actualTotal - priorSettled))
   const receiptShare = Math.min(1, input.producedQty / Math.max(EPS, planned - alreadyProduced))
   const actualCost = r2(remainingActual * receiptShare)
+  // Standard on the MATERIAL basis only. `planned` is the largest component
+  // quantity (kg of plate, say) while `acceptedQty` counts finished pieces, so
+  // scaling the per-unit labour standard by it would mix units. The full
+  // standard-vs-actual comparison — material, labour and overhead per accepted
+  // unit — lives in src/lib/costing.ts (GET /api/manufacturing/costing), where
+  // the unit basis is explicit; receipt variance stays material-only.
   const expectedTotal = r2(wo.bom?.items.reduce((sum, line) => sum + line.estCost, 0) ?? actualTotal)
   const expectedCost = planned > EPS ? r2(expectedTotal * (input.acceptedQty / planned)) : 0
   const variance = r2(actualCost - expectedCost)
@@ -58,7 +64,7 @@ export async function workOrderReadiness() {
     if (!c.tasks) blockers.push('No production tasks')
     if (c.tasksOpen) blockers.push(`${c.tasksOpen} task(s) open`)
     if (c.alreadyAccepted <= EPS) blockers.push('No QC-accepted FG received')
-    if (Math.abs(c.actualTotal - settled) > 0.01) blockers.push(`WIP unsettled: ${r2(c.actualTotal - settled)}`)
+    if (Math.abs(c.actualTotal - settled) > 0.01) blockers.push(`WIP unsettled: ${r2(c.actualTotal - settled)} (material + labour + absorbed overhead)`)
     return { id: wo.id, woNo: wo.woNo, project: wo.project, status: wo.status, planned: c.planned, produced: c.alreadyProduced, accepted: c.alreadyAccepted, actualCost: c.actualTotal, settled, readyToReceive: c.tasks > 0 && c.tasksOpen === 0, readyToClose: blockers.length === 0, blockers }
   })
 }

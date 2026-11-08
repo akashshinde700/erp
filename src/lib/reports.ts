@@ -4,8 +4,12 @@
  * so report ≡ print ≡ invoice by construction (shared engine totals).
  */
 import { db } from './db'
-import { r2 } from './erp'
+import { Prisma } from '@prisma/client'
+import { EPS, r2 } from './erp'
 import { tenantCompany } from './tenant'
+import { overheadRatePct } from './costing'
+
+const dayStart = (d: Date): Date => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()))
 
 // ---------- shared UTC day-range helper ----------
 
@@ -309,12 +313,12 @@ export async function productionCostVarianceReport() {
     orderBy: [{ createdAt: 'desc' }],
     include: {
       party: { select: { id: true, code: true, name: true } },
-      boms: { where: { status: 'APPROVED' }, include: { items: { select: { estCost: true } } } },
+      boms: { where: { status: 'APPROVED' }, include: { items: { select: { estCost: true } }, routing: { select: { setupMinutes: true, runMinutesPerUnit: true } } } },
       workOrders: {
         where: { status: { not: 'CANCELLED' } },
         include: {
           bom: { select: { id: true, bomNo: true, productName: true, items: { select: { estCost: true } } } },
-          tasks: { where: { status: { not: 'CANCELLED' } }, select: { status: true, plannedQty: true, actualQty: true, rejectionQty: true, labourCost: true, materialCost: true, hours: true } },
+          tasks: { where: { status: { not: 'CANCELLED' } }, select: { status: true, plannedQty: true, actualQty: true, rejectionQty: true, labourCost: true, materialCost: true, overheadCost: true, hours: true } },
         },
       },
     },
@@ -323,7 +327,8 @@ export async function productionCostVarianceReport() {
     const tasks = project.workOrders.flatMap((wo) => wo.tasks)
     const labourCost = r2(tasks.reduce((sum, task) => sum + task.labourCost, 0))
     const materialCost = r2(tasks.reduce((sum, task) => sum + task.materialCost, 0))
-    const actualCost = r2(labourCost + materialCost)
+    const overheadCost = r2(tasks.reduce((sum, task) => sum + task.overheadCost, 0))
+    const actualCost = r2(labourCost + materialCost + overheadCost)
     const expectedCost = r2(project.boms.reduce((sum, bom) => sum + bom.items.reduce((lineSum, item) => lineSum + item.estCost, 0), 0))
     const costVariance = r2(actualCost - expectedCost)
     const actualQty = r2(tasks.reduce((sum, task) => sum + task.actualQty, 0))
@@ -332,6 +337,7 @@ export async function productionCostVarianceReport() {
     const workOrders = project.workOrders.map((wo) => {
       const woLabour = r2(wo.tasks.reduce((sum, task) => sum + task.labourCost, 0))
       const woMaterial = r2(wo.tasks.reduce((sum, task) => sum + task.materialCost, 0))
+      const woOverhead = r2(wo.tasks.reduce((sum, task) => sum + task.overheadCost, 0))
       const woExpected = r2(wo.bom?.items.reduce((sum, item) => sum + item.estCost, 0) ?? 0)
       return {
         id: wo.id,
@@ -342,8 +348,9 @@ export async function productionCostVarianceReport() {
         expectedCost: woExpected,
         labourCost: woLabour,
         materialCost: woMaterial,
-        actualCost: r2(woLabour + woMaterial),
-        variance: r2(woLabour + woMaterial - woExpected),
+        overheadCost: woOverhead,
+        actualCost: r2(woLabour + woMaterial + woOverhead),
+        variance: r2(woLabour + woMaterial + woOverhead - woExpected),
         taskTotal: wo.tasks.length,
         taskDone: wo.tasks.filter((task) => task.status === 'COMPLETED').length,
       }
@@ -354,6 +361,7 @@ export async function productionCostVarianceReport() {
       expectedCost,
       labourCost,
       materialCost,
+      overheadCost,
       actualCost,
       costVariance,
       variancePct: expectedCost > 0 ? r2((costVariance / expectedCost) * 100) : null,
@@ -379,11 +387,14 @@ export async function productionCostVarianceReport() {
       expectedCost,
       labourCost: r2(rows.reduce((sum, row) => sum + row.labourCost, 0)),
       materialCost: r2(rows.reduce((sum, row) => sum + row.materialCost, 0)),
+      overheadCost: r2(rows.reduce((sum, row) => sum + row.overheadCost, 0)),
       actualCost,
       costVariance: r2(actualCost - expectedCost),
       projectedMargin: r2(totalBudget - actualCost),
     },
-    note: 'Actual cost includes task material and labour only; WIP/overhead settlement remains a documented gap.',
+    note:
+      'Actual cost is task material + labour + absorbed factory overhead, and is settled into the finished-goods receipt on closure. ' +
+      'Expected cost is the BOM material standard at line rates — it carries no labour standard, so compare labour against the work-order cost report, not this column.',
   }
 }
 
@@ -1177,5 +1188,142 @@ export async function dashboardData() {
       reorderLevel: i.item.reorderLevel,
       uom: i.item.uom,
     })),
+  }
+}
+
+// ---------- Manufacturing cost vs standard (expected vs actual roll-up) ----------
+
+/**
+ * Expected-vs-actual cost per work order, with the three money buckets split
+ * out. The "expected" side is the standard of the revision the order was built
+ * from: material lines at BOM rates plus the labour frozen at approval, scaled
+ * by how many units have actually been received. The "actual" side is what the
+ * shop floor recorded — material at issue cost, labour at the worker's rate, and
+ * absorbed factory overhead at the current policy rate.
+ *
+ * Deliberate caveats, returned with the rows rather than hidden:
+ *  - the material standard is at today's BOM rate, not a revaluation at issue
+ *    date, so steel-price moves show up as material variance;
+ *  - overhead is an allocation, so its variance measures the policy rate, not
+ *    efficiency;
+ *  - orders with no routing have a zero labour standard and are excluded from
+ *    the labour variance average.
+ */
+export async function manufacturingCostVarianceReport(filters?: { from?: string; to?: string; workOrderId?: string }) {
+  const where: Prisma.WorkOrderWhereInput = { status: { not: 'CANCELLED' } }
+  if (filters?.workOrderId) where.id = filters.workOrderId
+  if (filters?.from || filters?.to) {
+    const date: Prisma.DateTimeFilter = {}
+    if (filters.from) date.gte = dayStart(new Date(filters.from))
+    if (filters.to) date.lte = dayStart(new Date(filters.to))
+    where.date = date
+  }
+  const orders = await db.workOrder.findMany({
+    where,
+    orderBy: [{ date: 'desc' }],
+    take: 500,
+    include: {
+      project: { select: { projectNo: true, name: true } },
+      bom: {
+        select: {
+          bomNo: true, revision: true, standardLabourCost: true, standardMinutes: true,
+          items: { select: { estCost: true } },
+        },
+      },
+      tasks: {
+        where: { status: { not: 'CANCELLED' } },
+        orderBy: [{ seq: 'asc' }],
+        include: { workCenter: { select: { code: true, name: true, costPerHour: true } } },
+      },
+      productionReceipts: { where: { status: 'POSTED' }, select: { acceptedQty: true, expectedCost: true, actualCost: true, variance: true } },
+    },
+  })
+  const rate = await overheadRatePct()
+
+  const rows = orders.map((wo) => {
+    const materialActual = r2(wo.tasks.reduce((s, t) => s + t.materialCost, 0))
+    const labourActual = r2(wo.tasks.reduce((s, t) => s + t.labourCost, 0))
+    const overheadActual = r2(wo.tasks.reduce((s, t) => s + t.overheadCost, 0))
+    const actualCost = r2(materialActual + labourActual + overheadActual)
+    const accepted = r2(wo.productionReceipts.reduce((s, r) => s + r.acceptedQty, 0))
+    const standardMaterialPerUnit = r2(wo.bom?.items.reduce((s, i) => s + i.estCost, 0) ?? 0)
+    const standardLabourPerUnit = r2(wo.bom?.standardLabourCost ?? 0)
+    const standardOverheadPerUnit = r2((standardMaterialPerUnit + standardLabourPerUnit) * (rate / 100))
+    const units = accepted > EPS ? accepted : 0
+    const standardForOutput = r2((standardMaterialPerUnit + standardLabourPerUnit + standardOverheadPerUnit) * units)
+    const hasStandard = !!wo.bom && units > EPS
+    return {
+      id: wo.id,
+      woNo: wo.woNo,
+      date: wo.date.toISOString().slice(0, 10),
+      status: wo.status,
+      project: wo.project,
+      bomNo: wo.bom?.bomNo ?? null,
+      revision: wo.bom?.revision ?? null,
+      outputQty: wo.outputQty,
+      acceptedQty: accepted,
+      standardPerUnit: r2(standardMaterialPerUnit + standardLabourPerUnit + standardOverheadPerUnit),
+      standardMaterialPerUnit,
+      standardLabourPerUnit,
+      standardOverheadPerUnit,
+      standardCost: standardForOutput,
+      materialCost: materialActual,
+      labourCost: labourActual,
+      overheadCost: overheadActual,
+      actualCost,
+      variance: hasStandard ? r2(actualCost - standardForOutput) : null,
+      variancePct: hasStandard && standardForOutput > EPS ? r2(((actualCost - standardForOutput) / standardForOutput) * 100) : null,
+      materialVariance: hasStandard ? r2(materialActual - standardMaterialPerUnit * units) : null,
+      labourVariance: hasStandard ? r2(labourActual - standardLabourPerUnit * units) : null,
+      overheadVariance: hasStandard ? r2(overheadActual - standardOverheadPerUnit * units) : null,
+      hasRouting: (wo.bom?.standardMinutes ?? 0) > 0,
+      hours: r2(wo.tasks.reduce((s, t) => s + t.hours, 0)),
+      receiptVariance: r2(wo.productionReceipts.reduce((s, r) => s + r.variance, 0)),
+      tasks: wo.tasks.map((t) => ({
+        taskNo: t.taskNo,
+        seq: t.seq,
+        operation: t.operation,
+        workCenter: t.workCenter ? `${t.workCenter.code} — ${t.workCenter.name}` : null,
+        status: t.status,
+        materialCost: t.materialCost,
+        labourCost: t.labourCost,
+        overheadCost: t.overheadCost,
+        overheadRatePct: rate,
+        total: r2(t.materialCost + t.labourCost + t.overheadCost),
+      })),
+    }
+  })
+
+  const measured = rows.filter((r) => r.variance !== null)
+  const summary = {
+    workOrderCount: rows.length,
+    measuredCount: measured.length,
+    unmeasuredCount: rows.length - measured.length,
+    overheadRatePct: rate,
+    standardCost: r2(measured.reduce((s, r) => s + r.standardCost, 0)),
+    actualCost: r2(measured.reduce((s, r) => s + r.actualCost, 0)),
+    materialCost: r2(measured.reduce((s, r) => s + r.materialCost, 0)),
+    labourCost: r2(measured.reduce((s, r) => s + r.labourCost, 0)),
+    overheadCost: r2(measured.reduce((s, r) => s + r.overheadCost, 0)),
+    materialVariance: r2(measured.reduce((s, r) => s + (r.materialVariance ?? 0), 0)),
+    labourVariance: r2(measured.reduce((s, r) => s + (r.labourVariance ?? 0), 0)),
+    overheadVariance: r2(measured.reduce((s, r) => s + (r.overheadVariance ?? 0), 0)),
+  }
+  return {
+    summary: {
+      ...summary,
+      variance: r2(summary.actualCost - summary.standardCost),
+      variancePct: summary.standardCost > EPS ? r2(((summary.actualCost - summary.standardCost) / summary.standardCost) * 100) : null,
+    },
+    rows,
+    limitations: [
+      rate > 0
+        ? `Overhead is absorbed at ${rate}% of prime cost (company policy) — its variance measures the rate, not efficiency`
+        : 'Overhead absorption is switched off (rate 0%), so overhead variance is always zero',
+      'Material standard uses the BOM rate at report time, not a revaluation at issue date',
+      'A work order with no received quantity has no standard to compare against and is excluded from the summary',
+      'Operations completed before a rate was set carry no absorbed overhead until the true-up runs',
+      'The finished-goods receipt is valued at the material standard, so labour and overhead leave WIP into manufacturing variance rather than into stock',
+    ],
   }
 }

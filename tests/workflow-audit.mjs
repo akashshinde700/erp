@@ -113,9 +113,17 @@ async function reconcile(label) {
   check(`${label}: GRN billed <= accepted and accepted + rejected = received`, grn.length === 0, JSON.stringify(grn.slice(0, 3)))
   const dc = await qa('SELECT id, acceptedQty, invoicedQty FROM DeliveryChallanLine WHERE invoicedQty > acceptedQty + 0.001')
   check(`${label}: challan invoiced <= accepted`, dc.length === 0, JSON.stringify(dc.slice(0, 3)))
-  const wip = await qa(`SELECT w.woNo, ROUND((SELECT COALESCE(SUM(t.materialCost+t.labourCost),0) FROM ProductionTask t WHERE t.workOrderId=w.id AND t.status<>'CANCELLED'),2) actual,
+  const wip = await qa(`SELECT w.woNo, ROUND((SELECT COALESCE(SUM(t.materialCost+t.labourCost+t.overheadCost),0) FROM ProductionTask t WHERE t.workOrderId=w.id AND t.status<>'CANCELLED'),2) actual,
       ROUND((SELECT COALESCE(SUM(r.actualCost),0) FROM ProductionReceipt r WHERE r.workOrderId=w.id AND r.status='POSTED'),2) settled FROM WorkOrder w WHERE w.status='COMPLETED' HAVING ABS(actual-settled) > 0.011`)
-  check(`${label}: completed work orders have WIP fully settled`, wip.length === 0, JSON.stringify(wip.slice(0, 3)))
+  check(`${label}: completed work orders have WIP fully settled (material + labour + absorbed overhead)`, wip.length === 0, JSON.stringify(wip.slice(0, 3)))
+  // Absorbed overhead is an accrual: the credit ledger must equal the absorbed
+  // amounts on tasks, and the work-order header must equal its own task rows.
+  const ovh = await q1(`SELECT ROUND(COALESCE(SUM(credit)-SUM(debit),0),2) balance FROM AccountLedger WHERE account='OVHA' AND isCancelled=0`)
+  const absorbed = await q1(`SELECT ROUND(COALESCE(SUM(overheadCost),0),2) total FROM ProductionTask WHERE status='COMPLETED'`)
+  check(`${label}: overhead absorbed in the ledger equals the overhead on completed tasks`, near(num(ovh.balance), num(absorbed.total), 0.05), `ledger=${ovh.balance} tasks=${absorbed.total}`)
+  const woOvh = await qa(`SELECT w.woNo, ROUND(w.overheadCost,2) hdr, ROUND((SELECT COALESCE(SUM(t.overheadCost),0) FROM ProductionTask t WHERE t.workOrderId=w.id AND t.status<>'CANCELLED'),2) tasks
+    FROM WorkOrder w HAVING ABS(hdr-tasks) > 0.011`)
+  check(`${label}: work-order overhead header equals its operations`, woOvh.length === 0, JSON.stringify(woOvh.slice(0, 3)))
   const dupDocs = await qa(`SELECT 'SalesInvoice' t, invoiceNo n, COUNT(*) c FROM SalesInvoice GROUP BY invoiceNo HAVING c>1 UNION ALL SELECT 'PurchaseInvoice', invoiceNo, COUNT(*) FROM PurchaseInvoice GROUP BY invoiceNo HAVING COUNT(*)>1
     UNION ALL SELECT 'Payment', paymentNo, COUNT(*) FROM Payment GROUP BY paymentNo HAVING COUNT(*)>1`)
   check(`${label}: no duplicate document numbers`, dupDocs.length === 0, JSON.stringify(dupDocs))
@@ -1107,6 +1115,114 @@ async function phaseOps() {
   await reconcile('after routing/OEE')
 }
 
+// ---------------------------------------------------------------- Phase 12d: costing roll-up
+async function phaseCosting() {
+  phase = 'P12d-costing'
+  const M = '/api/manufacturing'
+  // The seed sets an absorption rate; without one nothing here is measurable.
+  const company = await q1('SELECT overheadRatePct FROM Company WHERE isPlatform=0 ORDER BY createdAt LIMIT 1')
+  check('costing: the demo company absorbs factory overhead', num(company.overheadRatePct) > 0, `rate=${company.overheadRatePct}`)
+
+  const prj = await post(`${M}/projects`, { name: 'Audit Costing Cell', partyId: F.cust, startDate: today, budget: 250000 })
+  expectOk('costing: create project', prj)
+  const out = await post('/api/masters/items', { code: 'AUD-COST-FG', name: 'Audit Costed Bracket', uom: 'PCS', costRate: 400, saleRate: 800, gstRate: 18, groupName: 'Audit' })
+  expectOk('costing: output item', out)
+  const bom = await post(`${M}/boms`, {
+    projectId: prj.data.id,
+    itemId: out.data.id,
+    productName: 'Audit Costed Bracket',
+    lines: [
+      { itemId: F.rm, qty: 2, uom: 'KG', rate: 100 },
+      { itemId: F.fg, qty: 1, uom: 'PCS', rate: 50 },
+    ],
+  })
+  expectOk('costing: create BOM', bom)
+  const weld = (await get(`${M}/work-centers?all=1`)).data?.find((c) => c.code === 'WC-WELD')
+  const cut = (await get(`${M}/work-centers?all=1`)).data?.find((c) => c.code === 'WC-CUT')
+
+  // Standard cost needs a route: labour = minutes / 60 × centre cost per hour.
+  const draftStandard = await get(`${M}/costing?bomId=${bom.data.id}`)
+  expectOk('costing: standard cost of a draft revision responds', draftStandard)
+  check('costing: an unrouted revision reports no routing', draftStandard.data?.standard?.noRouting === true, JSON.stringify(draftStandard.data?.standard))
+  check('costing: material standard comes from the BOM lines', near(draftStandard.data?.standard?.materialCost, 2 * 100 + 50), `material=${draftStandard.data?.standard?.materialCost}`)
+
+  await api('PUT', `${M}/routing`, {
+    bomId: bom.data.id,
+    operations: [
+      { seq: 1, operation: 'CUTTING', workCenterId: cut.id, runMinutesPerUnit: 6, setupMinutes: 0 },
+      { seq: 2, operation: 'WELDING', workCenterId: weld.id, runMinutesPerUnit: 12, setupMinutes: 0 },
+    ],
+  })
+  const routed = await get(`${M}/costing?bomId=${bom.data.id}`)
+  const expectedLabour = (6 / 60) * num(cut.costPerHour) + (12 / 60) * num(weld.costPerHour)
+  check('costing: labour standard = routed minutes × work-centre rate', near(routed.data?.standard?.labourCost, expectedLabour, 0.05), `labour=${routed.data?.standard?.labourCost} expected=${r2(expectedLabour)}`)
+  check('costing: overhead standard = rate × prime cost', near(routed.data?.standard?.overheadCost, (routed.data.standard.materialCost + routed.data.standard.labourCost) * (num(company.overheadRatePct) / 100), 0.05), `overhead=${routed.data?.standard?.overheadCost}`)
+
+  expectOk('costing: approve the routed BOM', await post(`${M}/boms/${bom.data.id}/actions`, { action: 'approve' }))
+  const frozen = await q1('SELECT standardLabourCost, standardMinutes FROM Bom WHERE id=?', [bom.data.id])
+  check('costing: approval freezes the routed labour standard on the revision', near(num(frozen.standardLabourCost), expectedLabour, 0.05) && near(num(frozen.standardMinutes), 18), JSON.stringify(frozen))
+
+  // ---- actual cost through a real completion -----------------------------
+  const wo = await post(`${M}/work-orders`, { projectId: prj.data.id, bomId: bom.data.id, outputQty: 10, priority: 'NORMAL', startDate: today, endDate: daysFromNow(10) })
+  expectOk('costing: work order for 10 units', wo)
+  expectOk('costing: generate routed tasks', await post(`${M}/work-orders/${wo.data.id}/actions`, { action: 'generate-tasks' }))
+  const tasks = await qa('SELECT id, taskNo, seq, plannedQty FROM ProductionTask WHERE workOrderId=? ORDER BY seq', [wo.data.id])
+  const first = tasks[0]
+  const worker = await q1("SELECT id FROM Employee WHERE active=1 ORDER BY code LIMIT 1")
+  expectOk('costing: assign the first operation', await post(`${M}/tasks/${first.id}/actions`, { action: 'assign', employeeId: worker.id }))
+  expectOk('costing: start the first operation', await post(`${M}/tasks/${first.id}/actions`, { action: 'start' }))
+  const done = await post(`${M}/tasks/${first.id}/actions`, {
+    action: 'complete',
+    actualQty: num(first.plannedQty),
+    hours: 4,
+    materialItemId: F.rm,
+    materialQty: 20,
+  })
+  expectOk('costing: complete the first operation', done)
+
+  const taskRow = await q1('SELECT materialCost, labourCost, overheadCost FROM ProductionTask WHERE id=?', [first.id])
+  const prime = num(taskRow.materialCost) + num(taskRow.labourCost)
+  check('costing: completion absorbs overhead at the company rate', near(num(taskRow.overheadCost), prime * (num(company.overheadRatePct) / 100), 0.02), `prime=${prime} overhead=${taskRow.overheadCost}`)
+  check('costing: absorbed overhead is posted to the accrual ledger', true, 'asserted in reconcile')
+  const gl = await q1("SELECT ROUND(COALESCE(SUM(debit-credit),0),2) net FROM AccountLedger WHERE account='OVHA' AND voucherNo=?", [done.data?.taskNo ?? (await q1('SELECT taskNo FROM ProductionTask WHERE id=?', [first.id])).taskNo])
+  check('costing: the overhead voucher credits OVHA (accelerated WIP)', num(gl.net) < 0, `OVHA net=${gl.net}`)
+
+  const cost = await get(`${M}/costing/${wo.data.id}`)
+  expectOk('costing: work-order roll-up responds', cost)
+  check('costing: roll-up total = material + labour + overhead', near(num(cost.data?.actual?.total), num(cost.data?.actual?.material) + num(cost.data?.actual?.labour) + num(cost.data?.actual?.overhead), 0.02), JSON.stringify(cost.data?.actual))
+  check('costing: operations are restated by prime-cost share', (cost.data?.tasks ?? []).every((t) => t.overheadShare >= 0), JSON.stringify((cost.data?.tasks ?? []).map((t) => t.overheadShare)))
+  check('costing: no standard until something is received', num(cost.data?.standard?.forOutput) === 0 && num(cost.data?.variance?.total) === num(cost.data?.actual?.total), JSON.stringify(cost.data?.variance))
+
+  const report = await get(`${M}/costing`)
+  expectOk('costing: cost-variance report responds', report)
+  const row = (report.data?.rows ?? []).find((r) => r.id === wo.data.id)
+  check('costing: the report carries the work order and its own limitations', !!row && (report.data?.limitations ?? []).length >= 3, JSON.stringify(report.data?.limitations))
+  check('costing: an order with nothing received is excluded from the measured summary', row && row.variance === null, `variance=${row?.variance}`)
+
+  // ---- true-up must be idempotent ---------------------------------------
+  const firstUp = await post(`${M}/costing/${wo.data.id}`, { action: 'true-up' })
+  expectOk('costing: true-up runs', firstUp)
+  const secondUp = await post(`${M}/costing/${wo.data.id}`, { action: 'true-up' })
+  check('costing: a second true-up posts nothing', secondUp.status === 200 && near(num(secondUp.data?.posted), 0, 0.005), `posted=${secondUp.data?.posted}`)
+  expectReject('costing: unknown costing action is refused', await api('POST', `${M}/costing/${wo.data.id}`, { action: 'levitate' }), /unknown action/i)
+
+  // A rate change is a policy change: past postings stay, the true-up catches up.
+  const original = num(company.overheadRatePct)
+  expectOk('costing: set a new absorption rate', await api('PUT', '/api/masters/company', {
+    name: (await q1('SELECT name FROM Company WHERE isPlatform=0 ORDER BY createdAt LIMIT 1')).name,
+    overheadRatePct: original + 10,
+  }))
+  const afterRate = await post(`${M}/costing/${wo.data.id}`, { action: 'true-up' })
+  expectOk('costing: true-up after a rate change', afterRate)
+  check('costing: the true-up restates to the new rate', near(num(afterRate.data?.overheadCost), (num(cost.data?.actual?.material) + num(cost.data?.actual?.labour)) * ((original + 10) / 100), 0.05), `overhead=${afterRate.data?.overheadCost}`)
+  const restated = await q1(`SELECT ROUND(w.overheadCost,2) hdr, ROUND((SELECT COALESCE(SUM(t.overheadCost),0) FROM ProductionTask t WHERE t.workOrderId=w.id AND t.status<>'CANCELLED'),2) tasks FROM WorkOrder w WHERE w.id=?`, [wo.data.id])
+  check('costing: restated header equals its operations', near(num(restated.hdr), num(restated.tasks), 0.011), JSON.stringify(restated))
+  expectReject('costing: an absurd absorption rate is refused', await api('PUT', '/api/masters/company', { name: (await q1('SELECT name FROM Company WHERE isPlatform=0 ORDER BY createdAt LIMIT 1')).name, overheadRatePct: 500 }), /typo|100/i)
+  await api('PUT', '/api/masters/company', { name: (await q1('SELECT name FROM Company WHERE isPlatform=0 ORDER BY createdAt LIMIT 1')).name, overheadRatePct: original })
+
+  await reconcile('after costing')
+}
+
 // ---------------------------------------------------------------- Phase 13: fuzzing
 async function phaseFuzz() {
   phase = 'P13-fuzz'
@@ -1163,7 +1279,7 @@ async function phaseFuzz() {
 async function main() {
   const t0 = Date.now()
   await setup()
-  const phases = [phaseAuth, phaseP2P, phaseRfq, phaseQ2C, phaseMfg, phaseQuality, phaseLots, phaseFinance, phaseGst, phaseMrp, phaseOps, phaseFuzz]
+  const phases = [phaseAuth, phaseP2P, phaseRfq, phaseQ2C, phaseMfg, phaseQuality, phaseLots, phaseFinance, phaseGst, phaseMrp, phaseOps, phaseCosting, phaseFuzz]
   for (const fn of phases) {
     try { await fn() } catch (e) { check(`${fn.name} completed without a harness exception`, false, e?.stack?.split('\n').slice(0, 3).join(' ') ?? String(e)) }
   }

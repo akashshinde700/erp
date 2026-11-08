@@ -35,6 +35,14 @@ prisma/migrations/
                                             become active-only. New indexes are created before
                                             the old unique keys are dropped, so no FK loses its
                                             supporting index.
+  20261112100000_manufacturing_cost_rollup/
+    migration.sql                           additive: Company.overheadRatePct (default 0 =
+                                            absorption off), Bom.standardLabourCost /
+                                            standardMinutes, ProductionTask.overheadCost,
+                                            WorkOrder.overheadCost. Nothing changes value
+                                            until a rate is set; then WIP and receipt cost
+                                            rise by the absorbed amount for work completed
+                                            afterwards (docs/MANUFACTURING_COSTING.md).
   20261111100000_routing_work_centers_oee/
     migration.sql                           additive: WorkCenter, ShiftCalendar, Shift,
                                             ShiftHoliday, RoutingOperation, MachineDowntime;

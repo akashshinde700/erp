@@ -63,6 +63,12 @@ model Company {
   booksLockedUntil DateTime?
   booksLockedBy    String?
 
+  // ---- overhead absorption (manufacturing cost roll-up) ----
+  /// Percentage of prime cost (material + labour) absorbed as factory overhead
+  /// on every completed operation. 0 = off. Accrued in OVHA, never in a bank
+  /// account; reversal is a contram posting (src/lib/costing.ts).
+  overheadRatePct Float @default(0)
+
   users OrgUser[]
 
   purchaseRequisitions PurchaseRequisition[]
@@ -713,6 +719,11 @@ model Bom {
   supersededBy  Bom?      @relation("BomRevision")
   status      String    @default("DRAFT") // DRAFT | APPROVED | SUPERSEDED | CANCELLED
   approvedAt  DateTime?
+  /// Standard labour per one output unit, rolled up from the routing when the
+  /// revision is approved (frozen with the revision like the routes themselves).
+  standardLabourCost Float @default(0)
+  /// Minutes per one output unit across all routed operations (setup included).
+  standardMinutes    Float @default(0)
   notes       String?   @db.Text
   createdAt   DateTime  @default(now())
 
@@ -941,6 +952,9 @@ model WorkOrder {
   priority    String    @default("NORMAL") // LOW | NORMAL | HIGH | URGENT
   status      String    @default("OPEN") // OPEN | IN_PROGRESS | COMPLETED | CANCELLED
   completedAt DateTime?
+  /// Factory overhead absorbed by the completed operations of this order.
+  /// Part of WIP, settled into the finished-goods receipt like material/labour.
+  overheadCost Float    @default(0)
   notes       String?   @db.Text
   createdAt   DateTime  @default(now())
 
@@ -993,6 +1007,9 @@ model ProductionTask {
   materialItem   Item?     @relation("TaskMaterial", fields: [materialItemId], references: [id])
   materialQty    Float     @default(0)
   materialCost   Float     @default(0) // at avg cost on issue date
+  /// Absorbed factory overhead for this operation (rate × prime cost). Part of
+  /// the task's WIP contribution and of the work-order cost roll-up.
+  overheadCost   Float     @default(0)
   status         String    @default("PENDING") // PENDING | ASSIGNED | IN_PROGRESS | COMPLETED | CANCELLED
   dueDate        DateTime?
   startedAt      DateTime?

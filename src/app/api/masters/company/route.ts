@@ -6,6 +6,7 @@ import { gstStateCode } from '@/lib/validation'
 import { accessState, assertCompanyAccess, assertMutationAccess, operatingCompany, orgLoginCount } from '@/lib/platform'
 import { logAudit } from '@/lib/audit'
 import { tenantCompany } from '@/lib/tenant'
+import { MAX_OVERHEAD_RATE_PCT } from '@/lib/costing'
 
 /**
  * GET /api/masters/company — the operating org's profile (incl. bank details
@@ -53,6 +54,13 @@ const companySchema = z.object({
   tallySgstLedger: z.string().max(80).optional().nullable(),
   tallyIgstLedger: z.string().max(80).optional().nullable(),
   tallyRoundOffLedger: z.string().max(80).optional().nullable(),
+  // Factory overhead absorption: percentage of prime cost (material + labour)
+  // added to WIP when an operation completes. 0 switches absorption off.
+  overheadRatePct: z.coerce
+    .number()
+    .min(0, 'Overhead rate cannot be negative')
+    .max(MAX_OVERHEAD_RATE_PCT, `Overhead rate above ${MAX_OVERHEAD_RATE_PCT}% is almost certainly a typo`)
+    .optional(),
 })
 
 export async function PUT(req: Request) {
@@ -75,7 +83,11 @@ export async function PUT(req: Request) {
     const company = existing
       ? await db.company.update({ where: { id: existing.id }, data: body })
       : await db.company.create({ data: body })
-    await logAudit(existing ? 'UPDATE' : 'CREATE', 'Company', company.id, company.name, actorEmail ?? 'setup')
+    const detail =
+      body.overheadRatePct !== undefined && body.overheadRatePct !== (existing?.overheadRatePct ?? 0)
+        ? `${body.overheadRatePct}% overhead absorption (was ${existing?.overheadRatePct ?? 0}%) — already-completed operations keep their absorbed amount until a true-up is run`
+        : company.name
+    await logAudit(existing ? 'UPDATE' : 'CREATE', 'Company', company.id, detail, actorEmail ?? 'setup')
     return ok(company)
   } catch (e) {
     return handleError(e)

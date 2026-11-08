@@ -16,6 +16,7 @@ import {
   CalendarClock,
   CheckCircle2,
   ClipboardList,
+  Coins,
   FolderKanban,
   ListTodo,
   Loader2,
@@ -60,6 +61,9 @@ import {
   WO_PRIORITIES,
   type Bom,
   type BomWhereUsed,
+  type CostingReport,
+  type StandardCost,
+  type WorkOrderCostRow,
   type DowntimeRow,
   type Employee,
   type OeeReport,
@@ -94,7 +98,7 @@ import { ProductionReceiptsWorkspace } from './production-receipts'
 // Module shell
 // ===========================================================================
 
-type MfgTab = 'projects' | 'boms' | 'work-orders' | 'mrp' | 'capacity' | 'material-plan' | 'tasks' | 'pending' | 'employees' | 'centers' | 'oee' | 'quality'
+type MfgTab = 'projects' | 'boms' | 'work-orders' | 'mrp' | 'capacity' | 'material-plan' | 'tasks' | 'pending' | 'employees' | 'centers' | 'oee' | 'costing' | 'quality'
 
 export function ManufacturingView() {
   const [tab, setTab] = useState<MfgTab>('projects')
@@ -193,6 +197,9 @@ export function ManufacturingView() {
           <TabsTrigger value="oee" className="h-11 gap-1.5 sm:h-9">
             <Gauge className="size-4" aria-hidden /> OEE
           </TabsTrigger>
+          <TabsTrigger value="costing" className="h-11 gap-1.5 sm:h-9">
+            <Coins className="size-4" aria-hidden /> Costing
+          </TabsTrigger>
           <TabsTrigger value="quality" className="h-11 gap-1.5 sm:h-9">
             <CheckCircle2 className="size-4" aria-hidden /> Quality
           </TabsTrigger>
@@ -233,6 +240,9 @@ export function ManufacturingView() {
         </TabsContent>
         <TabsContent value="oee" className="mt-4">
           <OeeTab />
+        </TabsContent>
+        <TabsContent value="costing" className="mt-4">
+          <CostingTab />
         </TabsContent>
         <TabsContent value="quality" className="mt-4">
           <QualityWorkspace />
@@ -3040,6 +3050,268 @@ function BomLinesDialog({ bom, open, onOpenChange }: { bom: Bom; open: boolean; 
   )
 }
 
+// ---------- costing: standard vs actual roll-up ----------
+
+function CostStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border p-2.5">
+      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className="text-sm font-semibold tabular-nums">{value}</p>
+    </div>
+  )
+}
+
+function CostingTab() {
+  const [from, setFrom] = useState(() => {
+    const d = new Date()
+    d.setDate(d.getDate() - 59)
+    return d.toISOString().slice(0, 10)
+  })
+  const [to, setTo] = useState(todayISO())
+  const report = useApi<CostingReport | null>(`/api/manufacturing/costing?from=${from}&to=${to}`)
+  const [openWo, setOpenWo] = useState<WorkOrderCostRow | null>(null)
+  const [trueUpFor, setTrueUpFor] = useState<WorkOrderCostRow | null>(null)
+  const [busy, setBusy] = useState(false)
+  const data = report.data
+
+  const trueUp = async () => {
+    if (!trueUpFor) return
+    setBusy(true)
+    try {
+      const res = await apiPost<{ woNo: string; posted: number; date: string | null; overheadRatePct: number }>(
+        `/api/manufacturing/costing/${trueUpFor.id}`,
+        { action: 'true-up' }
+      )
+      toast.success(
+        Math.abs(res.posted) < 0.005 ? `${res.woNo} already matches the ${res.overheadRatePct}% rate` : `${res.woNo} overhead restated`,
+        { description: Math.abs(res.posted) < 0.005 ? 'Nothing to post.' : `${res.posted > 0 ? '+' : ''}${money(res.posted)} posted on ${res.date}.` }
+      )
+      setTrueUpFor(null)
+      report.reload()
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (report.loading) return <TableSkeleton rows={6} cols={8} />
+  if (report.error) return <ErrorState error={report.error} onRetry={() => report.reload()} entity="costing" />
+  if (!data) return null
+
+  const s = data.summary
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="space-y-1.5">
+          <Label htmlFor="cost-from" className="text-xs text-muted-foreground">From</Label>
+          <Input id="cost-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="h-11 w-40" />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="cost-to" className="text-xs text-muted-foreground">To</Label>
+          <Input id="cost-to" type="date" value={to} onChange={(e) => setTo(e.target.value)} className="h-11 w-40" />
+        </div>
+        <Button variant="outline" onClick={() => report.reload()} className="h-11 gap-2">
+          <RefreshCw className="size-4" aria-hidden /> Refresh
+        </Button>
+        <p className="text-xs text-muted-foreground">
+          Overhead absorption is <span className="font-medium text-foreground">{data.overheadRatePct}%</span> of
+          material + labour — {data.overheadRatePct === 0 ? 'set it in Masters → Company to cost work properly.' : 'change it in Masters → Company.'}
+        </p>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <KpiCard title="Standard" value={`₹${money(s.standardCost)}`} icon={ClipboardList} hint={`${s.measuredCount} measured order(s)`} />
+        <KpiCard title="Actual" value={`₹${money(s.actualCost)}`} icon={Wrench} hint="material + labour + overhead" />
+        <KpiCard
+          title="Variance"
+          value={`₹${money(s.variance)}`}
+          icon={s.variance > 0 ? XCircle : BadgeCheck}
+          tone={s.variance > 0 ? 'negative' : 'positive'}
+          hint={s.variancePct === null ? 'no standard to compare' : `${s.variancePct}% vs standard`}
+        />
+        <KpiCard
+          title="Overhead absorbed"
+          value={`₹${money(s.overheadCost)}`}
+          icon={Building2}
+          hint={`${data.overheadRatePct}% of prime cost`}
+        />
+      </div>
+
+      <Card className="p-0">
+        <CardContent className="p-0">
+          <div className="border-b p-3">
+            <SectionHeading
+              title="Work orders: standard vs actual"
+              description="Standard is the approved revision's material + routed labour, pro-rated to the units received. Actual is what the floor recorded — click a row for the operation breakdown."
+            />
+          </div>
+          <div className="max-h-[52dvh] overflow-auto erp-scroll">
+            <Table>
+              <TableHeader className="sticky top-0 z-10 bg-card">
+                <TableRow>
+                  <TableHead>Work order</TableHead>
+                  <TableHead className="hidden md:table-cell">BOM</TableHead>
+                  <TableHead className="text-right">Accepted</TableHead>
+                  <TableHead className="text-right">Standard</TableHead>
+                  <TableHead className="text-right">Material</TableHead>
+                  <TableHead className="text-right">Labour</TableHead>
+                  <TableHead className="text-right">Overhead</TableHead>
+                  <TableHead className="text-right">Variance</TableHead>
+                  <TableHead className="w-24 text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.rows.map((row) => (
+                  <TableRow key={row.id} className="cursor-pointer" onClick={() => setOpenWo(row)}>
+                    <TableCell>
+                      <div className="font-medium">{row.woNo}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {row.status.toLowerCase()} · {row.project?.name ?? 'no project'}
+                        {!row.hasRouting ? ' · no routing' : ''}
+                      </div>
+                    </TableCell>
+                    <TableCell className="hidden text-xs md:table-cell">
+                      {row.bomNo ? `${row.bomNo} rev ${row.revision}` : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {qtyFmt(row.acceptedQty)}
+                      <span className="text-xs text-muted-foreground"> / {qtyFmt(row.outputQty)}</span>
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {row.variance === null ? <span className="text-muted-foreground">not measured</span> : <Money value={row.standardCost} />}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums"><Money value={row.materialCost} /></TableCell>
+                    <TableCell className="text-right tabular-nums"><Money value={row.labourCost} /></TableCell>
+                    <TableCell className="text-right tabular-nums"><Money value={row.overheadCost} /></TableCell>
+                    <TableCell className={cn('text-right font-medium tabular-nums', row.variance !== null && row.variance > 0 && 'text-destructive', row.variance !== null && row.variance < 0 && 'text-primary')}>
+                      {row.variance === null ? '—' : <Money value={row.variance} />}
+                    </TableCell>
+                    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-9 gap-1"
+                        onClick={() => setTrueUpFor(row)}
+                        disabled={row.overheadCost === 0 && data.overheadRatePct === 0}
+                        title="Restate absorbed overhead to the current rate"
+                      >
+                        <RefreshCw className="size-3.5" aria-hidden /> True-up
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {data.rows.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={9} className="text-center text-sm text-muted-foreground">No work orders in this window.</TableCell>
+                  </TableRow>
+                ) : null}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-amber-500/40 bg-amber-500/5 p-4">
+        <p className="text-sm font-medium">What these numbers can and cannot tell you</p>
+        <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+          {data.limitations.map((note, i) => <li key={i}>• {note}</li>)}
+          <li>• An order with nothing received yet shows “not measured” — there is no produced quantity to standardise against.</li>
+        </ul>
+      </Card>
+
+      {openWo ? (
+        <Dialog open={!!openWo} onOpenChange={(o) => !o && setOpenWo(null)}>
+          <DialogContent className="flex max-h-[92dvh] flex-col overflow-hidden sm:max-w-4xl">
+            <DialogHeader>
+              <DialogTitle>{openWo.woNo} — cost breakdown</DialogTitle>
+              <DialogDescription>
+                {openWo.bomNo ? `${openWo.bomNo} rev ${openWo.revision}` : 'No BOM'} · {qtyFmt(openWo.acceptedQty)} of{' '}
+                {qtyFmt(openWo.outputQty)} accepted · {qtyFmt(openWo.hours)} hours recorded
+              </DialogDescription>
+            </DialogHeader>
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto erp-scroll-y pr-1">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <CostStat label="Standard / unit" value={`₹${money(openWo.standardPerUnit)}`} />
+                <CostStat label="Material std / unit" value={`₹${money(openWo.standardMaterialPerUnit)}`} />
+                <CostStat label="Labour std / unit" value={`₹${money(openWo.standardLabourPerUnit)}`} />
+                <CostStat label="Overhead std / unit" value={`₹${money(openWo.standardOverheadPerUnit)}`} />
+              </div>
+              <div className="overflow-auto erp-scroll rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Seq</TableHead>
+                      <TableHead>Operation</TableHead>
+                      <TableHead className="hidden sm:table-cell">Work center</TableHead>
+                      <TableHead className="text-right">Material</TableHead>
+                      <TableHead className="text-right">Labour</TableHead>
+                      <TableHead className="text-right">Overhead</TableHead>
+                      <TableHead className="text-right">Total</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {openWo.tasks.map((task) => (
+                      <TableRow key={task.taskNo}>
+                        <TableCell className="tabular-nums">{task.seq}</TableCell>
+                        <TableCell>
+                          {operationLabel(task.operation)}
+                          <span className="ml-1 text-xs text-muted-foreground">({task.status.toLowerCase()})</span>
+                        </TableCell>
+                        <TableCell className="hidden max-w-40 truncate text-xs sm:table-cell">{task.workCenter ?? '—'}</TableCell>
+                        <TableCell className="text-right tabular-nums"><Money value={task.materialCost} /></TableCell>
+                        <TableCell className="text-right tabular-nums"><Money value={task.labourCost} /></TableCell>
+                        <TableCell className="text-right tabular-nums"><Money value={task.overheadCost} /></TableCell>
+                        <TableCell className="text-right font-medium tabular-nums"><Money value={task.total} /></TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+              {openWo.variance !== null ? (
+                <div className="grid grid-cols-3 gap-3">
+                  <CostStat label="Material variance" value={`₹${money(openWo.materialVariance ?? 0)}`} />
+                  <CostStat label="Labour variance" value={`₹${money(openWo.labourVariance ?? 0)}`} />
+                  <CostStat label="Overhead variance" value={`₹${money(openWo.overheadVariance ?? 0)}`} />
+                </div>
+              ) : null}
+              {!openWo.hasRouting ? (
+                <p className="text-xs text-muted-foreground">
+                  This revision has no routing, so no labour standard exists and labour variance is not meaningful.
+                </p>
+              ) : null}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setOpenWo(null)} className="h-11">Close</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+
+      <AlertDialog open={!!trueUpFor} onOpenChange={(o) => !o && setTrueUpFor(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Restate absorbed overhead on {trueUpFor?.woNo}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The order absorbed <Money value={trueUpFor?.overheadCost ?? 0} />; the {data.overheadRatePct}% rate says it
+              should absorb ₹{money(r2((trueUpFor?.materialCost ?? 0) + (trueUpFor?.labourCost ?? 0)) * (data.overheadRatePct / 100))}.
+              The difference is posted once to WIP against the Factory Overhead Absorbed ledger, dated on the last completed
+              operation, and the per-operation amounts are restated. Nothing is deleted and running it twice posts nothing.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="h-11">Cancel</AlertDialogCancel>
+            <AlertDialogAction className="h-11" disabled={busy} onClick={(e) => { e.preventDefault(); void trueUp() }}>
+              {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null} Post true-up
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  )
+}
+
 // ---------- routing editor (operations of a BOM revision) ----------
 
 interface RoutingDraftRow {
@@ -3070,6 +3342,11 @@ const emptyRoutingRow = (seq: number): RoutingDraftRow => ({
 function RoutingDialog({ bom, open, onOpenChange, onSaved }: { bom: Bom; open: boolean; onOpenChange: (o: boolean) => void; onSaved: () => void }) {
   const centers = useApi<WorkCenter[]>('/api/manufacturing/work-centers?all=1')
   const detail = useApi<RoutingDetail | null>(open ? `/api/manufacturing/routing?bomId=${bom.id}` : null)
+  // Standard cost of the revision as currently saved: material at line rates plus
+  // the labour these routes imply at each centre's cost per hour.
+  const standard = useApi<{ standard: StandardCost; overheadRatePct: number } | null>(
+    open ? `/api/manufacturing/costing?bomId=${bom.id}` : null
+  )
   const [rows, setRows] = useState<RoutingDraftRow[]>([])
   const [loaded, setLoaded] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -3221,6 +3498,17 @@ function RoutingDialog({ bom, open, onOpenChange, onSaved }: { bom: Bom; open: b
         <DialogFooter className="flex-col gap-2 sm:flex-row sm:items-center">
           <div className="text-xs text-muted-foreground">
             {rows.length} operation(s) · {qtyFmt(r2(totalPerUnit))} min/unit · {qtyFmt(r2(totalBatch))} min per batch (setup + queue + move + inspection)
+            {standard.data ? (
+              <span className="block">
+                Saved standard: ₹{money(standard.data.standard.materialCost)} material + ₹
+                {money(standard.data.standard.labourCost)} labour
+                {standard.data.overheadRatePct > 0 ? ` + ₹${money(standard.data.standard.overheadCost)} overhead` : ''} ={' '}
+                <span className="font-medium text-foreground">₹{money(standard.data.standard.standardCost)} per unit</span>
+                {standard.data.standard.unpricedOperations.length > 0
+                  ? ` — ${standard.data.standard.unpricedOperations.length} operation(s) have no cost/hour, so labour is understated`
+                  : ''}
+              </span>
+            ) : null}
           </div>
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => onOpenChange(false)} className="h-11">Close</Button>

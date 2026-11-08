@@ -9,6 +9,7 @@ import {
   customerPerformanceReport,
   productionCostVarianceReport,
   productionEfficiencyReport,
+  manufacturingCostVarianceReport,
   workflowActionCenterReport,
   gstr1Report,
   gstr3bReport,
@@ -63,6 +64,14 @@ export async function GET(req: Request) {
         return ok(await productionCostVarianceReport())
       case 'production-efficiency':
         return ok(await productionEfficiencyReport())
+      case 'manufacturing-cost-variance':
+        return ok(
+          await manufacturingCostVarianceReport({
+            from: sp.get('from') ?? undefined,
+            to: sp.get('to') ?? undefined,
+            workOrderId: sp.get('workOrderId') ?? undefined,
+          })
+        )
       case 'action-center':
         return ok(await workflowActionCenterReport())
       case 'gstr1': {
@@ -140,7 +149,7 @@ export async function GET(req: Request) {
       case 'project-profitability':
         return ok(await projectProfitabilityReport())
       default:
-        return fail('Unknown report type. Use: stock-ledger, stock-summary, inventory-planning, supplier-performance, customer-performance, production-cost-variance, production-efficiency, action-center, gstr1, gstr3b, trial-balance, outstanding, cash-bank-book, pnl, party-ledger, jobwork-pending, back-orders, aging, sales-analysis, purchase-by-supplier, pnl-ledger, project-profitability')
+        return fail('Unknown report type. Use: stock-ledger, stock-summary, inventory-planning, supplier-performance, customer-performance, production-cost-variance, production-efficiency, manufacturing-cost-variance, action-center, gstr1, gstr3b, trial-balance, outstanding, cash-bank-book, pnl, party-ledger, jobwork-pending, back-orders, aging, sales-analysis, purchase-by-supplier, pnl-ledger, project-profitability')
     }
   } catch (e) {
     return handleError(e)

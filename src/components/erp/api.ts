@@ -106,6 +106,8 @@ export interface Company {
   tallySgstLedger: string | null
   tallyIgstLedger: string | null
   tallyRoundOffLedger: string | null
+  /** Factory overhead absorbed on completed operations, % of material + labour. */
+  overheadRatePct: number
   plan: { id: string; name: string; priceMonthly: number } | null
   saasStatus: string
   billingCycle: string
@@ -758,6 +760,85 @@ export interface OeeRow {
   notes: string[]
 }
 
+/** One operation's cost contribution (costing roll-up). */
+export interface CostingTaskRow {
+  taskNo: string
+  seq: number
+  operation: string
+  workCenter: string | null
+  status: string
+  materialCost: number
+  labourCost: number
+  overheadCost: number
+  overheadRatePct: number
+  total: number
+  overheadShare?: number
+}
+
+/** Expected (standard) vs actual cost of one work order. */
+export interface WorkOrderCostRow {
+  id: string
+  woNo: string
+  date: string
+  status: string
+  project: { projectNo: string; name: string } | null
+  bomNo: string | null
+  revision: number | null
+  outputQty: number
+  acceptedQty: number
+  standardPerUnit: number
+  standardMaterialPerUnit: number
+  standardLabourPerUnit: number
+  standardOverheadPerUnit: number
+  standardCost: number
+  materialCost: number
+  labourCost: number
+  overheadCost: number
+  actualCost: number
+  variance: number | null
+  variancePct: number | null
+  materialVariance: number | null
+  labourVariance: number | null
+  overheadVariance: number | null
+  hasRouting: boolean
+  hours: number
+  receiptVariance: number
+  tasks: CostingTaskRow[]
+}
+
+export interface CostingReport {
+  overheadRatePct: number
+  summary: {
+    workOrderCount: number
+    measuredCount: number
+    unmeasuredCount: number
+    overheadRatePct: number
+    standardCost: number
+    actualCost: number
+    materialCost: number
+    labourCost: number
+    overheadCost: number
+    materialVariance: number
+    labourVariance: number
+    overheadVariance: number
+    variance: number
+    variancePct: number | null
+  }
+  rows: WorkOrderCostRow[]
+  limitations: string[]
+}
+
+/** Standard cost of one BOM revision (material + routed labour + overhead). */
+export interface StandardCost {
+  materialCost: number
+  labourCost: number
+  overheadCost: number
+  standardCost: number
+  minutesPerUnit: number
+  unpricedOperations: string[]
+  noRouting: boolean
+}
+
 export interface OeeReport {
   from: string
   to: string
@@ -907,6 +988,8 @@ export interface ProductionCostVarianceReport {
     expectedCost: number
     labourCost: number
     materialCost: number
+    /** Absorbed factory overhead (0 when absorption is off). */
+    overheadCost: number
     actualCost: number
     costVariance: number
     variancePct: number | null
@@ -917,9 +1000,9 @@ export interface ProductionCostVarianceReport {
     rejectionPct: number
     taskTotal: number
     taskDone: number
-    workOrders: { id: string; woNo: string; status: string; bomNo: string | null; productName: string | null; expectedCost: number; labourCost: number; materialCost: number; actualCost: number; variance: number; taskTotal: number; taskDone: number }[]
+    workOrders: { id: string; woNo: string; status: string; bomNo: string | null; productName: string | null; expectedCost: number; labourCost: number; materialCost: number; overheadCost: number; actualCost: number; variance: number; taskTotal: number; taskDone: number }[]
   }[]
-  summary: { projectCount: number; runningProjects: number; totalBudget: number; expectedCost: number; labourCost: number; materialCost: number; actualCost: number; costVariance: number; projectedMargin: number }
+  summary: { projectCount: number; runningProjects: number; totalBudget: number; expectedCost: number; labourCost: number; materialCost: number; overheadCost: number; actualCost: number; costVariance: number; projectedMargin: number }
   note: string
 }
 

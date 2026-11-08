@@ -512,7 +512,7 @@ async function main() {
   })
   check('work order end-before-start rejected (400)', reversedWo.status === 400, `status=${reversedWo.status}`)
 
-  for (const p of ['/api/manufacturing/work-centers', '/api/manufacturing/oee', '/api/manufacturing/schedule?horizonDays=30', '/api/manufacturing/downtime']) {
+  for (const p of ['/api/manufacturing/work-centers', '/api/manufacturing/oee', '/api/manufacturing/schedule?horizonDays=30', '/api/manufacturing/downtime', '/api/manufacturing/costing']) {
     const r = await req('GET', p)
     check(`${p} responds`, r.status === 200, `status=${r.status}`)
   }

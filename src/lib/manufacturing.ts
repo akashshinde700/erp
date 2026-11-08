@@ -19,6 +19,7 @@ import { BusinessError, postGl } from './accounting'
 import { consumeLotsFefoTx } from './traceability'
 import { tenantCompany } from './tenant'
 import { operationMinutes, generateTasksFromRoutingTx } from './routing'
+import { absorbTaskOverheadTx, freezeStandardCostTx } from './costing'
 
 type Tx = Prisma.TransactionClient
 
@@ -207,10 +208,10 @@ export async function deleteEmployee(id: string) {
 
 const projectInclude = {
   party: { select: { id: true, code: true, name: true, city: true } },
-  boms: { select: { id: true, status: true } },
+  boms: { select: { id: true, status: true, standardLabourCost: true } },
   workOrders: {
     include: {
-      tasks: { select: { status: true, labourCost: true, materialCost: true } },
+      tasks: { select: { status: true, labourCost: true, materialCost: true, overheadCost: true } },
     },
   },
 } satisfies Prisma.ProjectInclude
@@ -225,6 +226,7 @@ type ProjectWithStats = Prisma.ProjectGetPayload<{ include: typeof projectInclud
     actualCost: number
     labourCost: number
     materialCost: number
+    overheadCost: number
   }
 }
 
@@ -232,9 +234,10 @@ function withStats(p: Prisma.ProjectGetPayload<{ include: typeof projectInclude 
   const tasks = p.workOrders.flatMap((w) => w.tasks)
   const taskTotal = tasks.filter((t) => t.status !== 'CANCELLED').length
   const taskDone = tasks.filter((t) => t.status === 'COMPLETED').length
-  const actualCost = r2(tasks.reduce((s, t) => s + t.labourCost + t.materialCost, 0))
   const labourCost = r2(tasks.reduce((s, t) => s + t.labourCost, 0))
   const materialCost = r2(tasks.reduce((s, t) => s + t.materialCost, 0))
+  const overheadCost = r2(tasks.reduce((s, t) => s + t.overheadCost, 0))
+  const actualCost = r2(labourCost + materialCost + overheadCost)
   return {
     ...p,
     stats: {
@@ -246,6 +249,7 @@ function withStats(p: Prisma.ProjectGetPayload<{ include: typeof projectInclude 
       actualCost,
       labourCost,
       materialCost,
+      overheadCost,
     },
   }
 }
@@ -295,6 +299,11 @@ export async function getProjectDetail(id: string) {
   const taskDone = tasks.filter((t) => t.status === 'COMPLETED').length
   const labourCost = r2(tasks.reduce((s, t) => s + t.labourCost, 0))
   const materialCost = r2(tasks.reduce((s, t) => s + t.materialCost, 0))
+  const overheadCost = r2(tasks.reduce((s, t) => s + t.overheadCost, 0))
+  const actualCost = r2(labourCost + materialCost + overheadCost)
+  // Standard cost of the approved revisions in this project (material lines +
+  // routed labour frozen at approval) — the benchmark the actual is compared to.
+  const standardCost = r2(p.boms.filter((b) => b.status === 'APPROVED').reduce((s, b) => s + b.items.reduce((x, i) => x + i.estCost, 0) + b.standardLabourCost, 0))
 
   return {
     ...p,
@@ -307,11 +316,14 @@ export async function getProjectDetail(id: string) {
       progressPct: taskTotal > 0 ? Math.round((taskDone / taskTotal) * 100) : 0,
       labourCost,
       materialCost,
-      actualCost: r2(labourCost + materialCost),
+      overheadCost,
+      actualCost,
+      standardCost,
+      costVariance: r2(actualCost - standardCost),
       estCost: p.estCost,
       // Project-wise P&L view: contract value vs cost so far
       budget: p.budget,
-      margin: r2(p.budget - labourCost - materialCost),
+      margin: r2(p.budget - actualCost),
       pendingTasks: taskTotal - taskDone,
     },
   }
@@ -761,6 +773,9 @@ export async function approveBom(id: string) {
         data: { status: 'SUPERSEDED', effectiveTo: effectiveFrom },
       })
     }
+    // Freeze the routed standard cost on the revision (labour + minutes) so a
+    // later route change never silently rewrites an approved standard.
+    await freezeStandardCostTx(tx, id)
     const est = r2(bom.items.reduce((s, i) => s + i.estCost, 0))
     const updated = await tx.bom.update({
       where: { id },
@@ -928,6 +943,8 @@ export async function listWorkOrders(projectId?: string) {
         progressPct: active.length > 0 ? Math.round((done / active.length) * 100) : 0,
         labourCost: r2(active.reduce((s, t) => s + t.labourCost, 0)),
         materialCost: r2(active.reduce((s, t) => s + t.materialCost, 0)),
+        overheadCost: r2(active.reduce((s, t) => s + t.overheadCost, 0)),
+        actualCost: r2(active.reduce((s, t) => s + t.materialCost + t.labourCost + t.overheadCost, 0)),
       },
     }
   })
@@ -1132,7 +1149,7 @@ export async function updateWorkOrder(id: string, input: Partial<WorkOrderInput>
 /** WO completes only when every non-cancelled task is COMPLETED. */
 export async function completeWorkOrder(id: string) {
   return db.$transaction(async (tx) => {
-    const wo = await tx.workOrder.findUnique({ where: { id }, include: { tasks: { select: { status: true, materialCost: true, labourCost: true } }, productionReceipts: { where: { status: 'POSTED' }, select: { acceptedQty: true, actualCost: true } } } })
+    const wo = await tx.workOrder.findUnique({ where: { id }, include: { tasks: { select: { status: true, materialCost: true, labourCost: true, overheadCost: true } }, productionReceipts: { where: { status: 'POSTED' }, select: { acceptedQty: true, actualCost: true } } } })
     if (!wo) throw new BusinessError('Work order not found', 404)
     if (wo.status !== 'OPEN' && wo.status !== 'IN_PROGRESS') {
       throw new BusinessError(`Work order is ${wo.status}`)
@@ -1148,10 +1165,12 @@ export async function completeWorkOrder(id: string) {
     if (wo.productionReceipts.length === 0 || wo.productionReceipts.reduce((sum, receipt) => sum + receipt.acceptedQty, 0) <= EPS) {
       throw new BusinessError('Receive QC-accepted finished goods before closing this work order')
     }
-    const actualCost = r2(active.reduce((sum, task) => sum + task.materialCost + task.labourCost, 0))
+    const actualCost = r2(active.reduce((sum, task) => sum + task.materialCost + task.labourCost + task.overheadCost, 0))
     const settledCost = r2(wo.productionReceipts.reduce((sum, receipt) => sum + receipt.actualCost, 0))
     if (Math.abs(actualCost - settledCost) > 0.01) {
-      throw new BusinessError(`WIP is not fully settled: actual cost ${actualCost}, settled ${settledCost}`)
+      throw new BusinessError(
+        `WIP is not fully settled: actual cost ${actualCost} (material + labour + absorbed overhead), settled ${settledCost} — receive the remaining finished goods`
+      )
     }
     return tx.workOrder.update({ where: { id }, data: { status: 'COMPLETED', completedAt: new Date() } })
   })
@@ -1463,7 +1482,7 @@ export async function completeTask(id: string, input: CompleteTaskInput) {
       ])
     }
 
-    return tx.productionTask.update({
+    const updated = await tx.productionTask.update({
       where: { id },
       data: {
         actualQty: input.actualQty,
@@ -1480,6 +1499,19 @@ export async function completeTask(id: string, input: CompleteTaskInput) {
         notes: input.notes ?? task.notes,
       },
     })
+
+    // Factory overhead is absorbed AFTER material and labour are known (it is a
+    // percentage of prime cost) and inside this same transaction: a completion
+    // never leaves WIP without its absorbed share. Absorbed overhead is an
+    // accrual (OVHA), not a payment — see src/lib/costing.ts.
+    const overhead = await absorbTaskOverheadTx(tx, {
+      taskId: id,
+      taskNo: task.taskNo,
+      materialCost,
+      labourCost,
+      date: completedAt,
+    })
+    return { ...updated, overheadCost: overhead.overheadCost, overheadDate: overhead.date }
   })
 }
 

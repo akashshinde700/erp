@@ -77,6 +77,17 @@ export async function seedManufacturingDemo(deps: ManufacturingSeedDeps) {
   const anita = await createEmployee({ code: 'EMP005', name: 'Anita Deshmukh', role: 'WORKER', skill: 'Painter', machineNo: 'PNT-01', shift: 'GENERAL', hourlyRate: 100 })
   const vilas = await createEmployee({ code: 'EMP006', name: 'Vilas Shinde', role: 'WORKER', skill: 'Helper', shift: 'NIGHT', hourlyRate: 80 })
 
+  // ---------- Factory overhead policy (cost roll-up) ----------
+  // Absorption is off until a business sets a rate. The demo sets a believable
+  // fabrication-shop rate (shop overhead recovered across prime cost) so the
+  // costing view shows a real standard-vs-actual comparison instead of zeros.
+  // Every operation completed below therefore absorbs 18 % of its material +
+  // labour into WIP, credited to Factory Overhead Absorbed (OVHA).
+  const company = await db.company.findFirst({ select: { id: true, overheadRatePct: true } })
+  if (company && company.overheadRatePct === 0) {
+    await db.company.update({ where: { id: company.id }, data: { overheadRatePct: 18 } })
+  }
+
   // ---------- Work centres + shift calendars (capacity, routing, OEE) ----------
   // Six centres with a single general shift (09:00–18:00, Sunday off) so the
   // factory calendar is realistic enough for the capacity plan and OEE to say

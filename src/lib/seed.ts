@@ -451,6 +451,8 @@ export async function seedDatabase(force = false) {
       purchaseInvoices: 2, salesInvoices: 4, payments: 3,
       jobworkInwards: 2, jobCards: 2, certificates: 1,
       employees: 6, projects: 3, boms: 3, workOrders: 2, productionTasks: 15, workCenters: 6,
+      // Overhead absorption set by the manufacturing demo (18% of material + labour)
+      overheadRatePct: 18,
       inquiries: 2, blogPosts: 2,
     },
     sample: {

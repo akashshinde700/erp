@@ -18,7 +18,7 @@ export async function GET(req: Request) {
 }
 
 const bomLineSchema = z.object({
-  itemId: z.string().min(1, 'Material is required'),
+  itemId: z.string({ error: 'Material is required' }).min(1, 'Material is required'),
   grade: z.string().max(40).optional().nullable(),
   thickness: z.number().min(0).finite().max(10_000).default(0),
   length: z.number().min(0).finite().max(10_000_000).default(0),
@@ -34,7 +34,7 @@ const bomLineSchema = z.object({
 const bomSchema = z.object({
   projectId: z.string().min(1, 'Project is required'),
   /** Output item — the link MRP explodes demand through. */
-  itemId: z.string().min(1, 'Output item is required'),
+  itemId: z.string({ error: 'Output item is required' }).min(1, 'Output item is required'),
   productName: z.string().max(160).optional(),
   drawingRef: z.string().max(80).optional().nullable(),
   effectiveFrom: z.string().optional().nullable(),

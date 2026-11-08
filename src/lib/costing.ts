@@ -27,6 +27,7 @@ import { db } from './db'
 import { AccountCode, BusinessError, assertPeriodOpen, booksLock, postGl } from './accounting'
 import { EPS, r2 } from './erp'
 import { bomUnitsPerSet } from './bom-basis'
+import { tenantCompany } from './tenant'
 
 type Tx = Prisma.TransactionClient
 
@@ -111,7 +112,10 @@ export function costRollUp(input: {
 
 /** Company absorption rate (0 when unset — absorption off). */
 export async function overheadRatePct(client: Tx | typeof db = db): Promise<number> {
-  const company = await client.company.findFirst({ select: { overheadRatePct: true } })
+  // Company is not tenant-scoped by the Prisma extension: resolve the
+  // organisation of this request (never "the first company row", which can be
+  // the platform operator or another organisation).
+  const company = await tenantCompany(client)
   return company?.overheadRatePct ?? 0
 }
 

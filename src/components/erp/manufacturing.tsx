@@ -87,6 +87,7 @@ import {
 } from './api'
 import { EmptyState, ErrorState, KpiCard, Money, ProgressBar, SectionHeading, StatusBadge, TableSkeleton } from './bits'
 import { useErpUi } from './store'
+import { OverheadAdvisorTab } from './overhead-advisor'
 import { dateStr, money, qty as qtyFmt, r2 } from '@/lib/erp'
 import { cn } from '@/lib/utils'
 import { QualityWorkspace } from './quality-workspace'
@@ -169,6 +170,7 @@ export function ManufacturingView() {
           {tab === 'centers' && <WorkCentersTab />}
           {tab === 'oee' && <OeeTab />}
           {tab === 'costing' && <CostingTab />}
+          {tab === 'overhead' && <OverheadAdvisorTab />}
           {tab === 'quality' && <QualityWorkspace />}
         </div>
     </div>

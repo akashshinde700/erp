@@ -68,6 +68,14 @@ model Company {
   /// on every completed operation. 0 = off. Accrued in OVHA, never in a bank
   /// account; reversal is a contram posting (src/lib/costing.ts).
   overheadRatePct Float @default(0)
+  /// Overhead advisor inputs (optional): budgeted factory overhead and prime
+  /// cost for a year → predetermined absorption rate.
+  overheadBudgetAnnual  Float?
+  primeCostBudgetAnnual Float?
+  /// Who set the absorption rate, when and why (rate changes are policy).
+  overheadRateSetAt     DateTime?
+  overheadRateSetBy     String?
+  overheadRateReason    String?   @db.VarChar(300)
 
   users OrgUser[]
 
@@ -1866,6 +1874,9 @@ model LedgerAccount {
   group     String
   nature    String // ASSET | LIABILITY | EQUITY | INCOME | EXPENSE
   active    Boolean  @default(true)
+  /// Part of the factory-overhead pool the overhead advisor measures
+  /// (power, factory rent, depreciation of plant, consumables, supervision…).
+  isFactoryOverhead Boolean @default(false)
   createdBy String?
   createdAt DateTime @default(now())
 

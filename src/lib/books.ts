@@ -29,7 +29,7 @@ const SYSTEM_NATURE: Record<string, AccountNature> = {
   DEBT: 'ASSET', CRED: 'LIABILITY', STKV: 'ASSET', WIP: 'ASSET', LABP: 'LIABILITY', MFGV: 'EXPENSE', OVHA: 'LIABILITY',
   SALS: 'INCOME', JWIN: 'INCOME', PURC: 'EXPENSE', CGSTP: 'LIABILITY', SGSTP: 'LIABILITY', IGSTP: 'LIABILITY',
   CGSTI: 'ASSET', SGSTI: 'ASSET', IGSTI: 'ASSET', CASH: 'ASSET', BANK: 'ASSET', RND: 'EXPENSE', OPEN: 'EQUITY',
-  TDSP: 'LIABILITY', TDSR: 'ASSET', STADJ: 'EXPENSE',
+  TDSP: 'LIABILITY', TDSR: 'ASSET', STADJ: 'EXPENSE', OVRC: 'EXPENSE',
 }
 /** Accounts a manual journal may not touch (their balance must come from stock / production documents). */
 const NOT_JOURNALISABLE = new Set(['STKV', 'WIP'])

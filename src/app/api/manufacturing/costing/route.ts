@@ -2,6 +2,7 @@ import { ok, handleError } from '@/lib/api'
 import { manufacturingCostVarianceReport } from '@/lib/reports'
 import { overheadRatePct, bomStandardCost } from '@/lib/costing'
 import { db } from '@/lib/db'
+import { assertCompanyAccess } from '@/lib/platform'
 
 /**
  * GET /api/manufacturing/costing
@@ -10,6 +11,7 @@ import { db } from '@/lib/db'
  */
 export async function GET(req: Request) {
   try {
+    await assertCompanyAccess()
     const sp = new URL(req.url).searchParams
     const rate = await overheadRatePct()
     const bomId = sp.get('bomId')

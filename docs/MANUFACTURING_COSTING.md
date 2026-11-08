@@ -108,6 +108,36 @@ difference (`MFG_OVERHEAD_TRUEUP`).
   BATCH of 1 so existing integrations are unchanged. A revision inherits its
   basis; change it on the draft before approval.
 
+
+## Overhead advisor (Manufacturing → Overhead)
+
+The absorption rate is no longer a guess typed into the company profile. The
+advisor measures it from the books and keeps measuring it:
+
+- **Pool** — organisation expense ledgers tagged *factory overhead* (power,
+  factory rent, plant depreciation, consumables, supervision). Incurred overhead
+  = Σ (Dr − Cr) on those ledgers.
+- **Base** — prime cost (material + labour) of operations completed in the same
+  months.
+- **Rates** — *actual* (incurred ÷ prime over the window), *trend* (the same
+  ratio with recent months weighted more, α = 0.35, so a tariff change shows up
+  within weeks) and *budget* (budgeted annual overhead ÷ budgeted annual prime
+  cost — the predetermined rate, if entered).
+- **Recommendation** — budget if entered (the standard method), otherwise trend,
+  rounded to 0.5 %, with a confidence grade (HIGH / MEDIUM / LOW) and the reasons.
+- **Tracker** — absorbed vs incurred per month (over/under-absorption) and the
+  balance still parked in OVHA.
+- **What-if** — for a candidate rate: the true-up open work orders would post and
+  the projected monthly over/under-absorption.
+- **Period-end clearing** — Dr *Factory Overhead Absorbed* (OVHA) / Cr *Factory
+  Overhead Recovered* (OVRC, contra-expense) for the parked balance. P&L then
+  shows incurred − recovered = the real under/over-absorption. Idempotent per
+  date; refuses a locked period.
+
+Applying a rate is an **OWNER** action with a written reason; who/when/why is
+stored on the company and in the audit trail. Changing it from the company
+profile is OWNER-only too. Reading the advisor never changes anything.
+
 ## Migration
 
 `prisma/migrations/20261112100000_manufacturing_cost_rollup/migration.sql` —

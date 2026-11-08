@@ -84,6 +84,18 @@ async function main() {
   check('no orphan invoice lines or stock rows', Number(orphanSales.c) === 0 && Number(orphanStock.c) === 0, `invoiceLines=${orphanSales.c} stockRows=${orphanStock.c}`)
   const receipt = await db.get("SELECT COUNT(*) c, ROUND(COALESCE(SUM(acceptedQty),0),2) q FROM ProductionReceipt WHERE status='POSTED'")
   check('seeded completed work order has a posted production receipt', Number(receipt.c) >= 1 && Number(receipt.q) > 0, `receipts=${receipt.c} acceptedQty=${receipt.q}`)
+  // Routing/capacity/OEE/costing data must survive the drill: these tables are
+  // new, hang off work orders and BOM revisions, and are exactly what a restore
+  // ordering mistake (work centres inserted after the tasks that reference them)
+  // destroys. Zero rows here means the seed did not build the demo shop floor.
+  const ops = await db.get(`SELECT
+      (SELECT COUNT(*) FROM WorkCenter) centers,
+      (SELECT COUNT(*) FROM ShiftCalendar) calendars,
+      (SELECT COUNT(*) FROM RoutingOperation) routings,
+      (SELECT COUNT(*) FROM ProductionTask WHERE workCenterId IS NOT NULL) routedTasks,
+      (SELECT ROUND(COALESCE(SUM(overheadCost),0),2) FROM ProductionTask) overhead`)
+  check('seed builds a routed shop floor (centres, calendars, routings, routed tasks)', Number(ops.centers) >= 6 && Number(ops.calendars) >= 6 && Number(ops.routings) >= 3 && Number(ops.routedTasks) >= 5, JSON.stringify(ops))
+  check('seeded operations absorbed factory overhead', Number(ops.overhead) > 0, `absorbed=${ops.overhead}`)
 
   // 2. backup covers every table
   const bk = await api('GET', '/api/backup')
@@ -111,6 +123,14 @@ async function main() {
   const liveAfter = await tableCounts()
   const d2 = diffCounts(snapCounts, liveAfter).filter((x) => !x.startsWith('AuditLog: '))
   check('after restore every table count equals the snapshot', d2.length === 0, d2.join('; ') || 'all equal')
+  // The FK that broke restore: a task's work centre must still resolve after a
+  // round trip, otherwise the rows were dropped or inserted in the wrong order.
+  const routedAfter = await db.get(`SELECT COUNT(*) tasks, COUNT(workCenterId) withCenter,
+      (SELECT COUNT(*) FROM RoutingOperation) routings,
+      (SELECT COUNT(*) FROM ShiftCalendar) calendars,
+      (SELECT ROUND(COALESCE(SUM(overheadCost),0),2) FROM ProductionTask) overhead FROM ProductionTask`)
+  check('restore keeps routed tasks, routings and calendars', Number(routedAfter.routings) >= 3 && Number(routedAfter.calendars) >= 6 && Number(routedAfter.withCenter) >= 5, JSON.stringify(routedAfter))
+  check('restore keeps absorbed overhead on the operations', Number(routedAfter.overhead) > 0, `absorbed=${routedAfter.overhead}`)
   const backId = await db.get('SELECT COUNT(*) c FROM SalesInvoice WHERE id=?', [firstId])
   check('restored rows carry the original ids', Number(backId.c) === 1, `snapshot invoice id present=${backId.c}`)
   const sampleAfter = await db.all('SELECT invoiceNo, grandTotal FROM SalesInvoice ORDER BY invoiceNo')

@@ -3,7 +3,7 @@ import { db } from '@/lib/db'
 import { logAudit } from '@/lib/audit'
 import { requirePlatformAdmin } from '@/lib/platform'
 import { runAsTenant } from '@/lib/tenant'
-import { EARLY_RESTORE_MODELS, WORKFLOW_MODELS_CHILDREN_FIRST, WORKFLOW_MODELS_PARENTS_FIRST, delegate } from '@/lib/backup-tables'
+import { EARLY_BUSINESS_MODELS, EARLY_RESTORE_MODELS, WORKFLOW_MODELS_CHILDREN_FIRST, WORKFLOW_MODELS_PARENTS_FIRST, delegate } from '@/lib/backup-tables'
 
 /**
  * POST /api/backup/restore — {confirm:'RESTORE', snapshot}
@@ -178,6 +178,17 @@ export async function POST(req: Request) {
         if (d.certificates?.length) await tx.jobworkCertificate.createMany({ data: d.certificates as never })
 
         // ---- manufacturing chain (v3) ----
+        // Work centres come BEFORE the work-order / task rows, even though they
+        // sit last in WORKFLOW_MODELS_CHILDREN_FIRST: ProductionTask.workCenterId
+        // is a real FK, so inserting tasks first fails with P2003 and a restore
+        // of any routed shop floor dies. They are inserted here and skipped by
+        // the generic workflow loop below. Their children (shift calendar,
+        // shifts, holidays, routing, downtime) have no legacy rows pointing at
+        // them, so those still restore parents-first there.
+        for (const model of EARLY_BUSINESS_MODELS) {
+          const rows = (d.workflow ?? {})[model]
+          if (Array.isArray(rows) && rows.length) await delegate(tx, model).createMany({ data: rows })
+        }
         if (d.employees?.length) await tx.employee.createMany({ data: d.employees as never })
         if (d.projects?.length) await tx.project.createMany({ data: d.projects as never })
         for (const b of (d.boms ?? []) as { items?: unknown[] }[]) {
@@ -204,6 +215,7 @@ export async function POST(req: Request) {
         // parent (company, parties, items, warehouses, payments, work orders) ----
         const workflow = d.workflow ?? {}
         for (const model of WORKFLOW_MODELS_PARENTS_FIRST) {
+          if ((EARLY_BUSINESS_MODELS as readonly string[]).includes(model)) continue
           const rows = workflow[model]
           if (Array.isArray(rows) && rows.length) await delegate(tx, model).createMany({ data: rows })
         }

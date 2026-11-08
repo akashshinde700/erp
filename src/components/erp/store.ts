@@ -7,6 +7,8 @@
 
 import { create } from 'zustand'
 
+import type { MfgTab } from './mfg-sections'
+
 export type ErpView =
   | 'dashboard'
   | 'sales'
@@ -29,13 +31,19 @@ export type ErpView =
 export interface ErpUiState {
   view: ErpView
   params: Record<string, string>
+  /** Last-selected sub-section inside "Own Projects & Manufacturing"
+      (persists across mounts; the sidebar tree renders from the same value). */
+  mfgTab: MfgTab
   setView: (view: ErpView, params?: Record<string, string>) => void
+  setMfgTab: (tab: MfgTab) => void
 }
 
 export const useErpUi = create<ErpUiState>((set) => ({
   view: 'dashboard',
   params: {},
+  mfgTab: 'projects',
   setView: (view, params = {}) => set({ view, params }),
+  setMfgTab: (tab) => set({ mfgTab: tab }),
 }))
 
 /**

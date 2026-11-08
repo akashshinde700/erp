@@ -11,6 +11,7 @@ import { toast } from 'sonner'
 import {
   BarChart3,
   Boxes,
+  ChevronDown,
   Calculator,
   Database,
   Factory,
@@ -36,11 +37,12 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
-import { api, apiPost, useApi, useMounted, type AuthStatus, type Company, type SessionInfo } from './api'
+import { api, apiPost, useApi, useMounted, type AuthStatus, type Company, type ManufacturingStats, type SessionInfo } from './api'
 import { CompanyProvider } from './company'
 import { LoginView } from './login'
 import { OrgPortal } from './portal'
 import { useErpUi, type ErpView } from './store'
+import { MFG_SECTION_GROUPS, type MfgTab } from './mfg-sections'
 import { GOTO_KEYS, isTypingTarget, pushRecent, setCreatePreset } from './nav'
 import { CommandPalette, ShortcutsHelpDialog } from './palette'
 import { cn } from '@/lib/utils'
@@ -99,6 +101,16 @@ const NAV_GROUPS: { group: string; entries: NavEntry[] }[] = [
 
 function NavList({ onNavigate }: { onNavigate?: () => void }) {
   const { view, setView } = useErpUi()
+  // The manufacturing sub-section tree expands under its sidebar entry.
+  // Auto-opens whenever the manufacturing module is on screen; the user can
+  // collapse it manually without leaving the module.
+  const [mfgOpen, setMfgOpen] = useState(false)
+  useEffect(() => {
+    // Accordion behaviour: entering the module opens the tree, leaving it
+    // collapses the tree so the rest of the sidebar stays compact. A manual
+    // toggle while inside the module sticks (view doesn't change).
+    setMfgOpen(view === 'manufacturing' || view === 'project-detail')
+  }, [view])
   const isActive = (entryView: ErpView) =>
     view === entryView || view === `${entryView}-detail` || (entryView === 'manufacturing' && view === 'project-detail')
   return (
@@ -110,6 +122,50 @@ function NavList({ onNavigate }: { onNavigate?: () => void }) {
           </p>
           {g.entries.map((e) => {
             const active = isActive(e.view)
+            if (e.view === 'manufacturing') {
+              return (
+                <div key={e.view}>
+                  <div className="flex items-stretch">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setView('manufacturing')
+                        setMfgOpen(true)
+                        onNavigate?.()
+                      }}
+                      aria-current={active ? 'page' : undefined}
+                      aria-expanded={mfgOpen}
+                      aria-controls="mfg-section-tree"
+                      className={cn(
+                        'flex min-h-11 min-w-0 flex-1 items-center gap-3 rounded-l-md px-3 text-sm text-sidebar-foreground/80 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+                        active && 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
+                      )}
+                    >
+                      <e.icon className="size-4 shrink-0" aria-hidden />
+                      <span className="truncate">{e.label}</span>
+                      {active ? <span className="ml-auto size-1.5 shrink-0 rounded-full bg-sidebar-primary" aria-hidden /> : null}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMfgOpen((o) => !o)}
+                      aria-expanded={mfgOpen}
+                      aria-label={mfgOpen ? 'Collapse manufacturing sections' : 'Expand manufacturing sections'}
+                      className={cn(
+                        'flex w-9 shrink-0 items-center justify-center rounded-r-md text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+                        active && 'bg-sidebar-accent text-sidebar-accent-foreground'
+                      )}
+                    >
+                      <ChevronDown className={cn('size-4 transition-transform duration-200', !mfgOpen && '-rotate-90')} aria-hidden />
+                    </button>
+                  </div>
+                  {mfgOpen ? (
+                    <div id="mfg-section-tree">
+                      <MfgSectionTree onNavigate={onNavigate} />
+                    </div>
+                  ) : null}
+                </div>
+              )
+            }
             return (
               <button
                 key={e.view}
@@ -133,6 +189,85 @@ function NavList({ onNavigate }: { onNavigate?: () => void }) {
         </div>
       ))}
     </nav>
+  )
+}
+
+// ---------- manufacturing sub-section tree (expanded inside the sidebar) ----------
+
+/** Live count chip for a manufacturing sub-section (only floor-critical ones). */
+function mfgBadgeFor(value: MfgTab, s: ManufacturingStats | null): { count: number; attention?: boolean } | null {
+  if (!s) return null
+  switch (value) {
+    case 'projects':
+      return s.projects.running > 0 ? { count: s.projects.running } : null
+    case 'work-orders': {
+      const n = s.workOrders.open + s.workOrders.inProgress
+      return n > 0 ? { count: n } : null
+    }
+    case 'tasks': {
+      const n = s.tasks.assigned + s.tasks.inProgress
+      return n > 0 ? { count: n } : null
+    }
+    case 'pending':
+      return s.tasks.pending > 0 ? { count: s.tasks.pending, attention: true } : null
+    default:
+      return null
+  }
+}
+
+/**
+ * Grouped sub-section tree shown under the "Own Projects & Mfg" sidebar entry
+ * (and inside the mobile drawer). Lazy-mounted only while expanded, so the
+ * stats fetch happens on demand.
+ */
+function MfgSectionTree({ onNavigate }: { onNavigate?: () => void }) {
+  const { mfgTab, setMfgTab, setView } = useErpUi()
+  const stats = useApi<ManufacturingStats | null>('/api/manufacturing/stats')
+  const s = stats.data ?? null
+  return (
+    <div role="group" aria-label="Manufacturing sections" className="ml-[19px] border-l border-sidebar-border/70 pb-1 pl-2 pt-0.5">
+      {MFG_SECTION_GROUPS.map((group) => (
+        <div key={group.label} className="pt-1.5 first:pt-1">
+          <p className="px-2 pb-0.5 text-[9.5px] font-semibold uppercase tracking-[0.16em] text-sidebar-foreground/40">
+            {group.label}
+          </p>
+          {group.items.map((item) => {
+            const active = mfgTab === item.value
+            const badge = mfgBadgeFor(item.value, s)
+            const Icon = item.icon
+            return (
+              <button
+                key={item.value}
+                type="button"
+                aria-current={active ? 'page' : undefined}
+                onClick={() => {
+                  setView('manufacturing')
+                  setMfgTab(item.value)
+                  onNavigate?.()
+                }}
+                className={cn(
+                  'flex h-8 w-full items-center gap-2 rounded-md px-2 text-[12.5px] text-sidebar-foreground/75 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring',
+                  active && 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
+                )}
+              >
+                <Icon className="size-3.5 shrink-0" aria-hidden />
+                <span className="truncate">{item.label}</span>
+                {badge ? (
+                  <span
+                    className={cn(
+                      'ml-auto inline-flex min-w-5 items-center justify-center rounded-full px-1.5 text-[10px] font-semibold tabular-nums',
+                      badge.attention ? 'bg-amber-500/20 text-amber-700 dark:text-amber-300' : 'bg-sidebar-foreground/10 text-sidebar-foreground/60'
+                    )}
+                  >
+                    {badge.count}
+                  </span>
+                ) : null}
+              </button>
+            )
+          })}
+        </div>
+      ))}
+    </div>
   )
 }
 

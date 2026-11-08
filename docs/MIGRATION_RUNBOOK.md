@@ -221,3 +221,29 @@ company, every counter is prefixed, Dr = Cr, no negative stock. Expect
 Verified 2026-11-08 on a simulated live dump (schema + data as of `d1ef1f0`,
 history for the first three migrations): PASSED, three migrations in 20 s.
 **Not yet run on the real live dump.**
+
+### One command on the server
+
+`scripts/rehearse-on-server.sh` does all of the above as the site user:
+
+- it picks the newest `~/backups/predeploy/*.sql.gz`;
+- it clones `main` into `~/tmp/rehearsal-src`, outside the live site, and runs `npm ci`;
+- it builds the rehearsal URL from the live `.env` credentials with a different database name. The URL is never printed.
+
+```bash
+# DB user may create databases: uses and drops <live_db>_rehearsal
+curl -fsSL https://raw.githubusercontent.com/akashshinde700/erp/main/scripts/rehearse-on-server.sh | bash
+
+# CloudPanel (site DB users usually cannot CREATE DATABASE): first create an
+# EMPTY database, e.g. erp_rehearsal, for the same DB user in CloudPanel, then
+curl -fsSL https://raw.githubusercontent.com/akashshinde700/erp/main/scripts/rehearse-on-server.sh | REHEARSAL_DB=erp_rehearsal bash -s -- --use-empty
+```
+
+`--use-empty` accepts an existing database only if it has no tables. When the
+run ends, it drops the tables it loaded and checks that none are left.
+
+Verified 2026-11-09:
+
+- on a simulated pre-parity live dump (6 migrations applied, one operating company): both modes PASSED, and `20261109090000_mapsoft_parity` applied in 9.6 s;
+- an existing database without the flag, and a non-empty database with it, are both refused;
+- the source database was untouched.

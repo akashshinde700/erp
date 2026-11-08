@@ -17,7 +17,7 @@
  *
  * Usage (on the server or any host with the mysql client + node_modules):
  *   STAGING_DATABASE_URL=mysql://user:pass@127.0.0.1:3306/forgeerp_staging_rehearsal \
- *     node scripts/staging-rehearsal.mjs ~/backups/predeploy/<stamp>.sql.gz [--keep]
+ *     node scripts/staging-rehearsal.mjs ~/backups/predeploy/<stamp>.sql.gz [--keep] [--use-empty]
  *
  * Safety: the target database name must contain staging/rehearsal/tmp/test/audit
  * and must not exist yet: the script creates it, and drops only a database it
@@ -35,6 +35,10 @@ import { openAuditDb } from '../tests/audit-db.mjs'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 const [dumpPath, ...flags] = process.argv.slice(2)
 const KEEP = flags.includes('--keep')
+// --use-empty: the database already exists and is EMPTY (e.g. created in
+// CloudPanel, whose site DB users cannot CREATE DATABASE). The run then drops
+// only the tables it loaded and leaves the empty database behind.
+const USE_EMPTY = flags.includes('--use-empty')
 const URL_ = process.env.STAGING_DATABASE_URL
 if (!dumpPath || !URL_) { console.error('usage: STAGING_DATABASE_URL=mysql://… node scripts/staging-rehearsal.mjs <dump.sql[.gz]> [--keep]'); process.exit(2) }
 if (!existsSync(dumpPath)) { console.error(`dump not found: ${dumpPath}`); process.exit(2) }
@@ -62,11 +66,19 @@ function prisma(args) {
 
 let db
 let created = false // only a database this run created is ever dropped
+let loadedIntoEmpty = false // --use-empty: only the tables this run loaded are dropped
 try {
   step(`load ${dumpPath} into ${DB}`)
-  if (sql(`SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name='${DB}'`) !== '0') throw new Error(`${DB} already exists — give a database name that does not exist yet`)
-  sql(`CREATE DATABASE \`${DB}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`)
-  created = true
+  const exists = sql(`SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name='${DB}'`) !== '0'
+  if (exists && !USE_EMPTY) throw new Error(`${DB} already exists — give a database name that does not exist yet (or --use-empty for an empty pre-created one)`)
+  if (exists) {
+    const n = sql(`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${DB}'`)
+    if (n !== '0') throw new Error(`${DB} is not empty (${n} tables) — --use-empty needs an empty database`)
+    loadedIntoEmpty = true
+  } else {
+    sql(`CREATE DATABASE \`${DB}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`)
+    created = true
+  }
   await new Promise((resolve, reject) => {
     const child = spawn(MYSQL, [`--defaults-extra-file=${cnf}`, DB], { stdio: ['pipe', 'inherit', 'pipe'] })
     let err = ''
@@ -135,6 +147,14 @@ try {
 } finally {
   try { await db?.close() } catch { /* already closed */ }
   if (created && !KEEP) { try { sql(`DROP DATABASE IF EXISTS \`${DB}\``); console.log(`\n(dropped ${DB}; pass --keep to inspect it)`) } catch (e) { console.log(`could not drop ${DB}: ${e.message}`) } }
+  if (loadedIntoEmpty && !KEEP) {
+    try {
+      const names = sql(`SELECT table_name FROM information_schema.tables WHERE table_schema='${DB}'`).split(/\r?\n/).map((t) => t.trim()).filter(Boolean)
+      if (names.length) sql(`SET FOREIGN_KEY_CHECKS=0; ${names.map((t) => `DROP TABLE \`${t}\``).join('; ')}; SET FOREIGN_KEY_CHECKS=1`, DB)
+      const left = sql(`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='${DB}'`)
+      check(`rehearsal tables removed from ${DB}`, left === '0', `${names.length} dropped, ${left} left (pass --keep to inspect instead)`)
+    } catch (e) { check(`rehearsal tables removed from ${DB}`, false, e.message) }
+  }
   rmSync(tmp, { recursive: true, force: true })
 }
 console.log(`\n=== staging rehearsal: ${failures === 0 ? 'PASSED' : `${failures} FAILED`} ===`)

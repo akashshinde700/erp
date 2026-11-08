@@ -56,6 +56,33 @@ async function smallTargets(page) {
     .map((el) => `${(el.getAttribute('aria-label') || el.textContent || el.tagName).trim().slice(0, 30)} ${Math.round(el.getBoundingClientRect().width)}x${Math.round(el.getBoundingClientRect().height)}`))
 }
 
+/** Print layout check: only the .print-area is visible, it starts at the page top, and the PDF has a sane page count. */
+async function printCheck(page, label, sel, textRe, maxPages) {
+  const vp0 = page.viewportSize()
+  await page.setViewportSize({ width: 733, height: 1050 }); await page.waitForTimeout(300)
+  await page.emulateMedia({ media: 'print' }); await page.waitForTimeout(400)
+  const info = await page.evaluate((sel) => {
+    const el = document.querySelector(sel)
+    if (!el) return null
+    const r = el.getBoundingClientRect()
+    const leaks = [...document.querySelectorAll('aside, nav, header, main h1')].filter((e) => !el.contains(e) && e.getBoundingClientRect().width > 0 && getComputedStyle(e).visibility === 'visible').length
+    return { vis: getComputedStyle(el).visibility, top: Math.round(r.top), left: Math.round(r.left), w: Math.round(r.width), text: el.innerText.slice(0, 400), leaks }
+  }, sel)
+  await shot(page, `print-${label}`)
+  check(`${label} print: only the document is visible (app chrome hidden)`, info?.vis === 'visible' && info.leaks === 0, JSON.stringify(info && { vis: info.vis, leaks: info.leaks }))
+  check(`${label} print: document starts at the top-left of the page`, !!info && info.top >= -2 && info.top <= 40 && info.left >= -2 && info.left <= 40 && info.w > 300, JSON.stringify(info && { top: info.top, left: info.left, w: info.w }))
+  check(`${label} print: shows the expected content`, !!info && textRe.test(info.text), (info?.text ?? '').slice(0, 140))
+  // page.pdf() renders with the emulated media, so generate it while print is active
+  const pdf = await page.pdf({ format: 'A4', printBackground: true }).catch((e) => { check(`${label} PDF renders`, false, String(e)); return null })
+  await page.emulateMedia({ media: 'screen' })
+  if (vp0) await page.setViewportSize(vp0)
+  if (pdf) {
+    writeFileSync(join(OUT, `${scope}-${label}.pdf`), pdf)
+    const pages = Number(pdf.toString('latin1').match(/\/Type\s*\/Pages[^>]*?\/Count\s+(\d+)/)?.[1] ?? pdf.toString('latin1').match(/\/Count\s+(\d+)/)?.[1] ?? 0)
+    check(`${label} PDF renders on 1-${maxPages} A4 page(s)`, pages >= 1 && pages <= maxPages, `pages=${pages} bytes=${pdf.length}`)
+  }
+}
+
 async function runViewport(browser, vp) {
   scope = vp.name
   const ctx = await browser.newContext({ viewport: { width: vp.width, height: vp.height }, isMobile: vp.mobile, hasTouch: vp.mobile, locale: 'en-IN', timezoneId: 'Asia/Kolkata' })
@@ -97,9 +124,10 @@ async function runViewport(browser, vp) {
   if (vp.mobile) check('touch targets in main content are at least 40x40 px', small.size === 0, `${small.size} small: ${[...small].join(' | ')}`)
 
   // workflow workspaces
-  const ws = [['Sales', 'Quote to Cash', /quote/i], ['Purchase', 'Procurement & Returns', /procurement/i], ['Inventory', 'Lots & Serials', /lot|serial|batch/i], ['Projects & Mfg', 'Quality', /quality|inspection/i]]
-  for (const [mod, tab, re] of ws) {
+  const ws = [['Sales', 'Quote to Cash', /quote/i], ['Purchase', 'Procurement & Returns', /procurement/i], ['Inventory', 'Lots & Serials', /lot|serial|batch/i], ['Projects & Mfg', 'Quality', /quality|inspection/i], ['Projects & Mfg', 'FG Receipts', /work order|receipt/i], ['Accounting', 'Advances & Refunds', /advance|refund|schedule/i], ['Purchase', 'RFQ & Comparison', /RFQ|quotation/i, 'Procurement & Returns']]
+  for (const [mod, tab, re, parent] of ws) {
     await goModule(page, mod)
+    if (parent) { await page.getByRole('tab', { name: new RegExp(parent, 'i') }).first().click().catch(() => {}); await settle(page, 700) }
     const t = page.getByRole('tab', { name: new RegExp(tab.replace('&', '&'), 'i') }).first()
     const has = await t.count()
     if (!has) { check(`${mod} → ${tab} workspace tab exists`, false, 'tab not found'); continue }
@@ -188,6 +216,60 @@ async function runViewport(browser, vp) {
       const n = Number((await db.get('SELECT COUNT(*) c FROM Party WHERE code=?', [code])).c)
       check('triple-clicking Save creates exactly one record', n === 1, `rows=${n}`)
     } else check('new party button present', false)
+  }
+
+  // new workspaces: guided dialogs refuse incomplete input; print layouts (desktop)
+  if (vp.name === 'desktop-1440') {
+    await goModule(page, 'Purchase')
+    await page.getByRole('tab', { name: /Procurement & Returns/i }).first().click().catch(() => {}); await settle(page, 700)
+    await page.getByRole('tab', { name: /RFQ & Comparison/i }).first().click().catch(() => {}); await settle(page, 700)
+    await page.getByRole('button', { name: /^New RFQ$/ }).first().click().catch(() => {}); await settle(page, 500)
+    const rfqDlg = page.locator('[role=dialog]').first()
+    const rfqText = await rfqDlg.innerText().catch(() => '')
+    const createDisabled = await rfqDlg.getByRole('button', { name: /Create RFQ/ }).isDisabled().catch(() => false)
+    check('New RFQ dialog explains what is missing and blocks Create', /supplier|line|requisition/i.test(rfqText) && createDisabled, rfqText.slice(0, 160).replace(/\s+/g, ' '))
+    await shot(page, 'rfq-new')
+    await page.keyboard.press('Escape'); await rfqDlg.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {})
+
+    await goModule(page, 'Projects & Mfg')
+    await page.getByRole('tab', { name: /FG Receipts/i }).first().click().catch(() => {}); await settle(page, 700)
+    const recv = page.getByRole('button', { name: /Receive FG/ })
+    const nRecv = await recv.count()
+    let enabled = null
+    for (let i = 0; i < nRecv; i++) if (await recv.nth(i).isEnabled().catch(() => false)) { enabled = recv.nth(i); break }
+    if (enabled) {
+      await enabled.click(); await settle(page, 600)
+      const wiz = page.locator('[role=dialog]').first()
+      const wizText = await wiz.innerText().catch(() => '')
+      check('Receive FG opens the step-by-step receipt wizard', /step|output|quantit/i.test(wizText), wizText.slice(0, 160).replace(/\s+/g, ' '))
+      await shot(page, 'fg-wizard')
+      await page.keyboard.press('Escape'); await wiz.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {})
+    } else {
+      const title = nRecv ? await recv.first().getAttribute('title') : null
+      check('FG Receipts explains why receiving is blocked (or shows an empty state)', nRecv === 0 ? /no active work orders/i.test(await page.locator('main').innerText()) : !!title, `buttons=${nRecv} title=${title}`)
+    }
+
+    // GST invoice print
+    await goModule(page, 'Sales')
+    await page.getByRole('tab', { name: /sales invoices/i }).first().click().catch(() => {}); await settle(page, 600)
+    const view = page.locator('main table tbody tr').first().locator('button[aria-label^="View"], a').first()
+    if (await view.count()) {
+      await view.click({ timeout: 10000 }).catch(async () => { await view.evaluate((el) => el.click()) }); await settle(page, 900)
+      await printCheck(page, 'invoice', '.print-area', /tax invoice|invoice/i, 3)
+      await page.keyboard.press('Escape').catch(() => {})
+    } else check('a sales invoice is available for the print check', false)
+
+    // refund acknowledgement print
+    await goModule(page, 'Accounting')
+    await page.getByRole('tab', { name: /Advances & Refunds/i }).first().click().catch(() => {}); await settle(page, 800)
+    const ack = page.getByRole('button', { name: /acknowledg/i }).first()
+    const refundRows = db ? Number((await db.get('SELECT COUNT(*) c FROM RefundAllocation')).c) : 0
+    if (refundRows) await ack.waitFor({ state: 'visible', timeout: 15000 }).catch(() => {})
+    if (await ack.count()) {
+      await ack.click(); await settle(page, 900)
+      await printCheck(page, 'refund-ack', '#refund-ack', /refund|sum of/i, 1)
+      await page.keyboard.press('Escape'); await page.locator('[role=dialog]').first().waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {})
+    } else check('refund acknowledgement print (skipped only when the database has no refunds)', refundRows === 0, `refund rows in DB=${refundRows}`)
   }
 
   check('no browser console errors', consoleErrors.length === 0, consoleErrors.slice(0, 4).join(' | '))

@@ -838,7 +838,7 @@ export async function outstandingReport() {
   const advanceByParty = new Map<string, number>() // + = customer advance (RECEIPT), − = supplier advance (PAYMENT)
   for (const p of payments) {
     const allocated = r2(p.allocations.reduce((s, a) => s + a.amount, 0))
-    const unallocated = r2(p.amount - allocated)
+    const unallocated = r2(p.amount + (p.tdsAmount ?? 0) - allocated)
     if (Math.abs(unallocated) < 0.004) continue
     const sign = p.type === 'RECEIPT' ? 1 : -1
     advanceByParty.set(p.partyId, r2((advanceByParty.get(p.partyId) ?? 0) + sign * unallocated))
@@ -1084,7 +1084,7 @@ export async function dashboardData() {
   const advanceByParty = new Map<string, number>() // + = customer advance (RECEIPT), − = supplier advance (PAYMENT)
   for (const p of paymentsAll) {
     const allocated = r2(p.allocations.reduce((s, a) => s + a.amount, 0))
-    const unallocated = r2(p.amount - allocated)
+    const unallocated = r2(p.amount + (p.tdsAmount ?? 0) - allocated)
     if (Math.abs(unallocated) < 0.004) continue
     const sign = p.type === 'RECEIPT' ? 1 : -1
     advanceByParty.set(p.partyId, r2((advanceByParty.get(p.partyId) ?? 0) + sign * unallocated))

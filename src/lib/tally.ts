@@ -266,12 +266,15 @@ export function buildPaymentVoucher(
     refNo?: string | null
     notes?: string | null
     status: string
+    tdsAmount?: number | null
     party?: { code: string; name: string } | null
   },
   company: TallyCompany
 ): TallyVoucher {
   const L = ledgerNames(company)
   if (p.status === 'CANCELLED') throw new BusinessError(`${p.paymentNo} is cancelled — export blocked`, 409)
+  const tds = r2(p.tdsAmount ?? 0)
+  const settled = r2(p.amount + tds)
   const date = utcYmd(p.date)
   if (!date) throw new BusinessError(`${p.paymentNo} has an unusable date`, 409)
   const isReceipt = p.type === 'RECEIPT'
@@ -279,13 +282,15 @@ export function buildPaymentVoucher(
   const partyName = p.party?.name || p.party?.code || 'Party'
   const entries: TallyEntry[] = isReceipt
     ? [
-        { ledger: partyName, amount: r2(p.amount), isDebit: true, isParty: true, billRef: p.paymentNo },
+        { ledger: partyName, amount: settled, isDebit: true, isParty: true, billRef: p.paymentNo },
         { ledger: moneyLedger, amount: r2(p.amount), isDebit: false, isParty: false },
       ]
     : [
-        { ledger: partyName, amount: r2(p.amount), isDebit: false, isParty: true, billRef: p.paymentNo },
+        { ledger: partyName, amount: settled, isDebit: false, isParty: true, billRef: p.paymentNo },
         { ledger: moneyLedger, amount: r2(p.amount), isDebit: true, isParty: false },
       ]
+  // TDS sits on the money side: receivable on receipts, payable on payments
+  if (tds > 0) entries.push({ ledger: isReceipt ? 'TDS Receivable' : 'TDS Payable', amount: tds, isDebit: !isReceipt, isParty: false })
   const narrationParts = [p.paymentNo, isReceipt ? 'Receipt' : 'Payment']
   if (p.refNo) narrationParts.push(`Ref: ${p.refNo}`)
   if (p.notes) narrationParts.push(String(p.notes).slice(0, 180))
@@ -299,8 +304,11 @@ export function buildPaymentVoucher(
     narration: narrationParts.join(' | '),
     entries,
     items: [],
-    totals: { taxable: r2(p.amount), cgst: 0, sgst: 0, igst: 0, roundOff: 0, grandTotal: r2(p.amount) },
-    warnings: p.mode !== 'CASH' ? ['Bank ledger name is a default — map it to your bank ledger in Tally'] : [],
+    totals: { taxable: settled, cgst: 0, sgst: 0, igst: 0, roundOff: 0, grandTotal: settled },
+    warnings: [
+      ...(p.mode !== 'CASH' ? ['Bank ledger name is a default — map it to your bank ledger in Tally'] : []),
+      ...(tds > 0 ? [`TDS ${tds} posts to the "${isReceipt ? 'TDS Receivable' : 'TDS Payable'}" ledger — create it in Tally`] : []),
+    ],
   }
 }
 

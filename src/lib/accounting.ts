@@ -49,12 +49,17 @@ export const ACCOUNTS = {
   BANK: { code: 'BANK', name: 'Bank Account', group: 'Current Assets' },
   RND: { code: 'RND', name: 'Round Off', group: 'Indirect Income / Expenses' },
   OPEN: { code: 'OPEN', name: 'Opening Balance Equity', group: 'Equity' },
+  TDSP: { code: 'TDSP', name: 'TDS Payable', group: 'Duties & Taxes' },
+  TDSR: { code: 'TDSR', name: 'TDS Receivable', group: 'Current Assets' },
+  STADJ: { code: 'STADJ', name: 'Stock Adjustment (Shortage / Excess)', group: 'Indirect Income / Expenses' },
 } as const
 
 export type AccountCode = keyof typeof ACCOUNTS
 
 export interface GlRowInput {
-  account: AccountCode
+  /** A system account code, or an organisation ledger code (LedgerAccount) together with its accountName. */
+  account: AccountCode | (string & {})
+  accountName?: string
   partyId?: string | null
   debit?: number
   credit?: number
@@ -96,16 +101,19 @@ export async function postGl(
   isCancelled = false
 ): Promise<void> {
   assertBalanced(rows)
+  await assertPeriodOpen(tx, voucher.date)
   for (const r of rows) {
     const debit = r2(r.debit ?? 0)
     const credit = r2(r.credit ?? 0)
     if (debit === 0 && credit === 0) continue
-    const meta = ACCOUNTS[r.account]
+    const meta = (ACCOUNTS as Record<string, { code: string; name: string }>)[r.account]
+    const accountName = meta?.name ?? r.accountName
+    if (!accountName) throw new BusinessError(`Unknown ledger account ${r.account}`)
     await tx.accountLedger.create({
       data: {
         date: voucher.date,
-        account: meta.code,
-        accountName: meta.name,
+        account: meta?.code ?? r.account,
+        accountName,
         partyId: r.partyId ?? null,
         debit,
         credit,
@@ -132,8 +140,14 @@ export async function cancelGlForVoucher(
     where: { voucherType, voucherNo, isCancelled: false },
   })
   if (originals.length === 0) return
+  const lock = await booksLock(tx)
+  const earliest = originals.reduce((d, o) => (o.date < d ? o.date : d), originals[0].date)
+  if (lock && earliest <= lock) {
+    throw new BusinessError(`Books are locked up to ${lock.toISOString().slice(0, 10)}: ${voucherNo} is in a closed period and cannot be cancelled. Post a correcting journal in the open period instead.`, 409)
+  }
   const reversed = originals.map((o) => ({
-    account: o.account as AccountCode,
+    account: o.account,
+    accountName: o.accountName,
     partyId: o.partyId,
     debit: o.credit,
     credit: o.debit,
@@ -144,4 +158,18 @@ export async function cancelGlForVoucher(
     where: { voucherType, voucherNo, isCancelled: false },
     data: { isCancelled: true },
   })
+}
+
+/** The organisation's books-lock date (end of the last closed period), or null. */
+export async function booksLock(tx: Prisma.TransactionClient): Promise<Date | null> {
+  const company = await tenantCompany(tx)
+  return company?.booksLockedUntil ?? null
+}
+
+/** Refuse any posting dated on or before the books-lock date. */
+export async function assertPeriodOpen(tx: Prisma.TransactionClient, date: Date): Promise<void> {
+  const lock = await booksLock(tx)
+  if (lock && date <= lock) {
+    throw new BusinessError(`Books are locked up to ${lock.toISOString().slice(0, 10)}: post this in the open period (after the lock date)`, 409)
+  }
 }

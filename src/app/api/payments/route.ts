@@ -23,6 +23,7 @@ export async function GET(req: Request) {
         include: {
           party: { select: { code: true, name: true } },
           allocations: true,
+          tdsSection: { select: { section: true, ratePct: true } },
         },
       })
     )
@@ -49,6 +50,8 @@ const postSchema = z.object({
     )
     .max(100, 'Too many allocations')
     .optional(),
+  tdsSectionId: z.string().min(1).optional().nullable(),
+  tdsAmount: z.number().min(0, 'TDS cannot be negative').finite().max(1_000_000_000).optional(),
 })
 
 async function handlePost(req: Request) {

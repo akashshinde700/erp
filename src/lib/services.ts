@@ -153,6 +153,7 @@ export interface PostSalesInput {
   warehouseId?: string | null
   remarks?: string | null
   source?: string
+  salespersonId?: string | null
   lines: SalesLineInput[]
 }
 
@@ -168,6 +169,7 @@ export async function postSalesInvoiceTx(tx: Tx, input: PostSalesInput) {
     const party = await tx.party.findUnique({ where: { id: input.partyId } })
     if (!party) throw new BusinessError('Party not found', 404)
     if (!party.active) throw new BusinessError(`Party "${party.name}" is inactive`)
+    if (input.salespersonId && !(await tx.salesperson.findFirst({ where: { id: input.salespersonId, active: true } }))) throw new BusinessError('Salesperson not found or inactive', 404)
 
     const items = await tx.item.findMany({ where: { id: { in: input.lines.map((l) => l.itemId) } } })
     const itemMap = new Map(items.map((i) => [i.id, i]))
@@ -213,6 +215,7 @@ export async function postSalesInvoiceTx(tx: Tx, input: PostSalesInput) {
         igst: totals.igst,
         roundOff: totals.roundOff,
         grandTotal: totals.grandTotal,
+        salespersonId: input.salespersonId ?? null,
         source,
         remarks: input.remarks ?? null,
         items: {
@@ -491,6 +494,11 @@ export interface PostPaymentInput {
   refNo?: string | null
   notes?: string | null
   allocations?: { invoiceType: 'SALES' | 'PURCHASE'; invoiceNo: string; amount: number }[]
+  /** TDS at source. PAYMENT: we deduct from the supplier (TDS payable).
+   *  RECEIPT: the customer deducted from us (TDS receivable). `amount` stays the
+   *  net cash moved; the invoices are settled by amount + tdsAmount. */
+  tdsSectionId?: string | null
+  tdsAmount?: number
 }
 
 export async function postPayment(input: PostPaymentInput) {
@@ -499,6 +507,20 @@ export async function postPayment(input: PostPaymentInput) {
     const party = await tx.party.findUnique({ where: { id: input.partyId } })
     if (!party) throw new BusinessError('Party not found', 404)
     if (!(input.amount > 0)) throw new BusinessError('Payment amount must be positive')
+    const tds = r2(input.tdsAmount ?? 0)
+    if (tds < 0) throw new BusinessError('TDS amount cannot be negative')
+    let tdsSectionId: string | null = null
+    if (tds > 0) {
+      if (!input.tdsSectionId) throw new BusinessError('Choose the TDS section the deduction was made under')
+      const section = await tx.tdsSection.findFirst({ where: { id: input.tdsSectionId, active: true } })
+      if (!section) throw new BusinessError('TDS section not found or inactive', 404)
+      // a deduction can never exceed the section rate on the settled amount (with 1 rupee rounding headroom)
+      if (tds > r2(((input.amount + tds) * section.ratePct) / 100) + 1) {
+        throw new BusinessError(`TDS ${tds} is more than ${section.section} @ ${section.ratePct}% of the settled amount`)
+      }
+      tdsSectionId = section.id
+    } else if (input.tdsSectionId) throw new BusinessError('Enter the TDS amount for the chosen section')
+    const settled = r2(input.amount + tds)
 
     const date = iso(input.date)
     const prefix = input.type === 'RECEIPT' ? 'RCP' : 'PAY'
@@ -511,8 +533,8 @@ export async function postPayment(input: PostPaymentInput) {
     // mis-state even though the voucher itself balances.
     const allocations = input.allocations ?? []
     const allocSum = r2(allocations.reduce((s, a) => s + a.amount, 0))
-    if (allocSum > input.amount + 0.005) {
-      throw new BusinessError(`Allocated (${allocSum}) exceeds payment amount (${r2(input.amount)})`)
+    if (allocSum > settled + 0.005) {
+      throw new BusinessError(`Allocated (${allocSum}) exceeds payment amount (${settled}${tds > 0 ? ` incl. TDS ${tds}` : ''})`)
     }
     // One invoice may appear only ONCE per payment voucher. Two rows for the
     // same invoice would make PaymentAllocation Σ drift from the invoice's
@@ -573,6 +595,8 @@ export async function postPayment(input: PostPaymentInput) {
         mode: input.mode ?? 'CASH',
         refNo: input.refNo ?? null,
         notes: input.notes ?? null,
+        tdsSectionId,
+        tdsAmount: tds,
         allocations: allocations.length
           ? { create: allocations.map((a) => ({ invoiceType: a.invoiceType, invoiceNo: a.invoiceNo, amount: r2(a.amount) })) }
           : undefined,
@@ -582,19 +606,22 @@ export async function postPayment(input: PostPaymentInput) {
 
     // GL: RECEIPT → Dr CASH/BANK, Cr DEBT ; PAYMENT → Dr CRED, Cr CASH/BANK
     const cashAccount: AccountCode = input.mode === 'CASH' ? 'CASH' : 'BANK'
+    // with TDS: RECEIPT adds Dr TDS receivable, PAYMENT adds Cr TDS payable; the party is settled gross
     const gl: Parameters<typeof postGl>[2] =
       input.type === 'RECEIPT'
         ? [
             { account: cashAccount, debit: payment.amount, remarks: `${paymentNo} (${input.mode})` },
-            { account: 'DEBT', partyId: party.id, credit: payment.amount },
+            { account: 'TDSR', partyId: party.id, debit: tds },
+            { account: 'DEBT', partyId: party.id, credit: settled },
           ]
         : [
-            { account: 'CRED', partyId: party.id, debit: payment.amount },
+            { account: 'CRED', partyId: party.id, debit: settled },
             { account: cashAccount, credit: payment.amount, remarks: `${paymentNo} (${input.mode})` },
+            { account: 'TDSP', partyId: party.id, credit: tds },
           ]
     await postGl(tx, { date, voucherType: 'PAYMENT', voucherNo: paymentNo }, gl)
 
-    const unallocated = r2(payment.amount - allocSum)
+    const unallocated = r2(settled - allocSum)
     if (unallocated > EPS) {
       await tx.partyAdvance.create({ data: { companyId: company.id, partyId: party.id, paymentId: payment.id, advanceType: input.type === 'RECEIPT' ? 'CUSTOMER' : 'SUPPLIER', originalAmount: unallocated } })
     }

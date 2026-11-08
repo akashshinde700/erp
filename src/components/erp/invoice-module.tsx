@@ -453,6 +453,8 @@ function CreateInvoiceDialog({
   const [taxInclusive, setTaxInclusive] = useState(false)
   const [poNo, setPoNo] = useState('')
   const [remarks, setRemarks] = useState('')
+  const [salespersonId, setSalespersonId] = useState('')
+  const salespersons = useApi<{ salespersons: { id: string; name: string; active: boolean }[] }>(isSales ? '/api/crm?view=salespersons' : null)
   const [warehouseId, setWarehouseId] = useState('')
   const [lines, setLines] = useState<LineDraft[]>([emptyLine()])
   const [saving, setSaving] = useState(false)
@@ -566,6 +568,7 @@ function CreateInvoiceDialog({
         })),
       }
       if (isSales) payload.pos = pos || party?.stateCode || companyState
+      if (isSales && salespersonId) payload.salespersonId = salespersonId
       const res = await apiPost<AnyInvoice>(isSales ? '/api/sales-invoices' : '/api/purchase-invoices', payload)
       toast.success(`${res.invoiceNo} posted`, {
         description: `Grand total ₹ ${money(res.grandTotal)} — stock ledger + GL entries committed atomically.`,
@@ -915,6 +918,18 @@ function CreateInvoiceDialog({
             </Button>
           </div>
 
+          {isSales && (salespersons.data?.salespersons ?? []).some((x) => x.active) ? (
+            <div className="mt-4 max-w-sm space-y-1.5">
+              <Label>Salesperson</Label>
+              <Select value={salespersonId || 'none'} onValueChange={(v) => setSalespersonId(v === 'none' ? '' : v)}>
+                <SelectTrigger className="h-11 data-[size=default]:h-11"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Unassigned</SelectItem>
+                  {(salespersons.data?.salespersons ?? []).filter((x) => x.active).map((x) => <SelectItem key={x.id} value={x.id}>{x.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : null}
           <div className="mt-4">
             <Label htmlFor="inv-remarks">Remarks</Label>
             <Input

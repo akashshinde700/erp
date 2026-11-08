@@ -36,6 +36,7 @@ import {
 import { EmptyState, Money, SectionHeading, TableSkeleton } from './bits'
 import { money } from '@/lib/erp'
 import { useErpUi } from './store'
+import { AgingTab, BackOrdersTab, PnlLedgerTab, ProjectProfitabilityTab, PurchaseBySupplierTab, SalesAnalysisTab } from './reports-extra'
 
 export function ReportsView() {
   return (
@@ -45,7 +46,7 @@ export function ReportsView() {
         description="GST, financial and integrity reports — all derived from the append-only ledgers."
       />
       <Tabs defaultValue="action-center">
-        <TabsList className="h-11 w-full justify-start overflow-x-auto sm:w-auto">
+        <TabsList className="h-auto w-full flex-wrap justify-start">
           <TabsTrigger value="action-center" className="h-11 sm:h-9">Action Center</TabsTrigger>
           <TabsTrigger value="gstr1" className="h-11 sm:h-9">GSTR-1</TabsTrigger>
           <TabsTrigger value="gstr3b" className="h-11 sm:h-9">GSTR-3B</TabsTrigger>
@@ -59,6 +60,12 @@ export function ReportsView() {
           <TabsTrigger value="efficiency" className="h-11 sm:h-9">Efficiency</TabsTrigger>
           <TabsTrigger value="inventory" className="h-11 sm:h-9">Inventory Planning</TabsTrigger>
           <TabsTrigger value="pnl" className="h-11 sm:h-9">P&amp;L</TabsTrigger>
+          <TabsTrigger value="pnl-ledger" className="h-11 sm:h-9">P&amp;L by Ledger</TabsTrigger>
+          <TabsTrigger value="aging" className="h-11 sm:h-9">Aging</TabsTrigger>
+          <TabsTrigger value="back-orders" className="h-11 sm:h-9">Back Orders</TabsTrigger>
+          <TabsTrigger value="sales-analysis" className="h-11 sm:h-9">Sales Analysis</TabsTrigger>
+          <TabsTrigger value="purchase-supplier" className="h-11 sm:h-9">Purchase by Supplier</TabsTrigger>
+          <TabsTrigger value="projects" className="h-11 sm:h-9">Project Profitability</TabsTrigger>
         </TabsList>
         <TabsContent value="action-center" className="mt-4">
           <ActionCenterTab />
@@ -99,6 +106,12 @@ export function ReportsView() {
         <TabsContent value="pnl" className="mt-4">
           <PnlTab />
         </TabsContent>
+        <TabsContent value="pnl-ledger" className="mt-4"><PnlLedgerTab /></TabsContent>
+        <TabsContent value="aging" className="mt-4"><AgingTab /></TabsContent>
+        <TabsContent value="back-orders" className="mt-4"><BackOrdersTab /></TabsContent>
+        <TabsContent value="sales-analysis" className="mt-4"><SalesAnalysisTab /></TabsContent>
+        <TabsContent value="purchase-supplier" className="mt-4"><PurchaseBySupplierTab /></TabsContent>
+        <TabsContent value="projects" className="mt-4"><ProjectProfitabilityTab /></TabsContent>
       </Tabs>
     </div>
   )

@@ -88,6 +88,7 @@ export function readRecent(): ErpView[] {
 /** g+key → view (Gmail-style double-tap navigation). */
 export const GOTO_KEYS: Record<string, { view: ErpView; label: string }> = {
   d: { view: 'dashboard', label: 'Dashboard' },
+  c: { view: 'crm', label: 'CRM & Service' },
   s: { view: 'sales', label: 'Sales' },
   p: { view: 'purchase', label: 'Purchase' },
   j: { view: 'jobwork', label: 'Jobwork' },
@@ -104,7 +105,7 @@ export const GOTO_KEYS: Record<string, { view: ErpView; label: string }> = {
 export const SHORTCUTS_HELP: { keys: string; action: string }[] = [
   { keys: 'Ctrl / ⌘ + K', action: 'Command palette — jump anywhere, search everything' },
   { keys: '/', action: 'Open the command palette' },
-  { keys: 'g then key', action: 'Go to module — d s p j b i a r m t u o' },
+  { keys: 'g then key', action: 'Go to module — d c s p j b i a r m t u o' },
   { keys: 'Alt + S', action: 'New sales invoice (from anywhere)' },
   { keys: 'Alt + P', action: 'New purchase invoice (from anywhere)' },
   { keys: '?', action: 'This shortcuts help' },

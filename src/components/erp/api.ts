@@ -128,6 +128,7 @@ export interface Party {
   email: string | null
   openingBal: number
   creditLimit: number
+  creditDays: number
   active: boolean
 }
 

@@ -317,6 +317,8 @@ const HUMAN_STATUS: Record<string, [string, Tone]> = {
   SELECTED: ['Selected', 'done'], AWARDED: ['Awarded', 'done'], ORDERED: ['PO raised', 'done'], DISPATCHED: ['Dispatched', 'done'], INVOICED: ['Invoiced', 'done'], ACCEPTED: ['QC accepted', 'done'],
   OVERDUE: ['Overdue', 'bad'], REJECTED: ['Rejected', 'bad'], CANCELLED: ['Cancelled', 'bad'], FAILED: ['QC failed', 'bad'], RECALLED: ['Recalled', 'bad'], EXPIRED: ['Expired', 'bad'],
   QUARANTINE: ['Quarantined', 'hold'], REWORK: ['Rework', 'hold'], BLOCKED: ['Blocked', 'hold'],
+  NEW: ['New', 'draft'], CONTACTED: ['Contacted', 'progress'], QUALIFIED: ['Qualified', 'progress'], PROPOSAL: ['Proposal sent', 'attention'], WON: ['Won', 'done'], LOST: ['Lost', 'bad'],
+  ASSIGNED: ['Assigned', 'progress'], RESOLVED: ['Resolved', 'attention'], CLOSED: ['Closed', 'done'],
 }
 
 export function HumanStatus({ status, detail }: { status: string; detail?: string }) {

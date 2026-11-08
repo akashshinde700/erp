@@ -23,6 +23,7 @@ import {
   Search,
   ShoppingCart,
   Truck,
+  Users,
   Wrench,
 } from 'lucide-react'
 import { CommandDialog, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
@@ -44,12 +45,13 @@ interface SearchResults {
 
 const MODULES: { view: ErpView; label: string; icon: typeof LayoutDashboard; keywords: string }[] = [
   { view: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, keywords: 'home kpi overview' },
+  { view: 'crm', label: 'CRM & Service', icon: Users, keywords: 'lead enquiry follow-up salesperson target pipeline service call complaint warranty' },
   { view: 'sales', label: 'Sales Invoices', icon: ReceiptText, keywords: 'invoice gst customer billing tax' },
   { view: 'purchase', label: 'Purchase Invoices', icon: ShoppingCart, keywords: 'supplier bill input gst' },
   { view: 'jobwork', label: 'Jobwork', icon: Factory, keywords: 'inward job card certificate process lot' },
   { view: 'manufacturing', label: 'Projects & Manufacturing', icon: FolderKanban, keywords: 'project bom work order production task fabrication cutting welding assembly employee assign pending completion' },
-  { view: 'inventory', label: 'Inventory', icon: Boxes, keywords: 'stock ledger warehouse balance' },
-  { view: 'accounting', label: 'Accounting', icon: Calculator, keywords: 'payment receipt ledger allocation party' },
+  { view: 'inventory', label: 'Inventory', icon: Boxes, keywords: 'stock ledger warehouse balance adjustment write-off damage count' },
+  { view: 'accounting', label: 'Accounting', icon: Calculator, keywords: 'payment receipt ledger allocation party journal voucher tds chart of accounts period close lock financial year' },
   { view: 'reports', label: 'Reports', icon: FileText, keywords: 'gstr1 trial balance pnl outstanding' },
   { view: 'masters', label: 'Masters', icon: Database, keywords: 'party item customer supplier process warehouse company rate' },
   { view: 'tally', label: 'Tally Export', icon: Truck, keywords: 'tally xml voucher masters connector bat' },
@@ -70,6 +72,7 @@ const RECENT_LABELS: Record<string, string> = {
   inventory: 'Inventory',
   accounting: 'Accounting',
   reports: 'Reports',
+  crm: 'CRM & Service',
   masters: 'Masters',
   tally: 'Tally Export',
   audit: 'Audit Trail',

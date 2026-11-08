@@ -18,6 +18,7 @@ import { isValidDateString } from './validation'
 import { BusinessError, postGl } from './accounting'
 import { consumeLotsFefoTx } from './traceability'
 import { tenantCompany } from './tenant'
+import { operationMinutes, generateTasksFromRoutingTx } from './routing'
 
 type Tx = Prisma.TransactionClient
 
@@ -1048,6 +1049,65 @@ export async function createWorkOrder(input: WorkOrderInput) {
   return db.$transaction((tx) => createWorkOrderTx(tx, input))
 }
 
+/**
+ * Turn the BOM revision's routing into operation tasks on an existing work
+ * order. Idempotent per (sequence, operation): a re-run after adding an
+ * operation to the route only creates the missing steps, so a planner's manual
+ * tasks and re-sequencing are never overwritten. Tasks already started block
+ * the regeneration (the route changed under a running job).
+ */
+export async function generateWorkOrderTasks(workOrderId: string, input?: { replace?: boolean }) {
+  return db.$transaction(async (tx) => {
+    const wo = await tx.workOrder.findUnique({ where: { id: workOrderId } })
+    if (!wo) throw new BusinessError('Work order not found', 404)
+    if (!wo.bomId) throw new BusinessError('This work order has no BOM, so there is no routing to copy')
+    if (wo.status === 'COMPLETED' || wo.status === 'CANCELLED') {
+      throw new BusinessError(`Work order is ${wo.status} — its route can no longer be added`, 409)
+    }
+    const existing = await tx.productionTask.findMany({
+      where: { workOrderId, status: { not: 'CANCELLED' } },
+      select: { id: true, seq: true, operation: true, status: true, plannedMinutes: true },
+    })
+    const running = existing.filter((t) => t.status === 'IN_PROGRESS' || t.status === 'COMPLETED')
+    if (input?.replace && running.length) {
+      throw new BusinessError('Some operations are already started — the routing cannot be regenerated', 409)
+    }
+    const route = await tx.routingOperation.findMany({
+      where: { bomId: wo.bomId },
+      orderBy: { seq: 'asc' },
+      include: { workCenter: { select: { id: true, active: true, name: true, machineNo: true } } },
+    })
+    if (!route.length) throw new BusinessError('The BOM revision has no routing — add operations to it first', 409)
+
+    // Work centre + duration from the route for planner-created tasks that were
+    // added without a route (same operation, no centre).
+    let updated = 0
+    for (const op of route) {
+      const match = existing.find((t) => t.seq === op.seq && t.operation === op.operation)
+      if (match) {
+        if (!match.plannedMinutes) {
+          await tx.productionTask.update({ where: { id: match.id }, data: { plannedMinutes: operationMinutes(op, wo.outputQty) } })
+          updated += 1
+        }
+        continue
+      }
+    }
+    const toCreate = route.filter((op) => !existing.some((t) => t.seq === op.seq && t.operation === op.operation))
+    if (!toCreate.length) return { created: [], updated, skipped: existing.length }
+    if (existing.length && input?.replace) {
+      await tx.productionTask.deleteMany({ where: { workOrderId, status: { in: ['PENDING', 'ASSIGNED'] } } })
+    }
+    const created = await generateTasksFromRoutingTx(tx, {
+      workOrderId,
+      bomId: wo.bomId,
+      quantity: wo.outputQty,
+      dueDate: wo.endDate,
+      only: toCreate.map((op) => op.seq),
+    })
+    return { created, updated, skipped: existing.length }
+  })
+}
+
 export async function updateWorkOrder(id: string, input: Partial<WorkOrderInput>) {
   return db.$transaction(async (tx) => {
     const wo = await tx.workOrder.findUnique({ where: { id } })
@@ -1122,6 +1182,10 @@ export interface TaskInput {
   seq?: number
   employeeId?: string | null
   machineNo?: string | null
+  /** Work centre for capacity/OEE; inherited from the routing when omitted. */
+  workCenterId?: string | null
+  /** Planned duration in minutes; inherited from the routing when omitted. */
+  plannedMinutes?: number | null
   plannedQty: number
   dueDate?: string | Date | null
   notes?: string | null
@@ -1167,8 +1231,42 @@ export async function createTask(input: TaskInput) {
     if (!OPERATION_LABEL[input.operation]) throw new BusinessError(`Unknown operation "${input.operation}"`)
     if (!(input.plannedQty > 0)) throw new BusinessError('Planned quantity must be positive')
 
+    // Routing snapshot: the approved revision of the work order's BOM knows
+    // which centre runs this operation and how long it takes for this batch.
+    const routing = wo.bomId
+      ? await tx.routingOperation.findFirst({
+          where: { bomId: wo.bomId, operation: input.operation },
+          orderBy: { seq: 'asc' },
+          include: { workCenter: { select: { id: true, machineNo: true, active: true } } },
+        })
+      : null
+    let workCenterId: string | null = input.workCenterId ?? null
+    let machineNo = input.machineNo ?? routing?.workCenter?.machineNo ?? null
+    // Explicit minutes win (a planner knows the shop better than the route);
+    // otherwise the route's setup + run × batch is used.
+    let plannedMinutes = input.plannedMinutes && input.plannedMinutes > 0 ? r2(input.plannedMinutes) : 0
+    if (routing) {
+      if (!workCenterId) workCenterId = routing.workCenterId
+      if (!plannedMinutes && workCenterId === routing.workCenterId) {
+        plannedMinutes = operationMinutes(routing, input.plannedQty)
+      }
+    }
+    if (!routing && workCenterId && !plannedMinutes) {
+      const center = await tx.workCenter.findUnique({
+        where: { id: workCenterId },
+        include: { calendar: { include: { shifts: true } } },
+      })
+      if (!center) throw new BusinessError('Work centre not found', 404)
+      if (!center.active) throw new BusinessError(`Work centre "${center.name}" is inactive`)
+      if (!input.machineNo) machineNo = center.machineNo
+      // No route: fall back to the centre's own daily capacity as the planned
+      // duration instead of pretending the operation takes no time.
+      plannedMinutes = center.calendar
+        ? r2(center.calendar.shifts.filter((shift) => shift.active).reduce((sum, shift) => sum + shift.durationMin, 0))
+        : r2(center.dailyHours * 60)
+    }
+
     let employeeId: string | null = null
-    let machineNo = input.machineNo ?? null
     let labourRate = 0
     if (input.employeeId) {
       const emp = await tx.employee.findUnique({ where: { id: input.employeeId } })
@@ -1188,6 +1286,8 @@ export async function createTask(input: TaskInput) {
         operation: input.operation,
         employeeId,
         machineNo,
+        workCenterId,
+        plannedMinutes,
         labourRate,
         plannedQty: input.plannedQty,
         dueDate: input.dueDate ? iso(input.dueDate) : null,

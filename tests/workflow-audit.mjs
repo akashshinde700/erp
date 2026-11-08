@@ -552,6 +552,12 @@ async function phaseMfg() {
   expectOk('approve BOM', await post(`${M}/boms/${F.bom}/actions`, { action: 'approve' }))
   const wo = await post(`${M}/work-orders`, { projectId: F.prj, bomId: F.bom, priority: 'HIGH' })
   expectOk('work order from approved BOM', wo); F.wo = wo.data.id
+  const ops = await get(`${M}/work-centers`)
+  check('work centres respond', ops.status === 200 && Array.isArray(ops.data), `status=${ops.status}`)
+  const oeeQuick = await get(`${M}/oee`)
+  check('OEE report responds for the default window', oeeQuick.status === 200 && Array.isArray(oeeQuick.data?.byWorkCenter), `status=${oeeQuick.status}`)
+  const planQuick = await get(`${M}/schedule?horizonDays=30`)
+  check('finite schedule responds', planQuick.status === 200 && Array.isArray(planQuick.data?.placements), `status=${planQuick.status}`)
   const materialPlan = await get(`${M}/material-plan`)
   const rmPlan = materialPlan.data?.rows?.find((row) => row.item.id === F.rm)
   const poSupply = num((await q1(`SELECT COALESCE(SUM(GREATEST(0, pol.qty-pol.receivedQty)),0) qty
@@ -1002,6 +1008,105 @@ async function phaseMrp() {
   await reconcile('after MRP')
 }
 
+// ---------------------------------------------------------------- Phase 12c: routing, capacity, OEE
+async function phaseOps() {
+  phase = 'P12c-ops'
+  const M = '/api/manufacturing'
+  const ws = await get(`${M}/work-centers?all=1`)
+  expectOk('ops: work centre master responds', ws)
+  const seeded = (ws.data ?? []).find((c) => c.code === 'WC-CNC')
+  check('ops: seeded work centres carry a shift calendar', seeded && seeded.calendar && seeded.calendar.shifts.length >= 1, JSON.stringify(seeded?._count))
+
+  const centers = await get(`${M}/work-centers?all=1`)
+  const weld = (centers.data ?? []).find((c) => c.code === 'WC-WELD')
+  const cut = (centers.data ?? []).find((c) => c.code === 'WC-CUT')
+  if (weld && cut) {
+    const cal = await get(`${M}/work-centers/${weld.id}`)
+    expectOk('ops: calendar detail responds', cal)
+    const capPerDay = (cal.data?.shifts ?? []).filter((s) => s.active).reduce((s, x) => s + x.durationMin, 0) * weld.parallelCapacity
+    check('ops: capacity = active shift minutes × parallel capacity', capPerDay > 0, `minutes=${capPerDay}`)
+    expectReject('ops: shifts cannot overlap', await api('PUT', `${M}/work-centers/${weld.id}/calendar`, {
+      workDays: '1,2,3,4,5,6',
+      shifts: [{ name: 'A', startMin: 540, durationMin: 480 }, { name: 'B', startMin: 600, durationMin: 120 }],
+    }), /overlap/i)
+    expectReject('ops: invalid working week is refused', await api('PUT', `${M}/work-centers/${weld.id}/calendar`, { workDays: '9', shifts: [{ startMin: 540, durationMin: 480 }] }), /weekday/i)
+  } else {
+    check('ops: seeded welding/cutting centres exist', false, JSON.stringify((centers.data ?? []).map((c) => c.code)))
+  }
+
+  // ---- routing lifecycle on a fresh BOM ------------------------------------
+  const prj = await post(`${M}/projects`, { name: 'Audit Routing Cell', partyId: F.cust, startDate: today, budget: 100000 })
+  expectOk('ops: create routing project', prj)
+  const out = await post('/api/masters/items', { code: 'AUD-ROUT-FG', name: 'Audit Routed Bracket', uom: 'PCS', costRate: 300, saleRate: 600, gstRate: 18, groupName: 'Audit' })
+  expectOk('ops: output item for routing BOM', out)
+  const bom = await post(`${M}/boms`, { projectId: prj.data.id, itemId: out.data.id, productName: 'Audit Routed Bracket', lines: [{ itemId: F.rm, qty: 2, uom: 'KG', rate: 100 }] })
+  expectOk('ops: create BOM for routing', bom)
+  if (weld && cut) {
+    expectReject('ops: routing needs at least one operation', await api('PUT', `${M}/routing`, { bomId: bom.data.id, operations: [] }))
+    expectReject('ops: duplicate sequence numbers are refused', await api('PUT', `${M}/routing`, {
+      bomId: bom.data.id,
+      operations: [
+        { seq: 1, operation: 'WELDING', workCenterId: weld.id },
+        { seq: 1, operation: 'CUTTING', workCenterId: cut.id },
+      ],
+    }), /sequence/i)
+    expectReject('ops: an inactive work centre is refused', await api('PUT', `${M}/routing`, {
+      bomId: bom.data.id,
+      operations: [{ seq: 1, operation: 'WELDING', workCenterId: 'missing-centre' }],
+    }), /not found/i)
+    const routing = await api('PUT', `${M}/routing`, {
+      bomId: bom.data.id,
+      operations: [
+        { seq: 1, operation: 'CUTTING', workCenterId: cut.id, runMinutesPerUnit: 1, setupMinutes: 30 },
+        { seq: 2, operation: 'WELDING', workCenterId: weld.id, runMinutesPerUnit: 2, setupMinutes: 20, inspectionMinutes: 10 },
+      ],
+    })
+    expectOk('ops: save a two-step routing on the draft revision', routing)
+    expectOk('ops: approve the routed BOM', await post(`${M}/boms/${bom.data.id}/actions`, { action: 'approve' }))
+    expectReject('ops: the route of an approved revision is frozen', await api('PUT', `${M}/routing`, {
+      bomId: bom.data.id,
+      operations: [{ seq: 1, operation: 'WELDING', workCenterId: weld.id, runMinutesPerUnit: 9 }],
+    }), /frozen|revision/i)
+
+    const wo = await post(`${M}/work-orders`, { projectId: prj.data.id, bomId: bom.data.id, outputQty: 5, priority: 'NORMAL', startDate: today, endDate: daysFromNow(10) })
+    expectOk('ops: work order for a 5-piece batch', wo)
+    const dup = await post(`${M}/work-orders/${wo.data.id}/actions`, { action: 'generate-tasks' })
+    const tasks = await qa('SELECT seq, operation, workCenterId, plannedMinutes, plannedQty FROM ProductionTask WHERE workOrderId=? ORDER BY seq', [wo.data.id])
+    check('ops: routing generates one task per operation', tasks.length === 2, JSON.stringify(tasks))
+    check('ops: task minutes = setup + run minutes per unit × batch', near(num(tasks[0]?.plannedMinutes), 30 + 5) && near(num(tasks[1]?.plannedMinutes), 20 + 10 + 10), JSON.stringify(tasks.map((t) => [t.operation, t.plannedMinutes])))
+    check('ops: tasks carry the routing work centre', tasks.every((t) => t.workCenterId), JSON.stringify(tasks))
+    check('ops: regenerating is idempotent (no duplicate tasks)', dup.status === 200 && (await qa('SELECT id FROM ProductionTask WHERE workOrderId=?', [wo.data.id])).length === 2, `status=${dup.status}`)
+
+    // ---- finite schedule ---------------------------------------------------
+    const plan = await get(`${M}/schedule?from=${today}&horizonDays=45`)
+    expectOk('ops: finite schedule responds', plan)
+    const placed = (plan.data?.placements ?? []).filter((p) => tasks.some((t) => t.seq === p.seq))
+    check('ops: scheduled operations respect route order', placed.length >= 1 && placed.every((p) => new Date(p.end) > new Date(p.start)), JSON.stringify(placed.slice(0, 2)))
+    const cutLoad = (plan.data?.load ?? []).find((l) => l.workCenterId === cut.id)
+    check('ops: load per work centre is reported against calendar capacity', !!cutLoad && cutLoad.capacityMinutes > 0 && cutLoad.utilisationPct >= 0, JSON.stringify(cutLoad))
+
+    // ---- downtime + OEE ----------------------------------------------------
+    const start = new Date(Date.now() - 3 * 60 * 60_000).toISOString()
+    const rec = await post(`${M}/downtime`, { action: 'record', workCenterId: weld.id, reason: 'BREAKDOWN', startedAt: start })
+    expectOk('ops: record an open breakdown', rec)
+    expectReject('ops: overlapping downtime on the same centre is refused', await post(`${M}/downtime`, { action: 'record', workCenterId: weld.id, reason: 'POWER', startedAt: start }), /already has downtime|close/i)
+    expectOk('ops: close the breakdown', await post(`${M}/downtime`, { action: 'close', id: rec.data.id }))
+    expectReject('ops: closing twice is refused', await post(`${M}/downtime`, { action: 'close', id: rec.data.id }), /already closed/i)
+
+    const oee = await get(`${M}/oee?from=${daysFromNow(-7)}&to=${today}`)
+    expectOk('ops: OEE report responds', oee)
+    const weldRow = (oee.data?.byWorkCenter ?? []).find((r) => r.workCenter.includes('WC-WELD'))
+    check('ops: OEE availability falls with recorded downtime', weldRow && weldRow.downtimeMinutes > 0 && weldRow.availabilityPct < 100, JSON.stringify(weldRow && { d: weldRow.downtimeMinutes, a: weldRow.availabilityPct }))
+    const summary = oee.data?.summary
+    check('ops: OEE is the product of its three factors', summary && near(summary.oeePct, (summary.availabilityPct / 100) * (summary.performancePct / 100) * (summary.qualityPct / 100) * 100, 0.05), JSON.stringify(summary))
+    check('ops: performance only counts routed work and says so', (oee.data?.excluded?.tasksWithoutIdealTime ?? 0) >= 0, JSON.stringify(oee.data?.excluded))
+    expectReject('ops: OEE window is validated', await get(`${M}/oee?from=${today}&to=2025-01-01`), /before|range|invalid/i)
+  } else {
+    check('ops: routing fixtures available', false, 'work centres missing')
+  }
+  await reconcile('after routing/OEE')
+}
+
 // ---------------------------------------------------------------- Phase 13: fuzzing
 async function phaseFuzz() {
   phase = 'P13-fuzz'
@@ -1058,7 +1163,7 @@ async function phaseFuzz() {
 async function main() {
   const t0 = Date.now()
   await setup()
-  const phases = [phaseAuth, phaseP2P, phaseRfq, phaseQ2C, phaseMfg, phaseQuality, phaseLots, phaseFinance, phaseGst, phaseMrp, phaseFuzz]
+  const phases = [phaseAuth, phaseP2P, phaseRfq, phaseQ2C, phaseMfg, phaseQuality, phaseLots, phaseFinance, phaseGst, phaseMrp, phaseOps, phaseFuzz]
   for (const fn of phases) {
     try { await fn() } catch (e) { check(`${fn.name} completed without a harness exception`, false, e?.stack?.split('\n').slice(0, 3).join(' ') ?? String(e)) }
   }

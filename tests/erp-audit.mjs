@@ -512,6 +512,10 @@ async function main() {
   })
   check('work order end-before-start rejected (400)', reversedWo.status === 400, `status=${reversedWo.status}`)
 
+  for (const p of ['/api/manufacturing/work-centers', '/api/manufacturing/oee', '/api/manufacturing/schedule?horizonDays=30', '/api/manufacturing/downtime']) {
+    const r = await req('GET', p)
+    check(`${p} responds`, r.status === 200, `status=${r.status}`)
+  }
   const mrpPreview = await req('GET', '/api/manufacturing/mrp/preview')
   check('MRP dry run responds and reports its planning window', mrpPreview.status === 200 && data(mrpPreview)?.horizonDays >= 1, `status=${mrpPreview.status}`)
   const mrpRuns = await req('GET', '/api/manufacturing/mrp')

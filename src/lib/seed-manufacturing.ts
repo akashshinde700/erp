@@ -15,6 +15,7 @@ import {
   createBom,
   approveBom,
   createWorkOrder,
+  generateWorkOrderTasks,
   completeWorkOrder,
   createTask,
   assignTask,
@@ -22,6 +23,7 @@ import {
   completeTask,
 } from './manufacturing'
 import { tenantCompany } from './tenant'
+import { createWorkCenter, recordDowntime, saveCalendar, saveRouting } from './routing'
 
 const daysAgo = (n: number): Date => {
   const d = new Date()
@@ -75,6 +77,37 @@ export async function seedManufacturingDemo(deps: ManufacturingSeedDeps) {
   const anita = await createEmployee({ code: 'EMP005', name: 'Anita Deshmukh', role: 'WORKER', skill: 'Painter', machineNo: 'PNT-01', shift: 'GENERAL', hourlyRate: 100 })
   const vilas = await createEmployee({ code: 'EMP006', name: 'Vilas Shinde', role: 'WORKER', skill: 'Helper', shift: 'NIGHT', hourlyRate: 80 })
 
+  // ---------- Work centres + shift calendars (capacity, routing, OEE) ----------
+  // Six centres with a single general shift (09:00–18:00, Sunday off) so the
+  // factory calendar is realistic enough for the capacity plan and OEE to say
+  // something true instead of "100 % available".
+  const CENTERS = [
+    { code: 'WC-CUT', name: 'Plate Cutting Bay', type: 'CELL' as const, machineNo: 'CUT-01', parallelCapacity: 2, dailyHours: 9, costPerHour: 350 },
+    { code: 'WC-CNC', name: 'CNC Laser', type: 'MACHINE' as const, machineNo: 'CNC-01', parallelCapacity: 1, dailyHours: 9, costPerHour: 900 },
+    { code: 'WC-BEND', name: 'Press Brake', type: 'MACHINE' as const, machineNo: 'PRB-01', parallelCapacity: 1, dailyHours: 9, costPerHour: 600 },
+    { code: 'WC-WELD', name: 'Welding Bay', type: 'CELL' as const, machineNo: 'WLD-02', parallelCapacity: 3, dailyHours: 9, costPerHour: 400 },
+    { code: 'WC-PAINT', name: 'Paint Booth', type: 'CELL' as const, machineNo: 'PNT-01', parallelCapacity: 1, dailyHours: 9, costPerHour: 300 },
+    { code: 'WC-ASM', name: 'Assembly & Dispatch', type: 'MANUAL' as const, machineNo: null, parallelCapacity: 4, dailyHours: 9, costPerHour: 250 },
+  ]
+  const centers = new Map<string, { id: string }>()
+  for (const c of CENTERS) {
+    const created = await createWorkCenter(c)
+    centers.set(c.code, created)
+    await saveCalendar(created.id, {
+      workDays: '1,2,3,4,5,6',
+      shifts: [
+        { name: 'GENERAL', startMin: 9 * 60, durationMin: 8 * 60 },
+        { name: 'OT', startMin: 17 * 60, durationMin: 60 },
+      ],
+      holidays: [{ date: daysAgo(12), reason: 'Regional holiday (demo)' }],
+    })
+  }
+  const wc = (code: string) => {
+    const center = centers.get(code)
+    if (!center) throw new Error(`seed: work centre ${code} is missing`)
+    return center.id
+  }
+
   // ---------- PRJ-0001 · RUNNING — canopy, tasks in every state ----------
   const canopy = await createProject({
     name: 'Steel Structure Fabrication — Canopy',
@@ -101,6 +134,16 @@ export async function seedManufacturingDemo(deps: ManufacturingSeedDeps) {
       { itemId: bolts.id, qty: 100, uom: 'PCS', wastagePct: 3, rate: 30 },
     ],
   })
+  // Routing hangs off the DRAFT revision; approval then freezes it along with
+  // the material lines. Canopy: cut → laser → bend → weld → paint → assemble.
+  await saveRouting(canopyBom.id, [
+    { seq: 1, operation: 'CUTTING', workCenterId: wc('WC-CUT'), runMinutesPerUnit: 2.5, setupMinutes: 45, queueMinutes: 30 },
+    { seq: 2, operation: 'CNC_LASER', workCenterId: wc('WC-CNC'), runMinutesPerUnit: 1.2, setupMinutes: 20, moveMinutes: 10 },
+    { seq: 3, operation: 'BENDING', workCenterId: wc('WC-BEND'), runMinutesPerUnit: 0.9, setupMinutes: 30, moveMinutes: 10 },
+    { seq: 4, operation: 'WELDING', workCenterId: wc('WC-WELD'), runMinutesPerUnit: 3.5, setupMinutes: 25, inspectionMinutes: 15 },
+    { seq: 5, operation: 'PAINTING', workCenterId: wc('WC-PAINT'), runMinutesPerUnit: 1.5, setupMinutes: 40, queueMinutes: 60 },
+    { seq: 6, operation: 'ASSEMBLY', workCenterId: wc('WC-ASM'), runMinutesPerUnit: 1.8, setupMinutes: 15, inspectionMinutes: 30 },
+  ])
   await approveBom(canopyBom.id)
   // WO-1 pulls grossed lines from the approved BOM; project auto-starts (RUNNING)
   const canopyWo = await createWorkOrder({
@@ -111,42 +154,57 @@ export async function seedManufacturingDemo(deps: ManufacturingSeedDeps) {
     endDate: daysAhead(6),
     notes: 'Single batch — full frame in one WO.',
   })
+  // The route becomes the operation tasks (unassigned); the demo then assigns
+  // and progresses them below exactly as a planner would.
+  await generateWorkOrderTasks(canopyWo.id)
 
-  // Operation tasks (job cards). Completed ones consume real stock.
-  const cut = await createTask({ workOrderId: canopyWo.id, operation: 'CUTTING', seq: 1, plannedQty: 525 })
+  // Operation tasks (job cards): the route created the first seven; the demo
+  // then assigns and progresses them exactly as a planner would. Completed ones
+  // consume real stock.
+  const routed = async (seq: number) => {
+    const task = await db.productionTask.findFirst({ where: { workOrderId: canopyWo.id, seq }, select: { id: true } })
+    if (!task) throw new Error(`seed: routed task ${seq} is missing on ${canopyWo.woNo}`)
+    return task
+  }
+  const cut = await routed(1)
   await assignTask(cut.id, { employeeId: prakash.id, dueDate: daysAgo(30) })
   await startTask(cut.id) // lifecycle guard: ASSIGNED -> IN_PROGRESS -> COMPLETED
   await completeTask(cut.id, { actualQty: 515, rejectionQty: 10, hours: 16, materialItemId: msPlate.id, materialQty: 520, completedAt: daysAgo(31) })
 
-  const laser = await createTask({ workOrderId: canopyWo.id, operation: 'CNC_LASER', seq: 2, plannedQty: 100 })
+  const laser = await routed(2)
   await assignTask(laser.id, { employeeId: imran.id, dueDate: daysAgo(26) })
   await startTask(laser.id) // lifecycle guard: ASSIGNED -> IN_PROGRESS -> COMPLETED
   await completeTask(laser.id, { actualQty: 100, hours: 8, completedAt: daysAgo(26) })
 
-  const bend = await createTask({ workOrderId: canopyWo.id, operation: 'BENDING', seq: 3, plannedQty: 100 })
+  const bend = await routed(3)
   await assignTask(bend.id, { employeeId: prakash.id, dueDate: daysAgo(22) })
   await startTask(bend.id) // lifecycle guard: ASSIGNED -> IN_PROGRESS -> COMPLETED
   await completeTask(bend.id, { actualQty: 100, hours: 6, materialItemId: msPipe.id, materialQty: 216, completedAt: daysAgo(22) })
 
-  const weld = await createTask({ workOrderId: canopyWo.id, operation: 'WELDING', seq: 4, plannedQty: 100 })
+  const weld = await routed(4)
   await assignTask(weld.id, { employeeId: sandeep.id, dueDate: daysAgo(15) })
   await startTask(weld.id) // lifecycle guard: ASSIGNED -> IN_PROGRESS -> COMPLETED
   await completeTask(weld.id, { actualQty: 100, rejectionQty: 2, hours: 24, materialItemId: weldRod.id, materialQty: 25, completedAt: daysAgo(14) })
 
-  const asm = await createTask({ workOrderId: canopyWo.id, operation: 'ASSEMBLY', seq: 5, plannedQty: 100 })
-  await assignTask(asm.id, { employeeId: ravi.id, dueDate: daysAgo(8) })
-  await startTask(asm.id) // lifecycle guard: ASSIGNED -> IN_PROGRESS -> COMPLETED
-  await completeTask(asm.id, { actualQty: 98, hours: 12, materialItemId: bolts.id, materialQty: 100, completedAt: daysAgo(7) })
-
-  // Painting on the floor right now; finishing unassigned + OVERDUE (pending board demo)
-  const pnt = await createTask({ workOrderId: canopyWo.id, operation: 'PAINTING', seq: 6, plannedQty: 98 })
+  // Route order: 1 cut → 2 laser → 3 bend → 4 weld → 5 paint → 6 assemble.
+  // The demo keeps painting in progress and assembly assigned but OVERDUE, so
+  // the pending board and the finite schedule both have something to show.
+  const pnt = await routed(5)
   await assignTask(pnt.id, { employeeId: anita.id, dueDate: daysAhead(2) })
   await startTask(pnt.id)
 
-  const fin = await createTask({ workOrderId: canopyWo.id, operation: 'FINISHING', seq: 7, plannedQty: 98 })
-  await assignTask(fin.id, { employeeId: vilas.id, dueDate: daysAgo(2) }) // overdue
+  const asm = await routed(6)
+  await assignTask(asm.id, { employeeId: vilas.id, dueDate: daysAgo(2) }) // overdue
 
-  const qcTask = await createTask({ workOrderId: canopyWo.id, operation: 'OTHER', seq: 8, plannedQty: 98, notes: 'Dimensional QC + dispatch docs' })
+  const qcTask = await createTask({
+    workOrderId: canopyWo.id,
+    operation: 'OTHER',
+    seq: 8,
+    workCenterId: wc('WC-ASM'),
+    plannedMinutes: 90,
+    plannedQty: 98,
+    notes: 'Dimensional QC + dispatch docs',
+  })
 
   // ---------- PRJ-0002 · PENDING — gantry, draft BOM ----------
   const gantry = await createProject({
@@ -170,6 +228,15 @@ export async function seedManufacturingDemo(deps: ManufacturingSeedDeps) {
       { itemId: bolts.id, qty: 400, uom: 'PCS', wastagePct: 3, rate: 30 },
     ],
   })
+  const gantryBom = await db.bom.findFirst({ where: { itemId: fgGantry.id }, select: { id: true } })
+  if (gantryBom) {
+    await saveRouting(gantryBom.id, [
+      { seq: 1, operation: 'CUTTING', workCenterId: wc('WC-CUT'), runMinutesPerUnit: 0.4, setupMinutes: 40 },
+      { seq: 2, operation: 'DRILLING', workCenterId: wc('WC-BEND'), runMinutesPerUnit: 0.2, setupMinutes: 20 },
+      { seq: 3, operation: 'WELDING', workCenterId: wc('WC-WELD'), runMinutesPerUnit: 0.9, setupMinutes: 30 },
+      { seq: 4, operation: 'ASSEMBLY', workCenterId: wc('WC-ASM'), runMinutesPerUnit: 0.5, setupMinutes: 20 },
+    ])
+  }
 
   // ---------- PRJ-0003 · COMPLETED — the full happy path ----------
   const tank = await createProject({
@@ -194,6 +261,12 @@ export async function seedManufacturingDemo(deps: ManufacturingSeedDeps) {
       { itemId: bolts.id, qty: 250, uom: 'PCS', wastagePct: 3, rate: 30 },
     ],
   })
+  await saveRouting(tankBom.id, [
+    { seq: 1, operation: 'CUTTING', workCenterId: wc('WC-CUT'), runMinutesPerUnit: 0.05, setupMinutes: 60 },
+    { seq: 2, operation: 'WELDING', workCenterId: wc('WC-WELD'), runMinutesPerUnit: 0.12, setupMinutes: 45, inspectionMinutes: 30 },
+    { seq: 3, operation: 'PAINTING', workCenterId: wc('WC-PAINT'), runMinutesPerUnit: 0.06, setupMinutes: 40 },
+    { seq: 4, operation: 'FINISHING', workCenterId: wc('WC-ASM'), runMinutesPerUnit: 0.03, setupMinutes: 15 },
+  ])
   await approveBom(tankBom.id)
   const tankWo = await createWorkOrder({
     projectId: tank.id,
@@ -227,8 +300,33 @@ export async function seedManufacturingDemo(deps: ManufacturingSeedDeps) {
   await completeWorkOrder(tankWo.id)
   await completeProject(tank.id)
 
+  // ---------- downtime history (availability half of OEE) ----------
+  // Realistic reasons so the OEE report shows a plausible loss pattern instead
+  // of 100 % availability: a breakdown, a changeover and a power cut in the
+  // tank run, plus one stoppage that is still open on the paint booth.
+  await recordDowntime(
+    { workCenterId: wc('WC-WELD'), startedAt: daysAgo(60), endedAt: daysAgo(59), reason: 'BREAKDOWN', notes: 'Wire feeder jam' },
+    'seed'
+  )
+  await recordDowntime(
+    { workCenterId: wc('WC-CNC'), startedAt: daysAgo(45), endedAt: new Date(daysAgo(45).getTime() + 4 * 60 * 60_000), reason: 'CHANGEOVER', notes: 'Nesting change for 20KL shell' },
+    'seed'
+  )
+  await recordDowntime(
+    { workCenterId: wc('WC-PAINT'), startedAt: new Date(daysAgo(3).getTime() + 5 * 60 * 60_000), endedAt: new Date(daysAgo(3).getTime() + 7 * 60 * 60_000), reason: 'POWER', notes: 'Feeder trip' },
+    'seed'
+  )
+  await recordDowntime(
+    { workCenterId: wc('WC-CUT'), startedAt: daysAgo(1), endedAt: new Date(daysAgo(1).getTime() + 90 * 60_000), reason: 'NO_MATERIAL', notes: 'Plate shortage pending GRN' },
+    'seed'
+  )
+  await recordDowntime(
+    { workCenterId: wc('WC-WELD'), startedAt: new Date(Date.now() - 55 * 60_000), reason: 'BREAKDOWN', notes: 'Torch coolant leak (open)' },
+    'seed'
+  )
+
   return {
-    counts: { employees: 6, projects: 3, boms: 3, workOrders: 2, productionTasks: 12 },
+    counts: { employees: 6, projects: 3, boms: 3, workOrders: 2, productionTasks: 15, workCenters: CENTERS.length },
     projects: { running: canopy.projectNo, pending: gantry.projectNo, completed: tank.projectNo },
   }
 }

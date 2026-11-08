@@ -23,6 +23,7 @@ import {
   Pencil,
   PlayCircle,
   Plus,
+  Gauge,
   RefreshCw,
   Trash2,
   UserCog,
@@ -59,7 +60,16 @@ import {
   WO_PRIORITIES,
   type Bom,
   type BomWhereUsed,
+  type DowntimeRow,
   type Employee,
+  type OeeReport,
+  type RoutingDetail,
+  type RoutingOperationRow,
+  type SchedulePlan,
+  type WorkCenter,
+  type WorkCenterCalendar,
+  DOWNTIME_REASONS,
+  WORK_CENTER_TYPES,
   type MrpDocumentResult,
   type MrpLineRow,
   type MrpRunDetail,
@@ -84,7 +94,7 @@ import { ProductionReceiptsWorkspace } from './production-receipts'
 // Module shell
 // ===========================================================================
 
-type MfgTab = 'projects' | 'boms' | 'work-orders' | 'mrp' | 'material-plan' | 'tasks' | 'pending' | 'employees' | 'quality'
+type MfgTab = 'projects' | 'boms' | 'work-orders' | 'mrp' | 'capacity' | 'material-plan' | 'tasks' | 'pending' | 'employees' | 'centers' | 'oee' | 'quality'
 
 export function ManufacturingView() {
   const [tab, setTab] = useState<MfgTab>('projects')
@@ -159,6 +169,9 @@ export function ManufacturingView() {
           <TabsTrigger value="mrp" className="h-11 gap-1.5 sm:h-9">
             <CalendarClock className="size-4" aria-hidden /> MRP
           </TabsTrigger>
+          <TabsTrigger value="capacity" className="h-11 gap-1.5 sm:h-9">
+            <Gauge className="size-4" aria-hidden /> Capacity
+          </TabsTrigger>
           <TabsTrigger value="material-plan" className="h-11 gap-1.5 sm:h-9">
             <PackageSearch className="size-4" aria-hidden /> Material Plan
           </TabsTrigger>
@@ -173,6 +186,12 @@ export function ManufacturingView() {
           </TabsTrigger>
           <TabsTrigger value="receipts" className="h-11 gap-1.5 sm:h-9">
             <PackageCheck className="size-4" aria-hidden /> FG Receipts
+          </TabsTrigger>
+          <TabsTrigger value="centers" className="h-11 gap-1.5 sm:h-9">
+            <Building2 className="size-4" aria-hidden /> Work Centers
+          </TabsTrigger>
+          <TabsTrigger value="oee" className="h-11 gap-1.5 sm:h-9">
+            <Gauge className="size-4" aria-hidden /> OEE
           </TabsTrigger>
           <TabsTrigger value="quality" className="h-11 gap-1.5 sm:h-9">
             <CheckCircle2 className="size-4" aria-hidden /> Quality
@@ -191,6 +210,9 @@ export function ManufacturingView() {
         <TabsContent value="mrp" className="mt-4">
           <MrpTab onChanged={() => stats.reload()} />
         </TabsContent>
+        <TabsContent value="capacity" className="mt-4">
+          <CapacityTab />
+        </TabsContent>
         <TabsContent value="material-plan" className="mt-4">
           <MaterialPlanTab />
         </TabsContent>
@@ -205,6 +227,12 @@ export function ManufacturingView() {
         </TabsContent>
         <TabsContent value="receipts" className="mt-4">
           <ProductionReceiptsWorkspace />
+        </TabsContent>
+        <TabsContent value="centers" className="mt-4">
+          <WorkCentersTab />
+        </TabsContent>
+        <TabsContent value="oee" className="mt-4">
+          <OeeTab />
         </TabsContent>
         <TabsContent value="quality" className="mt-4">
           <QualityWorkspace />
@@ -248,6 +276,849 @@ function isOverdue(due: string | null): boolean {
   if (!due) return false
   const day = due.slice(0, 10)
   return day < todayISO()
+}
+
+// ===========================================================================
+// Capacity — finite schedule, load and downtime capture
+// ===========================================================================
+
+function CapacityTab() {
+  const [from, setFrom] = useState(todayISO())
+  const [horizon, setHorizon] = useState('60')
+  const plan = useApi<SchedulePlan | null>(`/api/manufacturing/schedule?from=${from}&horizonDays=${horizon}`)
+  const centers = useApi<WorkCenter[]>('/api/manufacturing/work-centers?all=1')
+  const downtime = useApi<DowntimeRow[]>('/api/manufacturing/downtime?open=1')
+  const [stopOpen, setStopOpen] = useState(false)
+  const data = plan.data
+
+  const closeStop = async (row: DowntimeRow) => {
+    try {
+      await apiPost('/api/manufacturing/downtime', { action: 'close', id: row.id })
+      toast.success(`Downtime closed`, { description: `${row.workCenter.name} · ${row.reason}` })
+      downtime.reload()
+      centers.reload()
+      plan.reload()
+    } catch (e) {
+      toastError(e)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <Card className="border-blue-500/30 bg-blue-500/5 p-4">
+        <p className="text-sm font-medium">Finite plan, not an infinite promise</p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Open operations are placed on each work centre&apos;s shift calendar, respecting parallel capacity and route
+          sequence. This view only reports — it never re-sequences the shop floor by itself.
+        </p>
+      </Card>
+
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="space-y-1.5">
+          <Label htmlFor="cap-from" className="text-xs text-muted-foreground">Plan from</Label>
+          <Input id="cap-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="h-11 w-40" />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="cap-horizon" className="text-xs text-muted-foreground">Horizon (days)</Label>
+          <Input id="cap-horizon" type="number" min="1" max="365" value={horizon} onChange={(e) => setHorizon(e.target.value)} className="h-11 w-28 text-right tabular-nums" />
+        </div>
+        <Button variant="outline" onClick={() => plan.reload()} className="h-11 gap-2">
+          <RefreshCw className="size-4" aria-hidden /> Recalculate
+        </Button>
+        <Button onClick={() => setStopOpen(true)} className="ml-auto h-11 gap-2" variant="outline">
+          <XCircle className="size-4" aria-hidden /> Record downtime
+        </Button>
+      </div>
+
+      {plan.loading ? <TableSkeleton rows={4} cols={5} /> : null}
+      {plan.error ? <ErrorState error={plan.error} onRetry={() => plan.reload()} entity="capacity plan" /> : null}
+
+      {data ? (
+        <>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <KpiCard title="Scheduled Ops" value={String(data.placements.length)} icon={CalendarClock} hint={`${data.horizonDays} day horizon`} />
+            <KpiCard title="Unschedulable" value={String(data.unschedulable.length)} icon={XCircle} tone={data.unschedulable.length ? 'negative' : 'positive'} />
+            <KpiCard title="Late Work Orders" value={String(data.lateWorkOrders.length)} icon={ClipboardList} tone={data.lateWorkOrders.length ? 'negative' : 'positive'} />
+            <KpiCard title="Open Stoppages" value={String(downtime.data?.length ?? 0)} icon={Wrench} tone={(downtime.data?.length ?? 0) > 0 ? 'warning' : 'default'} />
+          </div>
+
+          {data.workCentersWithoutCalendar.length > 0 ? (
+            <Card className="border-amber-500/40 bg-amber-500/5 p-4">
+              <p className="text-sm font-medium">No shift calendar</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {data.workCentersWithoutCalendar.join(', ')} — capacity falls back to daily hours and cannot see holidays.
+              </p>
+            </Card>
+          ) : null}
+
+          {data.unschedulable.length > 0 ? (
+            <Card className="border-destructive/40 bg-destructive/5 p-4">
+              <p className="text-sm font-medium">{data.unschedulable.length} operation(s) could not be placed</p>
+              <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+                {data.unschedulable.slice(0, 8).map((u, i) => (
+                  <li key={i}>• {u.taskNo} ({u.woNo}) — {u.reason}</li>
+                ))}
+              </ul>
+            </Card>
+          ) : null}
+
+          <Card className="p-0">
+            <CardContent className="p-0">
+              <div className="border-b p-3">
+                <SectionHeading title="Load vs capacity" description="Utilisation above 100 % means the horizon cannot hold the work." />
+              </div>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Work Center</TableHead>
+                    <TableHead className="text-right">Ops</TableHead>
+                    <TableHead className="text-right">Planned (h)</TableHead>
+                    <TableHead className="text-right">Capacity (h)</TableHead>
+                    <TableHead className="w-40">Utilisation</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {data.load.map((row) => (
+                    <TableRow key={row.workCenterId}>
+                      <TableCell className="max-w-44 truncate">{row.workCenter}</TableCell>
+                      <TableCell className="text-right tabular-nums">{row.tasks}</TableCell>
+                      <TableCell className="text-right tabular-nums">{qtyFmt(r2(row.plannedMinutes / 60))}</TableCell>
+                      <TableCell className="text-right tabular-nums">{qtyFmt(r2(row.capacityMinutes / 60))}</TableCell>
+                      <TableCell>
+                        <div className="space-y-1">
+                          <ProgressBar value={Math.min(100, row.utilisationPct)} />
+                          <span className={cn('text-xs tabular-nums', row.utilisationPct > 100 && 'font-medium text-destructive')}>
+                            {row.utilisationPct}%
+                          </span>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {data.load.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center text-sm text-muted-foreground">No active work centres.</TableCell>
+                    </TableRow>
+                  ) : null}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+
+          {data.lateWorkOrders.length > 0 ? (
+            <Card className="p-0">
+              <CardContent className="p-0">
+                <div className="border-b p-3">
+                  <SectionHeading title="Late against the committed date" description="Planned finish from the finite run versus the work order end date." />
+                </div>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Work Order</TableHead>
+                      <TableHead>Project</TableHead>
+                      <TableHead>Due</TableHead>
+                      <TableHead>Planned Finish</TableHead>
+                      <TableHead className="text-right">Late</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {data.lateWorkOrders.map((w) => (
+                      <TableRow key={w.woNo}>
+                        <TableCell className="font-medium tabular-nums">{w.woNo}</TableCell>
+                        <TableCell className="tabular-nums">{w.projectNo}</TableCell>
+                        <TableCell className="tabular-nums">{dateStr(w.due)}</TableCell>
+                        <TableCell className="tabular-nums">{dateStr(w.plannedFinish)}</TableCell>
+                        <TableCell className="text-right font-semibold tabular-nums text-destructive">{w.lateDays} d</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          ) : null}
+
+          <Card className="p-0">
+            <CardContent className="p-0">
+              <div className="border-b p-3">
+                <SectionHeading title="Operation schedule" description="One lane per parallel slot; minutes are working minutes from the calendar." />
+              </div>
+              <div className="max-h-[52dvh] overflow-auto erp-scroll">
+                <Table>
+                  <TableHeader className="sticky top-0 z-10 bg-card">
+                    <TableRow>
+                      <TableHead>Task</TableHead>
+                      <TableHead>Op</TableHead>
+                      <TableHead>Work Center</TableHead>
+                      <TableHead>Start</TableHead>
+                      <TableHead>End</TableHead>
+                      <TableHead className="text-right">Minutes</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {data.placements.map((p) => (
+                      <TableRow key={p.taskId}>
+                        <TableCell>
+                          <span className="block font-medium tabular-nums">{p.taskNo}</span>
+                          <span className="block text-xs text-muted-foreground">{p.woNo} · {p.projectNo}</span>
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap">{operationLabel(p.operation)}</TableCell>
+                        <TableCell className="max-w-40 truncate">{p.workCenter}</TableCell>
+                        <TableCell className="whitespace-nowrap tabular-nums">{p.start.slice(0, 16).replace('T', ' ')}</TableCell>
+                        <TableCell className="whitespace-nowrap tabular-nums">{p.end.slice(0, 16).replace('T', ' ')}</TableCell>
+                        <TableCell className="text-right tabular-nums">{qtyFmt(p.minutes)}</TableCell>
+                      </TableRow>
+                    ))}
+                    {data.placements.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className="text-center text-sm text-muted-foreground">
+                          Nothing to schedule — open operations need a work centre (add a routing to the BOM).
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      ) : null}
+
+      {stopOpen ? <DowntimeDialog centers={centers.data ?? []} open={stopOpen} onOpenChange={setStopOpen} onSaved={() => { downtime.reload(); centers.reload(); plan.reload() }} /> : null}
+    </div>
+  )
+}
+
+function DowntimeDialog({ centers, open, onOpenChange, onSaved }: { centers: WorkCenter[]; open: boolean; onOpenChange: (o: boolean) => void; onSaved: () => void }) {
+  const active = centers.filter((c) => c.active)
+  const [workCenterId, setWorkCenterId] = useState('')
+  const [reason, setReason] = useState<string>('BREAKDOWN')
+  const [startedAt, setStartedAt] = useState(() => new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 16))
+  const [endedAt, setEndedAt] = useState('')
+  const [notes, setNotes] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const save = async () => {
+    if (!workCenterId) return toast.error('Pick the work centre')
+    setSaving(true)
+    try {
+      await apiPost('/api/manufacturing/downtime', {
+        action: 'record',
+        workCenterId,
+        reason,
+        startedAt: new Date(startedAt).toISOString(),
+        endedAt: endedAt ? new Date(endedAt).toISOString() : undefined,
+        notes: notes.trim() || undefined,
+      })
+      toast.success('Downtime recorded', { description: endedAt ? 'Counted in availability for its window.' : 'Still open — close it when the machine runs again.' })
+      onSaved()
+      onOpenChange(false)
+      setNotes(''); setEndedAt(''); setWorkCenterId('')
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Record downtime</DialogTitle>
+          <DialogDescription>
+            Unplanned stoppages reduce availability. Leave the end blank while the machine is still down and close it later.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label>Work Center</Label>
+              <Select value={workCenterId || undefined} onValueChange={setWorkCenterId}>
+                <SelectTrigger className="h-11 data-[size=default]:h-11 w-full"><SelectValue placeholder="Select centre…" /></SelectTrigger>
+                <SelectContent className="max-h-64">
+                  {active.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>{c.code} — {c.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Reason</Label>
+              <Select value={reason} onValueChange={setReason}>
+                <SelectTrigger className="h-11 data-[size=default]:h-11 w-full"><SelectValue /></SelectTrigger>
+                <SelectContent className="max-h-64">
+                  {DOWNTIME_REASONS.map((r) => (
+                    <SelectItem key={r} value={r}>{r.replace(/_/g, ' ')}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="dt-start">Started</Label>
+              <Input id="dt-start" type="datetime-local" value={startedAt} onChange={(e) => setStartedAt(e.target.value)} className="h-11" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="dt-end">Ended (blank = still down)</Label>
+              <Input id="dt-end" type="datetime-local" value={endedAt} onChange={(e) => setEndedAt(e.target.value)} className="h-11" />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="dt-notes">Notes</Label>
+            <Textarea id="dt-notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="What stopped the machine?" className="min-h-16" />
+          </div>
+        </div>
+        <DialogFooter className="gap-2 sm:flex-row">
+          <Button variant="outline" onClick={() => onOpenChange(false)} className="h-11">Cancel</Button>
+          <Button onClick={save} disabled={saving} className="h-11 min-w-32">
+            {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <XCircle className="size-4" aria-hidden />}
+            Record
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ===========================================================================
+// Work centres (master + calendar)
+// ===========================================================================
+
+function WorkCentersTab() {
+  const list = useApi<WorkCenter[]>('/api/manufacturing/work-centers?all=1')
+  const [createOpen, setCreateOpen] = useState(false)
+  const [editing, setEditing] = useState<WorkCenter | null>(null)
+  const [calendarFor, setCalendarFor] = useState<WorkCenter | null>(null)
+  const rows = list.data ?? []
+
+  const toggle = async (c: WorkCenter) => {
+    try {
+      await apiPut(`/api/manufacturing/work-centers/${c.id}`, { active: !c.active })
+      toast.success(`${c.code} ${c.active ? 'retired' : 'reactivated'}`)
+      list.reload()
+    } catch (e) {
+      toastError(e)
+    }
+  }
+
+  const remove = async (c: WorkCenter) => {
+    try {
+      await apiDelete(`/api/manufacturing/work-centers/${c.id}`)
+      toast.success(`${c.code} deleted`)
+      list.reload()
+    } catch (e) {
+      toastError(e)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-muted-foreground">
+          {rows.length} work centre{rows.length === 1 ? '' : 's'} — machines and cells that operations, capacity and OEE are measured on.
+        </p>
+        <Button onClick={() => setCreateOpen(true)} className="h-11 shrink-0 gap-2">
+          <Plus className="size-4" aria-hidden /> New Work Center
+        </Button>
+      </div>
+
+      <Card className="p-0">
+        <CardContent className="p-0">
+          {list.loading ? (
+            <TableSkeleton rows={4} cols={6} />
+          ) : list.error ? (
+            <div className="p-6"><ErrorState error={list.error} onRetry={() => list.reload()} entity="work centres" /></div>
+          ) : rows.length === 0 ? (
+            <div className="p-6">
+              <EmptyState title="No work centres yet" hint="Add the machines or cells your operations run on, then attach a shift calendar and a routing." icon={Building2} />
+            </div>
+          ) : (
+            <div className="max-h-[62dvh] overflow-auto erp-scroll">
+              <Table>
+                <TableHeader className="sticky top-0 z-10 bg-card">
+                  <TableRow>
+                    <TableHead>Center</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead className="text-right">Capacity</TableHead>
+                    <TableHead className="text-right hidden sm:table-cell">Shift</TableHead>
+                    <TableHead className="hidden md:table-cell">Routing Ops</TableHead>
+                    <TableHead>State</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {rows.map((c) => (
+                    <TableRow key={c.id}>
+                      <TableCell>
+                        <span className="block font-medium tabular-nums">{c.code}</span>
+                        <span className="block max-w-44 truncate text-xs text-muted-foreground">{c.name}{c.machineNo ? ` · ${c.machineNo}` : ''}</span>
+                      </TableCell>
+                      <TableCell><Badge variant="outline">{c.type}</Badge></TableCell>
+                      <TableCell className="text-right tabular-nums">×{c.parallelCapacity}</TableCell>
+                      <TableCell className="text-right tabular-nums hidden sm:table-cell">
+                        {c.calendar ? `${qtyFmt(r2((c.plannedMinutesPerDay ?? 0) / 60))} h/d` : `${c.dailyHours} h/d (no calendar)`}
+                      </TableCell>
+                      <TableCell className="tabular-nums hidden md:table-cell">{c._count?.operations ?? 0}</TableCell>
+                      <TableCell>
+                        {c.downNow ? (
+                          <Badge variant="destructive" className="gap-1"><XCircle className="size-3" aria-hidden /> down</Badge>
+                        ) : c.active ? (
+                          <Badge variant="outline" className="border-emerald-600/40 text-emerald-700 dark:text-emerald-400">active</Badge>
+                        ) : (
+                          <Badge variant="secondary">retired</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-1">
+                          <Button variant="ghost" size="sm" className="h-9" onClick={() => setCalendarFor(c)}>
+                            <CalendarClock className="size-3.5" aria-hidden /> Calendar
+                          </Button>
+                          <Button variant="ghost" size="sm" className="h-9" onClick={() => setEditing(c)} aria-label={`Edit ${c.code}`}>
+                            <Pencil className="size-3.5" aria-hidden />
+                          </Button>
+                          <Button variant="ghost" size="sm" className="h-9" onClick={() => toggle(c)}>
+                            {c.active ? 'Retire' : 'Restore'}
+                          </Button>
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button variant="ghost" size="sm" className="h-9 text-destructive hover:text-destructive" aria-label={`Delete ${c.code}`}>
+                                <Trash2 className="size-3.5" aria-hidden />
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Delete {c.code}?</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  Only allowed when no open task and no routing operation references this centre. Prefer retiring it so history keeps its capacity context.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel className="h-11">Keep it</AlertDialogCancel>
+                                <AlertDialogAction onClick={(e) => { e.preventDefault(); void remove(c) }} className="h-11">Delete</AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {createOpen || editing ? (
+        <WorkCenterDialog
+          center={editing}
+          open={createOpen || !!editing}
+          onOpenChange={(o) => { if (!o) { setCreateOpen(false); setEditing(null) } }}
+          onSaved={() => { list.reload(); setCreateOpen(false); setEditing(null) }}
+        />
+      ) : null}
+      {calendarFor ? (
+        <CalendarDialog
+          center={calendarFor}
+          open={!!calendarFor}
+          onOpenChange={(o) => !o && setCalendarFor(null)}
+          onSaved={() => { list.reload(); setCalendarFor(null) }}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+function WorkCenterDialog({ center, open, onOpenChange, onSaved }: { center: WorkCenter | null; open: boolean; onOpenChange: (o: boolean) => void; onSaved: () => void }) {
+  const [code, setCode] = useState(center?.code ?? '')
+  const [name, setName] = useState(center?.name ?? '')
+  const [type, setType] = useState<string>(center?.type ?? 'MACHINE')
+  const [machineNo, setMachineNo] = useState(center?.machineNo ?? '')
+  const [parallel, setParallel] = useState(String(center?.parallelCapacity ?? 1))
+  const [dailyHours, setDailyHours] = useState(String(center?.dailyHours ?? 8))
+  const [costPerHour, setCostPerHour] = useState(String(center?.costPerHour ?? 0))
+  const [saving, setSaving] = useState(false)
+
+  const save = async () => {
+    if (!code.trim() || !name.trim()) return toast.error('Code and name are required')
+    setSaving(true)
+    try {
+      const body = {
+        code: code.trim(),
+        name: name.trim(),
+        type,
+        machineNo: machineNo.trim() || undefined,
+        parallelCapacity: Math.max(1, Math.trunc(num(parallel) || 1)),
+        dailyHours: num(dailyHours),
+        costPerHour: num(costPerHour),
+      }
+      if (center) await apiPut(`/api/manufacturing/work-centers/${center.id}`, body)
+      else await apiPost('/api/manufacturing/work-centers', body)
+      toast.success(center ? `${body.code} updated` : `${body.code} created`)
+      onSaved()
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>{center ? `Edit ${center.code}` : 'New work center'}</DialogTitle>
+          <DialogDescription>
+            A work centre is a machine or a manned cell. Parallel capacity is how many jobs can run on it at once.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="wc-code">Code</Label>
+            <Input id="wc-code" value={code} onChange={(e) => setCode(e.target.value)} placeholder="WC-CNC" className="h-11" />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="wc-name">Name</Label>
+            <Input id="wc-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="CNC Laser" className="h-11" />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Type</Label>
+            <Select value={type} onValueChange={setType}>
+              <SelectTrigger className="h-11 data-[size=default]:h-11 w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {WORK_CENTER_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="wc-machine">Machine No</Label>
+            <Input id="wc-machine" value={machineNo} onChange={(e) => setMachineNo(e.target.value)} placeholder="Optional" className="h-11" />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="wc-parallel">Parallel capacity</Label>
+            <Input id="wc-parallel" type="number" min="1" max="50" value={parallel} onChange={(e) => setParallel(e.target.value)} className="h-11 text-right tabular-nums" />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="wc-hours">Daily hours (fallback)</Label>
+            <Input id="wc-hours" type="number" min="0" max="24" step="any" value={dailyHours} onChange={(e) => setDailyHours(e.target.value)} className="h-11 text-right tabular-nums" />
+          </div>
+          <div className="space-y-1.5 sm:col-span-2">
+            <Label htmlFor="wc-cost">Cost per hour (₹)</Label>
+            <Input id="wc-cost" type="number" min="0" step="any" value={costPerHour} onChange={(e) => setCostPerHour(e.target.value)} className="h-11 text-right tabular-nums" />
+          </div>
+        </div>
+        <DialogFooter className="gap-2 sm:flex-row">
+          <Button variant="outline" onClick={() => onOpenChange(false)} className="h-11">Cancel</Button>
+          <Button onClick={save} disabled={saving} className="h-11 min-w-32">
+            {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Plus className="size-4" aria-hidden />}
+            {center ? 'Save' : 'Create'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+const DEFAULT_SHIFTS = [{ name: 'GENERAL', startMin: 540, durationMin: 480, active: true }]
+
+function CalendarDialog({ center, open, onOpenChange, onSaved }: { center: WorkCenter; open: boolean; onOpenChange: (o: boolean) => void; onSaved: () => void }) {
+  const cal = useApi<WorkCenterCalendar | null>(`/api/manufacturing/work-centers/${center.id}`)
+  const [loaded, setLoaded] = useState(false)
+  const [workDays, setWorkDays] = useState<number[]>([1, 2, 3, 4, 5, 6])
+  const [shifts, setShifts] = useState(DEFAULT_SHIFTS)
+  const [saving, setSaving] = useState(false)
+
+  // Hydrate once from the server so typing is never overwritten by a refetch.
+  if (!loaded && cal.data) {
+    setWorkDays(cal.data.workDays.split(',').map((d) => Number(d.trim())).filter((d) => Number.isInteger(d)))
+    if (cal.data.shifts.length) setShifts(cal.data.shifts.map((s) => ({ name: s.name, startMin: s.startMin, durationMin: s.durationMin, active: s.active })))
+    setLoaded(true)
+  }
+
+  const hours = (min: number) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      await apiPut(`/api/manufacturing/work-centers/${center.id}/calendar`, {
+        workDays: workDays.join(','),
+        shifts: shifts.filter((s) => s.durationMin > 0),
+      })
+      toast.success(`${center.code} calendar saved`, { description: `${workDays.length} working day(s) · ${shifts.filter((s) => s.durationMin > 0).length} shift(s)` })
+      onSaved()
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[90dvh] flex-col overflow-hidden sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{center.code} — shift calendar</DialogTitle>
+          <DialogDescription>
+            Capacity is the sum of active shift minutes × parallel capacity on a working day. Holidays come out of capacity.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto erp-scroll-y pr-1">
+          <div className="space-y-1.5">
+            <Label>Working days</Label>
+            <div className="flex flex-wrap gap-1">
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((label, index) => {
+                const on = workDays.includes(index)
+                return (
+                  <Button
+                    key={label}
+                    type="button"
+                    size="sm"
+                    variant={on ? 'default' : 'outline'}
+                    className="h-9"
+                    onClick={() => setWorkDays((d) => (on ? d.filter((x) => x !== index) : [...d, index].sort()))}
+                  >
+                    {label}
+                  </Button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label>Shifts</Label>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-9 gap-1"
+                onClick={() => setShifts((s) => [...s, { name: 'OT', startMin: 1020, durationMin: 60, active: true }])}
+              >
+                <Plus className="size-3.5" aria-hidden /> Add shift
+              </Button>
+            </div>
+            <div className="space-y-2">
+              {shifts.map((shift, index) => (
+                <div key={index} className="grid grid-cols-2 items-end gap-2 rounded-md border p-2 sm:grid-cols-5">
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">Name</Label>
+                    <Input
+                      value={shift.name}
+                      onChange={(e) => setShifts((s) => s.map((x, i) => (i === index ? { ...x, name: e.target.value } : x)))}
+                      className="h-10"
+                      aria-label="Shift name"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">Start</Label>
+                    <Input
+                      type="time"
+                      value={hours(shift.startMin)}
+                      onChange={(e) => {
+                        const [hh, mm] = e.target.value.split(':').map(Number)
+                        setShifts((s) => s.map((x, i) => (i === index ? { ...x, startMin: (hh || 0) * 60 + (mm || 0) } : x)))
+                      }}
+                      className="h-10"
+                      aria-label="Shift start"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">Hours</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      max="24"
+                      step="0.5"
+                      value={String(r2(shift.durationMin / 60))}
+                      onChange={(e) => {
+                        const minutes = Math.round(num(e.target.value) * 60)
+                        setShifts((s) => s.map((x, i) => (i === index ? { ...x, durationMin: Math.max(1, Math.min(1440, minutes)) } : x)))
+                      }}
+                      className="h-10 text-right tabular-nums"
+                      aria-label="Shift duration in hours"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">Ends</Label>
+                    <p className="h-10 py-2.5 text-sm tabular-nums">{hours((shift.startMin + shift.durationMin) % 1440)}</p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-10 justify-self-end text-muted-foreground hover:text-destructive"
+                    onClick={() => setShifts((s) => (s.length > 1 ? s.filter((_, i) => i !== index) : s))}
+                    disabled={shifts.length === 1}
+                    aria-label="Remove shift"
+                  >
+                    <Trash2 className="size-4" aria-hidden />
+                  </Button>
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Daily capacity: {qtyFmt(r2((shifts.filter((s) => s.durationMin > 0).reduce((sum, s) => sum + s.durationMin, 0) / 60) * center.parallelCapacity))} h
+              {' '}({shifts.reduce((sum, s) => sum + s.durationMin, 0)} min × {center.parallelCapacity} parallel)
+            </p>
+          </div>
+
+          {cal.data?.holidays?.length ? (
+            <div className="space-y-1">
+              <Label>Holidays</Label>
+              <div className="flex flex-wrap gap-1">
+                {cal.data.holidays.map((h) => (
+                  <Badge key={h.id} variant="secondary">{dateStr(h.date)}{h.reason ? ` · ${h.reason}` : ''}</Badge>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">Holiday editing ships with the first shop-floor pilot feedback — capacity already excludes these days.</p>
+            </div>
+          ) : null}
+        </div>
+        <DialogFooter className="gap-2 sm:flex-row">
+          <Button variant="outline" onClick={() => onOpenChange(false)} className="h-11">Cancel</Button>
+          <Button onClick={save} disabled={saving || !workDays.length} className="h-11 min-w-32">
+            {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <CheckCircle2 className="size-4" aria-hidden />}
+            Save calendar
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ===========================================================================
+// OEE
+// ===========================================================================
+
+function OeeTab() {
+  const [from, setFrom] = useState(() => {
+    const d = new Date()
+    d.setDate(d.getDate() - 13)
+    return d.toISOString().slice(0, 10)
+  })
+  const [to, setTo] = useState(todayISO())
+  const report = useApi<OeeReport | null>(`/api/manufacturing/oee?from=${from}&to=${to}`)
+  const data = report.data
+
+  if (report.loading) return <TableSkeleton rows={6} cols={7} />
+  if (report.error) return <ErrorState error={report.error} onRetry={() => report.reload()} entity="OEE" />
+  if (!data) return null
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="space-y-1.5">
+          <Label htmlFor="oee-from" className="text-xs text-muted-foreground">From</Label>
+          <Input id="oee-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="h-11 w-40" />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="oee-to" className="text-xs text-muted-foreground">To</Label>
+          <Input id="oee-to" type="date" value={to} onChange={(e) => setTo(e.target.value)} className="h-11 w-40" />
+        </div>
+        <Button variant="outline" onClick={() => report.reload()} className="h-11 gap-2">
+          <RefreshCw className="size-4" aria-hidden /> Refresh
+        </Button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <KpiCard title="OEE" value={`${data.summary.oeePct}%`} icon={Gauge} tone={data.summary.oeePct >= 65 ? 'positive' : data.summary.oeePct >= 40 ? 'warning' : 'negative'} hint={`${data.days} day(s)`} />
+        <KpiCard title="Availability" value={`${data.summary.availabilityPct}%`} icon={CalendarClock} hint={`${qtyFmt(r2(data.summary.downtimeMinutes / 60))} h lost`} />
+        <KpiCard title="Performance" value={`${data.summary.performancePct}%`} icon={PlayCircle} hint="routed cycle time vs run time" />
+        <KpiCard title="Quality" value={`${data.summary.qualityPct}%`} icon={BadgeCheck} hint="good ÷ produced" />
+      </div>
+
+      {data.notes.length > 0 ? (
+        <Card className="border-amber-500/40 bg-amber-500/5 p-4">
+          <p className="text-sm font-medium">Read this before trusting the numbers</p>
+          <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+            {data.notes.map((n, i) => <li key={i}>• {n}</li>)}
+          </ul>
+        </Card>
+      ) : null}
+
+      <Card className="p-0">
+        <CardContent className="p-0">
+          <div className="border-b p-3">
+            <SectionHeading title="By work centre" description="Availability × performance × quality. Sorted worst first — that is where the money is." />
+          </div>
+          <div className="max-h-[46dvh] overflow-auto erp-scroll">
+            <Table>
+              <TableHeader className="sticky top-0 z-10 bg-card">
+                <TableRow>
+                  <TableHead>Work Center</TableHead>
+                  <TableHead className="text-right">Planned (h)</TableHead>
+                  <TableHead className="text-right">Downtime (h)</TableHead>
+                  <TableHead className="text-right">A</TableHead>
+                  <TableHead className="text-right">P</TableHead>
+                  <TableHead className="text-right">Q</TableHead>
+                  <TableHead className="text-right">OEE</TableHead>
+                  <TableHead className="hidden lg:table-cell">Main loss</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.byWorkCenter.map((row) => {
+                  const worst = Object.entries(row.downtimeByReason).sort((a, b) => b[1] - a[1])[0]
+                  return (
+                    <TableRow key={row.workCenter}>
+                      <TableCell className="max-w-44 truncate">{row.workCenter}</TableCell>
+                      <TableCell className="text-right tabular-nums">{qtyFmt(r2(row.plannedMinutes / 60))}</TableCell>
+                      <TableCell className="text-right tabular-nums">{qtyFmt(r2(row.downtimeMinutes / 60))}</TableCell>
+                      <TableCell className="text-right tabular-nums">{row.availabilityPct}%</TableCell>
+                      <TableCell className="text-right tabular-nums">{row.performancePct}%</TableCell>
+                      <TableCell className="text-right tabular-nums">{row.qualityPct}%</TableCell>
+                      <TableCell className={cn('text-right font-semibold tabular-nums', row.oeePct < 40 && 'text-destructive')}>{row.oeePct}%</TableCell>
+                      <TableCell className="hidden text-xs text-muted-foreground lg:table-cell">
+                        {worst ? `${worst[0].replace(/_/g, ' ')} · ${qtyFmt(r2(worst[1] / 60))} h` : '—'}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+                {data.byWorkCenter.length === 0 ? (
+                  <TableRow><TableCell colSpan={8} className="text-center text-sm text-muted-foreground">No work centre data in this window.</TableCell></TableRow>
+                ) : null}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="p-0">
+        <CardContent className="p-0">
+          <div className="border-b p-3">
+            <SectionHeading title="Daily trend" description="A day with no completed operation still counts — an idle machine is an availability fact." />
+          </div>
+          <div className="max-h-[40dvh] overflow-auto erp-scroll">
+            <Table>
+              <TableHeader className="sticky top-0 z-10 bg-card">
+                <TableRow>
+                  <TableHead>Day</TableHead>
+                  <TableHead className="text-right">Downtime (h)</TableHead>
+                  <TableHead className="text-right">Good</TableHead>
+                  <TableHead className="text-right">Reject</TableHead>
+                  <TableHead className="text-right">A</TableHead>
+                  <TableHead className="text-right">P</TableHead>
+                  <TableHead className="text-right">Q</TableHead>
+                  <TableHead className="text-right">OEE</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.byDay.map((row) => (
+                  <TableRow key={row.day}>
+                    <TableCell className="tabular-nums">{dateStr(row.day)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{qtyFmt(r2(row.downtimeMinutes / 60))}</TableCell>
+                    <TableCell className="text-right tabular-nums">{qtyFmt(row.goodQty)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{qtyFmt(row.rejectQty)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{row.availabilityPct}%</TableCell>
+                    <TableCell className="text-right tabular-nums">{row.performancePct}%</TableCell>
+                    <TableCell className="text-right tabular-nums">{row.qualityPct}%</TableCell>
+                    <TableCell className="text-right font-medium tabular-nums">{row.oeePct}%</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  )
 }
 
 // ===========================================================================
@@ -1452,6 +2323,7 @@ function BomsTab({ onChanged }: { onChanged?: () => void }) {
   const [viewBom, setViewBom] = useState<Bom | null>(null)
   const [woFromBom, setWoFromBom] = useState<Bom | null>(null)
   const [reviseFrom, setReviseFrom] = useState<Bom | null>(null)
+  const [routingFor, setRoutingFor] = useState<Bom | null>(null)
   const [statusFilter, setStatusFilter] = useState('live')
   const [busy, setBusy] = useState(false)
   const rows = list.data ?? []
@@ -1609,6 +2481,9 @@ function BomsTab({ onChanged }: { onChanged?: () => void }) {
                                 </Button>
                               </>
                             ) : null}
+                            <Button variant="ghost" size="sm" className="h-9 gap-1" onClick={() => setRoutingFor(b)}>
+                              <Wrench className="size-3.5" aria-hidden /> Route
+                            </Button>
                             {b.status !== 'CANCELLED' && b.status !== 'SUPERSEDED' ? (
                               <AlertDialog>
                                 <AlertDialogTrigger asChild>
@@ -1659,6 +2534,9 @@ function BomsTab({ onChanged }: { onChanged?: () => void }) {
       ) : null}
       {woFromBom ? (
         <GenerateWoDialog bom={woFromBom} open={!!woFromBom} onOpenChange={(o) => !o && setWoFromBom(null)} onCreated={() => { setView('manufacturing'); onChanged?.() }} />
+      ) : null}
+      {routingFor ? (
+        <RoutingDialog bom={routingFor} open={!!routingFor} onOpenChange={(o) => !o && setRoutingFor(null)} onSaved={() => list.reload()} />
       ) : null}
       {reviseFrom ? (
         <ReviseBomDialog
@@ -2159,6 +3037,201 @@ function BomLinesDialog({ bom, open, onOpenChange }: { bom: Bom; open: boolean; 
       <WhereUsedDialog itemId={usedItem.id} label={usedItem.label} open={!!usedItem} onOpenChange={(o) => !o && setUsedItem(null)} />
     ) : null}
     </>
+  )
+}
+
+// ---------- routing editor (operations of a BOM revision) ----------
+
+interface RoutingDraftRow {
+  key: number
+  seq: string
+  operation: string
+  workCenterId: string
+  runMinutesPerUnit: string
+  setupMinutes: string
+  queueMinutes: string
+  moveMinutes: string
+  inspectionMinutes: string
+}
+
+let routingSeq = 0
+const emptyRoutingRow = (seq: number): RoutingDraftRow => ({
+  key: ++routingSeq,
+  seq: String(seq),
+  operation: 'CUTTING',
+  workCenterId: '',
+  runMinutesPerUnit: '',
+  setupMinutes: '',
+  queueMinutes: '',
+  moveMinutes: '',
+  inspectionMinutes: '',
+})
+
+function RoutingDialog({ bom, open, onOpenChange, onSaved }: { bom: Bom; open: boolean; onOpenChange: (o: boolean) => void; onSaved: () => void }) {
+  const centers = useApi<WorkCenter[]>('/api/manufacturing/work-centers?all=1')
+  const detail = useApi<RoutingDetail | null>(open ? `/api/manufacturing/routing?bomId=${bom.id}` : null)
+  const [rows, setRows] = useState<RoutingDraftRow[]>([])
+  const [loaded, setLoaded] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const activeCenters = (centers.data ?? []).filter((c) => c.active)
+  const frozen = bom.status !== 'DRAFT'
+
+  if (!loaded && detail.data) {
+    setRows(
+      detail.data.operations.length
+        ? detail.data.operations.map((op) => ({
+            key: ++routingSeq,
+            seq: String(op.seq),
+            operation: op.operation,
+            workCenterId: op.workCenterId,
+            runMinutesPerUnit: String(op.runMinutesPerUnit),
+            setupMinutes: String(op.setupMinutes),
+            queueMinutes: String(op.queueMinutes),
+            moveMinutes: String(op.moveMinutes),
+            inspectionMinutes: String(op.inspectionMinutes),
+          }))
+        : [emptyRoutingRow(1)]
+    )
+    setLoaded(true)
+  }
+
+  const setRow = (key: number, patch: Partial<RoutingDraftRow>) =>
+    setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)))
+
+  const totalPerUnit = rows.reduce((sum, r) => sum + num(r.runMinutesPerUnit), 0)
+  const totalBatch = rows.reduce(
+    (sum, r) => sum + num(r.runMinutesPerUnit) + num(r.setupMinutes) + num(r.queueMinutes) + num(r.moveMinutes) + num(r.inspectionMinutes),
+    0
+  )
+
+  const save = async () => {
+    const valid = rows.filter((r) => r.workCenterId)
+    if (!valid.length) return toast.error('Add at least one operation with a work centre')
+    setSaving(true)
+    try {
+      await apiPut('/api/manufacturing/routing', {
+        bomId: bom.id,
+        operations: valid.map((r, index) => ({
+          seq: Math.max(1, Math.trunc(num(r.seq) || index + 1)),
+          operation: r.operation,
+          workCenterId: r.workCenterId,
+          runMinutesPerUnit: num(r.runMinutesPerUnit),
+          setupMinutes: num(r.setupMinutes),
+          queueMinutes: num(r.queueMinutes),
+          moveMinutes: num(r.moveMinutes),
+          inspectionMinutes: num(r.inspectionMinutes),
+        })),
+      })
+      toast.success(`${bom.bomNo} routing saved`, { description: `${valid.length} operation(s) — approve the revision to freeze it.` })
+      onSaved()
+      onOpenChange(false)
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[92dvh] flex-col overflow-hidden sm:max-w-5xl">
+        <DialogHeader>
+          <DialogTitle>Routing — {bom.bomNo} rev {bom.revision}</DialogTitle>
+          <DialogDescription>
+            Ordered operations that make {bom.productName}, each on a work centre with setup and run time. Capacity planning and
+            OEE both read these numbers, so enter the shop-floor times, not targets.
+            {frozen ? ` This revision is ${bom.status}: the route is frozen — create a revision to change it.` : ''}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto erp-scroll-y pr-1">
+          {detail.error ? <ErrorState error={detail.error} onRetry={() => detail.reload()} entity="routing" /> : null}
+          {rows.map((r) => (
+            <div key={r.key} className="rounded-md border p-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <span className="text-xs font-medium text-muted-foreground">Operation {r.seq}</span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-9 text-muted-foreground hover:text-destructive"
+                  onClick={() => setRows((rs) => (rs.length > 1 ? rs.filter((x) => x.key !== r.key) : rs))}
+                  disabled={rows.length === 1 || frozen}
+                  aria-label="Remove operation"
+                >
+                  <Trash2 className="size-4" aria-hidden />
+                </Button>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Seq</Label>
+                  <Input type="number" min="1" value={r.seq} onChange={(e) => setRow(r.key, { seq: e.target.value })} className="h-10 text-right tabular-nums" disabled={frozen} aria-label="Sequence" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Operation</Label>
+                  <Select value={r.operation} onValueChange={(v) => setRow(r.key, { operation: v })} disabled={frozen}>
+                    <SelectTrigger className="h-10 w-full" aria-label="Operation"><SelectValue /></SelectTrigger>
+                    <SelectContent className="max-h-64">
+                      {MANUFACTURING_OPERATIONS.map((o) => <SelectItem key={o.key} value={o.key}>{o.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1 sm:col-span-1 lg:col-span-2">
+                  <Label className="text-xs text-muted-foreground">Work Center</Label>
+                  <Select value={r.workCenterId || undefined} onValueChange={(v) => setRow(r.key, { workCenterId: v })} disabled={frozen}>
+                    <SelectTrigger className="h-10 w-full" aria-label="Work center"><SelectValue placeholder="Select centre…" /></SelectTrigger>
+                    <SelectContent className="max-h-64">
+                      {activeCenters.map((c) => <SelectItem key={c.id} value={c.id}>{c.code} — {c.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Run min / unit</Label>
+                  <Input type="number" min="0" step="any" value={r.runMinutesPerUnit} onChange={(e) => setRow(r.key, { runMinutesPerUnit: e.target.value })} className="h-10 text-right tabular-nums" disabled={frozen} aria-label="Run minutes per unit" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Setup min</Label>
+                  <Input type="number" min="0" step="any" value={r.setupMinutes} onChange={(e) => setRow(r.key, { setupMinutes: e.target.value })} className="h-10 text-right tabular-nums" disabled={frozen} aria-label="Setup minutes" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Queue min</Label>
+                  <Input type="number" min="0" step="any" value={r.queueMinutes} onChange={(e) => setRow(r.key, { queueMinutes: e.target.value })} className="h-10 text-right tabular-nums" disabled={frozen} aria-label="Queue minutes" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Move min</Label>
+                  <Input type="number" min="0" step="any" value={r.moveMinutes} onChange={(e) => setRow(r.key, { moveMinutes: e.target.value })} className="h-10 text-right tabular-nums" disabled={frozen} aria-label="Move minutes" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Inspection min</Label>
+                  <Input type="number" min="0" step="any" value={r.inspectionMinutes} onChange={(e) => setRow(r.key, { inspectionMinutes: e.target.value })} className="h-10 text-right tabular-nums" disabled={frozen} aria-label="Inspection minutes" />
+                </div>
+              </div>
+            </div>
+          ))}
+
+          <Button
+            variant="outline"
+            className="h-11 w-full gap-2 border-dashed"
+            onClick={() => setRows((rs) => [...rs, emptyRoutingRow(rs.length + 1)])}
+            disabled={frozen}
+          >
+            <Plus className="size-4" aria-hidden /> Add operation
+          </Button>
+        </div>
+
+        <DialogFooter className="flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="text-xs text-muted-foreground">
+            {rows.length} operation(s) · {qtyFmt(r2(totalPerUnit))} min/unit · {qtyFmt(r2(totalBatch))} min per batch (setup + queue + move + inspection)
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => onOpenChange(false)} className="h-11">Close</Button>
+            <Button onClick={save} disabled={saving || frozen || !loaded} className="h-11 min-w-32">
+              {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Wrench className="size-4" aria-hidden />}
+              Save routing
+            </Button>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 

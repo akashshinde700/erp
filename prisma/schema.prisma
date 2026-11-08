@@ -113,6 +113,10 @@ model Company {
   rfqs                      Rfq[]
   supplierQuotes            SupplierQuote[]
   mrpRuns                   MrpRun[]
+  workCenters               WorkCenter[]
+  shiftCalendars            ShiftCalendar[]
+  routingOperations         RoutingOperation[]
+  machineDowntimes          MachineDowntime[]
 }
 
 // ---------- Organization logins (SaaS) ----------
@@ -714,6 +718,7 @@ model Bom {
 
   items      BomItem[]
   workOrders WorkOrder[]
+  routing    RoutingOperation[]
 
   @@unique([companyId, bomNo])
   @@unique([companyId, itemId, revision])
@@ -797,6 +802,124 @@ model MrpLine {
   @@index([itemId])
 }
 
+// ---------- routing, work centres, shift calendars, downtime (OEE) ----------
+
+/// A work centre: a machine or a manned cell that performs operations. Capacity
+/// is per shift; `calendar` layers shift hours and holidays on top.
+model WorkCenter {
+  id          String   @id @default(cuid())
+  companyId   String   @default("") // filled by the tenant extension; "" fails the FK
+  company     Company  @relation(fields: [companyId], references: [id])
+  code        String
+  name        String
+  /// MACHINE | CELL | MANUAL — a MANUAL centre has no machine-hour capacity cap.
+  type        String   @default("MACHINE")
+  machineNo   String?
+  /** Parallel capacity: how many jobs this centre can run at once. */
+  parallelCapacity Int  @default(1)
+  /** Hours available per working day when no calendar shift covers it. */
+  dailyHours  Float    @default(8)
+  costPerHour Float    @default(0)
+  active      Boolean  @default(true)
+  notes       String?  @db.Text
+  createdAt   DateTime @default(now())
+
+  calendar ShiftCalendar?
+  operations RoutingOperation[]
+  tasks    ProductionTask[]
+  downtimes MachineDowntime[]
+
+  @@unique([companyId, code])
+  @@index([companyId, active])
+}
+
+/// One shift template per work centre (GENERAL / DAY / NIGHT …). Kept as a
+/// separate row from Shift so a centre can run several shifts a day.
+model ShiftCalendar {
+  id          String   @id @default(cuid())
+  companyId   String   @default("") // filled by the tenant extension
+  company     Company  @relation(fields: [companyId], references: [id])
+  workCenterId String @unique
+  workCenter  WorkCenter @relation(fields: [workCenterId], references: [id], onDelete: Cascade)
+  /** Informational working week (0 = Sunday … 6 = Saturday) as CSV. */
+  workDays    String   @default("1,2,3,4,5,6")
+  createdAt   DateTime @default(now())
+
+  shifts   Shift[]
+  holidays ShiftHoliday[]
+
+  @@unique([companyId, workCenterId])
+}
+
+model Shift {
+  id         String        @id @default(cuid())
+  calendarId String
+  calendar   ShiftCalendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+  name       String        @default("GENERAL")
+  /** Minutes from midnight; startMin + durationMin may cross midnight. */
+  startMin    Int          @default(540) // 09:00
+  durationMin Int          @default(480) // 8 h
+  active      Boolean      @default(true)
+
+  @@index([calendarId, startMin])
+}
+
+model ShiftHoliday {
+  id         String        @id @default(cuid())
+  calendarId String
+  calendar   ShiftCalendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+  date       DateTime
+  reason     String?
+
+  @@unique([calendarId, date])
+}
+
+/// Routing: the ordered operations a BOM revision is built with, each on a work
+/// centre with setup / run / queue / move / inspection time factors.
+model RoutingOperation {
+  id            String   @id @default(cuid())
+  companyId     String   @default("")
+  company       Company  @relation(fields: [companyId], references: [id])
+  bomId         String
+  bom           Bom      @relation(fields: [bomId], references: [id], onDelete: Cascade)
+  seq           Int      @default(1)
+  operation     String   // must match a manufacturing operation key
+  workCenterId  String
+  workCenter    WorkCenter @relation(fields: [workCenterId], references: [id])
+  /** Per-unit processing time (minutes) and per-batch setup time. */
+  runMinutesPerUnit Float @default(0)
+  setupMinutes      Float @default(0)
+  queueMinutes      Float @default(0)
+  moveMinutes       Float @default(0)
+  inspectionMinutes Float @default(0)
+  /** Operations with the same seq run in parallel; a higher seq waits. */
+  parallel       Boolean  @default(false)
+  notes          String?  @db.Text
+  createdAt      DateTime @default(now())
+
+  @@unique([companyId, bomId, seq])
+  @@index([companyId, bomId])
+}
+
+/// Unplanned/reactive downtime with a reason — the Availability half of OEE.
+/// Planned maintenance windows use the same table with `planned = true`.
+model MachineDowntime {
+  id           String     @id @default(cuid())
+  companyId    String     @default("")
+  company      Company    @relation(fields: [companyId], references: [id])
+  workCenterId String
+  workCenter   WorkCenter @relation(fields: [workCenterId], references: [id], onDelete: Cascade)
+  startedAt    DateTime
+  endedAt      DateTime?
+  reason       String     // BREAKDOWN | CHANGEOVER | NO_MATERIAL | NO_OPERATOR | POWER | MAINTENANCE | QUALITY | OTHER
+  planned      Boolean    @default(false)
+  notes        String?    @db.Text
+  createdBy    String?
+  createdAt    DateTime   @default(now())
+
+  @@index([companyId, workCenterId, startedAt])
+}
+
 model WorkOrder {
   id          String    @id @default(cuid())
   companyId   String    @default("") // filled by the tenant extension; "" fails the FK
@@ -855,6 +978,11 @@ model ProductionTask {
   employeeId     String? // assigned worker (task assigning)
   employee       Employee? @relation(fields: [employeeId], references: [id])
   machineNo      String?
+  /** Work centre the operation runs on (routing / capacity / OEE). */
+  workCenterId   String?
+  workCenter     WorkCenter? @relation(fields: [workCenterId], references: [id])
+  /** Planned minutes from the routing snapshot (setup + run + queue/move). */
+  plannedMinutes Float     @default(0)
   plannedQty     Float
   actualQty      Float     @default(0)
   rejectionQty   Float     @default(0)

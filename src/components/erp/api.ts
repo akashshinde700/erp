@@ -489,6 +489,10 @@ export interface ProductionTask {
   employeeId: string | null
   employee?: { id: string; code: string; name: string; machineNo?: string | null; shift?: string } | null
   machineNo: string | null
+  workCenterId: string | null
+  workCenter?: { id: string; code: string; name: string } | null
+  /** Planned duration from the routing snapshot (minutes). */
+  plannedMinutes: number
   plannedQty: number
   actualQty: number
   rejectionQty: number
@@ -642,6 +646,152 @@ export interface MrpDocumentResult {
   requisition: { id: string; reqNo: string; grandTotal?: number } | null
   workOrders: { id: string; woNo: string }[]
 }
+
+// ---------- routing / work centres / capacity / OEE ----------
+
+export interface ShiftRow {
+  id: string
+  name: string
+  startMin: number
+  durationMin: number
+  active: boolean
+}
+
+export interface WorkCenter {
+  id: string
+  code: string
+  name: string
+  type: 'MACHINE' | 'CELL' | 'MANUAL'
+  machineNo: string | null
+  parallelCapacity: number
+  dailyHours: number
+  costPerHour: number
+  active: boolean
+  notes: string | null
+  downNow?: boolean
+  plannedMinutesPerDay?: number
+  calendar?: { id: string; workDays: string; shifts: ShiftRow[]; holidays: { id: string; date: string; reason: string | null }[] } | null
+  _count?: { operations: number; tasks: number; downtimes: number }
+}
+
+export interface WorkCenterCalendar {
+  workCenter: { id: string; code: string; name: string; dailyHours: number; parallelCapacity: number }
+  workDays: string
+  shifts: ShiftRow[]
+  holidays: { id: string; date: string; reason: string | null }[]
+  hasCalendar: boolean
+}
+
+export interface RoutingOperationRow {
+  id: string
+  seq: number
+  operation: string
+  workCenterId: string
+  workCenter: { id: string; code: string; name: string; type: string; costPerHour: number }
+  runMinutesPerUnit: number
+  setupMinutes: number
+  queueMinutes: number
+  moveMinutes: number
+  inspectionMinutes: number
+  parallel: boolean
+  notes: string | null
+}
+
+export interface RoutingDetail {
+  bom: { id: string; bomNo: string; revision: number; status: string; itemId: string | null; productName: string }
+  operations: RoutingOperationRow[]
+}
+
+export interface DowntimeRow {
+  id: string
+  workCenterId: string
+  workCenter: { id: string; code: string; name: string }
+  startedAt: string
+  endedAt: string | null
+  reason: string
+  planned: boolean
+  notes: string | null
+  minutes: number
+  open: boolean
+}
+
+export interface SchedulePlacement {
+  taskId: string
+  taskNo: string
+  woNo: string
+  projectNo: string
+  operation: string
+  seq: number
+  workCenterId: string
+  workCenter: string
+  minutes: number
+  start: string
+  end: string
+}
+
+export interface SchedulePlan {
+  from: string
+  horizonDays: number
+  placements: SchedulePlacement[]
+  unschedulable: { taskNo: string; woNo: string; reason: string }[]
+  lateWorkOrders: { woNo: string; projectNo: string; due: string; plannedFinish: string; lateDays: number }[]
+  load: { workCenterId: string; workCenter: string; tasks: number; plannedMinutes: number; capacityMinutes: number; utilisationPct: number }[]
+  workCentersWithoutCalendar: string[]
+}
+
+export interface OeeRow {
+  workCenterId: string
+  workCenter: string
+  day: string
+  plannedMinutes: number
+  downtimeMinutes: number
+  runMinutes: number
+  availabilityPct: number
+  performancePct: number
+  qualityPct: number
+  oeePct: number
+  idealMinutes: number
+  goodQty: number
+  rejectQty: number
+  tasks: number
+  downtimeByReason: Record<string, number>
+  notes: string[]
+}
+
+export interface OeeReport {
+  from: string
+  to: string
+  days: number
+  rows: OeeRow[]
+  byWorkCenter: OeeRow[]
+  byDay: OeeRow[]
+  summary: {
+    plannedMinutes: number
+    downtimeMinutes: number
+    runMinutes: number
+    availabilityPct: number
+    performancePct: number
+    qualityPct: number
+    oeePct: number
+    workCenters: number
+    days: number
+  }
+  excluded: { tasksWithoutIdealTime: number; tasksWithoutWorkCenter: number; openDowntime: number }
+  notes: string[]
+}
+
+export const DOWNTIME_REASONS = [
+  'BREAKDOWN',
+  'CHANGEOVER',
+  'NO_MATERIAL',
+  'NO_OPERATOR',
+  'POWER',
+  'MAINTENANCE',
+  'QUALITY',
+  'OTHER',
+] as const
+
+export const WORK_CENTER_TYPES = ['MACHINE', 'CELL', 'MANUAL'] as const
 
 export const MANUFACTURING_OPERATIONS: { key: string; label: string }[] = [
   { key: 'CUTTING', label: 'Material Cutting' },

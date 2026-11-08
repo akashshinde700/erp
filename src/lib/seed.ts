@@ -450,7 +450,7 @@ export async function seedDatabase(force = false) {
       parties: 6, items: 11, processes: 6, warehouses: 2, // 11 = 3 FG + 2 RM + service + 4 fabrication + FG-2001 tank
       purchaseInvoices: 2, salesInvoices: 4, payments: 3,
       jobworkInwards: 2, jobCards: 2, certificates: 1,
-      employees: 6, projects: 3, boms: 3, workOrders: 2, productionTasks: 12,
+      employees: 6, projects: 3, boms: 3, workOrders: 2, productionTasks: 15, workCenters: 6,
       inquiries: 2, blogPosts: 2,
     },
     sample: {

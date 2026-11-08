@@ -26,6 +26,7 @@ import { Prisma } from '@prisma/client'
 import { db } from './db'
 import { AccountCode, BusinessError, assertPeriodOpen, booksLock, postGl } from './accounting'
 import { EPS, r2 } from './erp'
+import { bomUnitsPerSet } from './bom-basis'
 
 type Tx = Prisma.TransactionClient
 
@@ -325,12 +326,15 @@ export async function bomStandardCost(
     where: { id: bomId },
     select: {
       bomNo: true,
+      lineBasis: true,
+      batchQty: true,
       items: { select: { qty: true, wastagePct: true, rate: true, estCost: true } },
       routing: { select: { operation: true, runMinutesPerUnit: true, setupMinutes: true, workCenter: { select: { costPerHour: true } } } },
     },
   })
   if (!bom) throw new BusinessError('BOM not found', 404)
-  const materialCost = r2(bom.items.reduce((s, i) => s + i.estCost, 0))
+  // per ONE output unit: a BATCH revision's lines make batchQty units
+  const materialCost = r2(bom.items.reduce((s, i) => s + i.estCost, 0) / bomUnitsPerSet(bom))
   let labourCost = 0
   let minutesPerUnit = 0
   const unpriced: string[] = []
@@ -373,7 +377,7 @@ export async function workOrderCostVariance(workOrderId: string) {
     where: { id: workOrderId },
     select: {
       id: true, woNo: true, outputQty: true, status: true, overheadCost: true,
-      bom: { select: { bomNo: true, revision: true, standardLabourCost: true, standardMinutes: true, items: { select: { estCost: true } } } },
+      bom: { select: { bomNo: true, revision: true, standardLabourCost: true, standardMinutes: true, lineBasis: true, batchQty: true, items: { select: { estCost: true } } } },
       tasks: { select: { id: true, taskNo: true, seq: true, operation: true, materialCost: true, labourCost: true, overheadCost: true, hours: true, actualQty: true, rejectionQty: true, status: true } },
       productionReceipts: { where: { status: 'POSTED' }, select: { acceptedQty: true } },
     },
@@ -381,7 +385,7 @@ export async function workOrderCostVariance(workOrderId: string) {
   if (!wo) throw new BusinessError('Work order not found', 404)
   const rate = await overheadRatePct()
   const { cost: roll, rows } = costRollUp({ tasks: wo.tasks, overheadRatePct: rate, recordedOverhead: wo.overheadCost })
-  const standardMaterial = r2(wo.bom?.items.reduce((s, i) => s + i.estCost, 0) ?? 0)
+  const standardMaterial = r2((wo.bom?.items.reduce((s, i) => s + i.estCost, 0) ?? 0) / bomUnitsPerSet(wo.bom))
   const standardLabour = r2(wo.bom?.standardLabourCost ?? 0)
   const standardOverhead = r2((standardMaterial + standardLabour) * (rate / 100))
   const standardPerUnit = r2(standardMaterial + standardLabour + standardOverhead)

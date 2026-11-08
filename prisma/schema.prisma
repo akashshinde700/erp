@@ -719,6 +719,11 @@ model Bom {
   supersededBy  Bom?      @relation("BomRevision")
   status      String    @default("DRAFT") // DRAFT | APPROVED | SUPERSEDED | CANCELLED
   approvedAt  DateTime?
+  /// What the component quantities are for. UNIT = one output unit; BATCH =
+  /// one batch of `batchQty` output units (legacy rows: BATCH of 1, which is
+  /// numerically the same as UNIT). Frozen with the revision.
+  lineBasis   String    @default("BATCH") // BATCH | UNIT
+  batchQty    Float     @default(1)
   /// Standard labour per one output unit, rolled up from the routing when the
   /// revision is approved (frozen with the revision like the routes themselves).
   standardLabourCost Float @default(0)

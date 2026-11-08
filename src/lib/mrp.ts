@@ -421,7 +421,8 @@ export async function computeMrp(
           qty: r2(remaining * line.grossQty),
           needBy: event.needBy,
           level: agg.level + 1,
-          pegging: `${bom!.bomNo} rev ${bom!.revision} × ${event.qty} ${item.uom}`,
+          // keep the root (driving SO / WO) so a component pegs back to its order
+          pegging: `${event.pegging} → ${bom!.bomNo} rev ${bom!.revision} × ${event.qty} ${item.uom}`,
           path: nextPath,
         })
       }

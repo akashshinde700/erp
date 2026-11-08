@@ -2435,6 +2435,9 @@ function BomsTab({ onChanged }: { onChanged?: () => void }) {
                         <TableCell>
                           <span className="block font-medium tabular-nums">{b.bomNo}</span>
                           <Badge variant="outline" className="mt-0.5 tabular-nums">rev {b.revision}</Badge>
+                          <span className="mt-0.5 block text-[10px] text-muted-foreground">
+                            {b.lineBasis === 'UNIT' ? 'per unit' : `per batch of ${qtyFmt(b.batchQty ?? 1)}`}
+                          </span>
                         </TableCell>
                         <TableCell>
                           {b.item ? (
@@ -2666,6 +2669,8 @@ function NewBomDialog({
   const [drawingRef, setDrawingRef] = useState('')
   const [effectiveFrom, setEffectiveFrom] = useState('')
   const [notes, setNotes] = useState('')
+  const [lineBasis, setLineBasis] = useState<'BATCH' | 'UNIT'>('UNIT')
+  const [batchQty, setBatchQty] = useState('1')
   const [rows, setRows] = useState<BomDraftRow[]>([emptyBomRow()])
   const [saving, setSaving] = useState(false)
 
@@ -2691,11 +2696,14 @@ function NewBomDialog({
     if (validRows.some((r) => r.itemId === outputItemId)) return toast.error('The output item cannot also be a component of its own BOM')
     if (!productName.trim()) return toast.error('Product / assembly name is required')
     if (validRows.length === 0) return toast.error('Add at least one material line with quantity')
+    if (lineBasis === 'BATCH' && !(num(batchQty) > 0)) return toast.error('Batch size must be more than 0 output units')
     setSaving(true)
     try {
       const res = await apiPost<Bom>('/api/manufacturing/boms', {
         projectId: pid,
         itemId: outputItemId,
+        lineBasis,
+        batchQty: lineBasis === 'BATCH' ? num(batchQty) : 1,
         productName: productName.trim(),
         drawingRef: drawingRef.trim() || undefined,
         effectiveFrom: effectiveFrom || undefined,
@@ -2721,7 +2729,7 @@ function NewBomDialog({
       })
       onApproved()
       onOpenChange(false)
-      setProductName(''); setDrawingRef(''); setNotes(''); setOutputItemId(''); setEffectiveFrom('')
+      setProductName(''); setDrawingRef(''); setNotes(''); setOutputItemId(''); setEffectiveFrom(''); setLineBasis('UNIT'); setBatchQty('1')
       setRows([emptyBomRow()])
     } catch (e) {
       toastError(e)
@@ -2795,6 +2803,29 @@ function NewBomDialog({
               <Label htmlFor="bom-eff">Effective From</Label>
               <Input id="bom-eff" type="date" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} className="h-11" />
             </div>
+            <div className="space-y-1.5">
+              <Label>Quantities Are</Label>
+              <Select value={lineBasis} onValueChange={(v) => setLineBasis(v as 'BATCH' | 'UNIT')}>
+                <SelectTrigger className="h-11 data-[size=default]:h-11 w-full" aria-label="BOM quantity basis">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="UNIT">Per output unit</SelectItem>
+                  <SelectItem value="BATCH">Per batch</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {lineBasis === 'BATCH' ? (
+              <div className="space-y-1.5">
+                <Label htmlFor="bom-batch">Batch Makes (output units)</Label>
+                <Input id="bom-batch" type="number" inputMode="decimal" min={0} value={batchQty} onChange={(e) => setBatchQty(e.target.value)} className="h-11" />
+              </div>
+            ) : null}
+            <p className="text-xs text-muted-foreground sm:col-span-3">
+              {lineBasis === 'UNIT'
+                ? 'Each line is the quantity for ONE finished unit. A work order for 10 units needs 10 × each line, and finished goods are received at the full standard (material + labour + overhead).'
+                : `Each line is the quantity for one batch of ${num(batchQty) > 0 ? num(batchQty) : '…'} finished unit(s). A work order needs lines × (order qty ÷ batch size). Receipts are valued at the material standard; labour and overhead go to manufacturing variance.`}
+            </p>
           </div>
 
           {/* Mobile: stacked cards */}
@@ -2975,7 +3006,7 @@ function BomLinesDialog({ bom, open, onOpenChange }: { bom: Bom; open: boolean; 
           </DialogTitle>
           <DialogDescription>
             {bom.project?.projectNo} · makes {bom.item ? `${bom.item.code} (${bom.item.name})` : 'an unlinked item'} ·{' '}
-            {bom.items.length} line(s) · gross = qty + wastage. Stock check against current inventory.
+            {bom.items.length} line(s) · quantities {bom.lineBasis === 'UNIT' ? 'per output unit' : `per batch of ${qtyFmt(bom.batchQty ?? 1)} output unit(s)`} · gross = qty + wastage. Stock check against current inventory.
             {bom.effectiveFrom ? ` Effective ${dateStr(bom.effectiveFrom)}${bom.effectiveTo ? ` → ${dateStr(bom.effectiveTo)}` : ' → open'}.` : ''}
             {bom.supersedes ? ` Supersedes ${bom.supersedes.bomNo} rev ${bom.supersedes.revision}.` : ''}
             {bom.supersededBy ? ` Superseded by ${bom.supersededBy.bomNo} rev ${bom.supersededBy.revision}.` : ''}

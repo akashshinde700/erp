@@ -29,13 +29,14 @@
 import { db } from './db'
 import { r2, EPS } from './erp'
 import { capacityMinutesOn } from './routing'
+import { BusinessError } from './accounting'
 
 const MINUTE = 60_000
 const DAY_MS = 86_400_000
 
 const dayStart = (d: Date | string): Date => {
   const dt = typeof d === 'string' ? new Date(d) : new Date(d.getTime())
-  if (Number.isNaN(dt.getTime())) throw new RangeError('Invalid date — use YYYY-MM-DD')
+  if (Number.isNaN(dt.getTime())) throw new BusinessError('Invalid date — use YYYY-MM-DD')
   return new Date(Date.UTC(dt.getUTCFullYear(), dt.getUTCMonth(), dt.getUTCDate()))
 }
 const dayKey = (d: Date): string => d.toISOString().slice(0, 10)
@@ -95,9 +96,9 @@ export async function oeeReport(input: { from?: string | Date; to?: string | Dat
   const today = dayStart(new Date())
   const to = dayStart(input.to ?? today)
   const from = dayStart(input.from ?? new Date(to.getTime() - 6 * DAY_MS))
-  if (to.getTime() < from.getTime()) throw new RangeError('The report end date cannot be before its start date')
+  if (to.getTime() < from.getTime()) throw new BusinessError('The report end date cannot be before its start date')
   const days = Math.round((to.getTime() - from.getTime()) / DAY_MS) + 1
-  if (days > 366) throw new RangeError('OEE windows are limited to 366 days — pick a shorter range')
+  if (days > 366) throw new BusinessError('OEE windows are limited to 366 days — pick a shorter range')
 
   const centers = await db.workCenter.findMany({
     where: { active: true, ...(input.workCenterId ? { id: input.workCenterId } : {}) },

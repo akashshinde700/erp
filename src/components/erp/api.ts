@@ -443,6 +443,9 @@ export interface Bom {
   supersededBy: BomRevisionRef | null
   productName: string
   drawingRef: string | null
+  /** UNIT = lines per output unit; BATCH = lines make `batchQty` output units. */
+  lineBasis: 'BATCH' | 'UNIT'
+  batchQty: number
   status: string // DRAFT | APPROVED | SUPERSEDED | CANCELLED
   approvedAt: string | null
   notes: string | null

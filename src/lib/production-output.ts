@@ -4,6 +4,7 @@ import { BusinessError, cancelGlForVoucher, postGl, AccountCode } from './accoun
 import { EPS, fyCode, r2 } from './erp'
 import { cancelLotMovementsTx, linkLotGenealogyTx, receiveLotTx } from './traceability'
 import { tenantCompany } from './tenant'
+import { bomUnitsPerSet, isUnitBasis } from './bom-basis'
 
 type Tx = Prisma.TransactionClient
 async function org(tx: Tx) { const row = await tenantCompany(tx); if (!row) throw new BusinessError('Operating company is not configured', 409); return row }
@@ -17,10 +18,14 @@ type WoForCosting = Prisma.WorkOrderGetPayload<{ include: { tasks: true; bom: { 
  * accepted units are valued at the BOM standard, so the cost of rejected output
  * lands in manufacturing variance.
  */
-function receiptCosts(wo: WoForCosting, input: { producedQty: number; acceptedQty: number }) {
+function receiptCosts(wo: WoForCosting, input: { producedQty: number; acceptedQty: number }, overheadRatePct = 0) {
   const active = wo.tasks.filter((task) => task.status !== 'CANCELLED')
   const posted = wo.productionReceipts.filter((receipt) => receipt.status === 'POSTED')
-  const planned = active.length ? Math.max(...active.map((task) => task.plannedQty)) : 0
+  // UNIT BOM: the order is for `outputQty` finished units and every quantity on
+  // the receipt is in those units. BATCH (legacy) BOM: planned output is the
+  // largest task quantity, as it always was.
+  const unitBasis = isUnitBasis(wo.bom)
+  const planned = unitBasis ? wo.outputQty : active.length ? Math.max(...active.map((task) => task.plannedQty)) : 0
   const alreadyAccepted = r2(posted.reduce((sum, receipt) => sum + receipt.acceptedQty, 0))
   const alreadyProduced = r2(posted.reduce((sum, receipt) => sum + receipt.producedQty, 0))
   const actualTotal = r2(active.reduce((sum, task) => sum + task.materialCost + task.labourCost + task.overheadCost, 0))
@@ -28,23 +33,36 @@ function receiptCosts(wo: WoForCosting, input: { producedQty: number; acceptedQt
   const remainingActual = Math.max(0, r2(actualTotal - priorSettled))
   const receiptShare = Math.min(1, input.producedQty / Math.max(EPS, planned - alreadyProduced))
   const actualCost = r2(remainingActual * receiptShare)
-  // Standard on the MATERIAL basis only. `planned` is the largest component
-  // quantity (kg of plate, say) while `acceptedQty` counts finished pieces, so
-  // scaling the per-unit labour standard by it would mix units. The full
-  // standard-vs-actual comparison — material, labour and overhead per accepted
-  // unit — lives in src/lib/costing.ts (GET /api/manufacturing/costing), where
-  // the unit basis is explicit; receipt variance stays material-only.
-  const expectedTotal = r2(wo.bom?.items.reduce((sum, line) => sum + line.estCost, 0) ?? actualTotal)
-  const expectedCost = planned > EPS ? r2(expectedTotal * (input.acceptedQty / planned)) : 0
+  const bomMaterial = wo.bom?.items.reduce((sum, line) => sum + line.estCost, 0) ?? 0
+  let expectedCost: number
+  let standardPerUnit: number | null = null
+  if (unitBasis) {
+    // Full standard per finished unit — material + routed labour + absorbed
+    // overhead at the company rate — so stock carries what the unit should
+    // cost and MFGV holds only the true job variance.
+    const material = bomMaterial / bomUnitsPerSet(wo.bom)
+    const labour = wo.bom?.standardLabourCost ?? 0
+    standardPerUnit = r2(material + labour + (material + labour) * (overheadRatePct / 100))
+    expectedCost = r2(standardPerUnit * input.acceptedQty)
+  } else {
+    // BATCH (legacy): standard on the MATERIAL basis only. `planned` is the
+    // largest task quantity (kg of plate, say) while `acceptedQty` counts
+    // finished pieces, so scaling the per-unit labour standard by it would mix
+    // units. Labour and overhead therefore land in MFGV for these orders; use
+    // GET /api/manufacturing/costing for the full per-unit comparison.
+    const expectedTotal = r2(wo.bom ? bomMaterial * (wo.outputQty / bomUnitsPerSet(wo.bom)) : actualTotal)
+    expectedCost = planned > EPS ? r2(expectedTotal * (input.acceptedQty / planned)) : 0
+  }
   const variance = r2(actualCost - expectedCost)
-  return { planned, alreadyAccepted, alreadyProduced, actualTotal, priorSettled, remainingActual, actualCost, expectedCost, variance, wipAfter: r2(remainingActual - actualCost), tasksOpen: active.filter((t) => t.status !== 'COMPLETED').length, tasks: active.length }
+  return { basis: unitBasis ? 'UNIT' : 'BATCH', standardPerUnit, planned, alreadyAccepted, alreadyProduced, actualTotal, priorSettled, remainingActual, actualCost, expectedCost, variance, wipAfter: r2(remainingActual - actualCost), tasksOpen: active.filter((t) => t.status !== 'COMPLETED').length, tasks: active.length }
 }
 
 /** What a receipt would post — shown in the wizard before the user commits. */
 export async function previewProductionReceipt(input: { workOrderId: string; producedQty: number; acceptedQty: number }) {
   const wo = await db.workOrder.findUnique({ where: { id: input.workOrderId }, include: { tasks: true, bom: { include: { items: true } }, productionReceipts: true } })
   if (!wo) throw new BusinessError('Work order not found', 404)
-  const c = receiptCosts(wo, input)
+  const company = await tenantCompany(db)
+  const c = receiptCosts(wo, input, company?.overheadRatePct ?? 0)
   const warnings: string[] = []
   if (!['OPEN', 'IN_PROGRESS'].includes(wo.status)) warnings.push(`Work order is ${wo.status}`)
   if (!c.tasks || c.tasksOpen) warnings.push(`${c.tasksOpen || 'No'} operation(s) still open — complete every task first`)
@@ -85,7 +103,7 @@ export async function postProductionReceipt(input: { workOrderId: string; output
     if (input.acceptedQty <= EPS) throw new BusinessError('At least one finished unit must pass QC before stock receipt')
     if ((rejectedQty > EPS || reworkQty > EPS || scrapQty > EPS) && !input.qcNotes?.trim()) throw new BusinessError('QC notes are required for rejection, rework or scrap')
     if (input.expiryDate && input.manufacturedAt && input.expiryDate <= input.manufacturedAt) throw new BusinessError('Expiry date must be after manufacture date')
-    const { planned, alreadyAccepted, actualCost, expectedCost, variance } = receiptCosts(wo, input)
+    const { planned, alreadyAccepted, actualCost, expectedCost, variance } = receiptCosts(wo, input, company.overheadRatePct ?? 0)
     if (alreadyAccepted + input.acceptedQty > planned * 1.1 + EPS) throw new BusinessError(`Finished receipt exceeds planned output tolerance: planned ${planned}, already accepted ${alreadyAccepted}`)
     const date = input.date ?? new Date(), receiptNo = await nextNo(tx, company.id, date)
     const qcStatus = rejectedQty > EPS || reworkQty > EPS || scrapQty > EPS ? 'PARTIAL' : 'PASSED'

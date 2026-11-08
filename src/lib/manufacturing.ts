@@ -20,6 +20,7 @@ import { consumeLotsFefoTx } from './traceability'
 import { tenantCompany } from './tenant'
 import { operationMinutes, generateTasksFromRoutingTx } from './routing'
 import { absorbTaskOverheadTx, freezeStandardCostTx } from './costing'
+import { bomUnitsPerSet, normaliseBomBasis, type BomLineBasis } from './bom-basis'
 
 type Tx = Prisma.TransactionClient
 
@@ -482,6 +483,9 @@ export interface BomInput {
   drawingRef?: string | null
   effectiveFrom?: string | Date | null
   notes?: string | null
+  /** UNIT = lines are per output unit; BATCH = lines make `batchQty` units. Default BATCH of 1. */
+  lineBasis?: BomLineBasis
+  batchQty?: number
   lines: BomLineInput[]
 }
 
@@ -618,6 +622,7 @@ export async function createBom(input: BomInput) {
       select: { revision: true },
     })
 
+    const basis = normaliseBomBasis(input)
     const date = new Date()
     const bomNo = await nextDocNo(tx, 'BOM', date)
     return tx.bom.create({
@@ -626,6 +631,8 @@ export async function createBom(input: BomInput) {
         projectId: project.id,
         itemId: output!.id,
         revision: (cancelled?.revision ?? 0) + 1,
+        lineBasis: basis.lineBasis,
+        batchQty: basis.batchQty,
         productName: input.productName?.trim() || output!.name,
         drawingRef: input.drawingRef ?? null,
         effectiveFrom: input.effectiveFrom ? dayStart(input.effectiveFrom) : dayStart(date),
@@ -653,10 +660,13 @@ export async function updateBom(id: string, input: Partial<BomInput> & { lines: 
     if (!bom.itemId) throw new BusinessError('This legacy BOM has no output item yet — link it before editing', 409)
     const itemMap = await validateBomLines(tx, bom.itemId, input.lines)
 
+    const basis = normaliseBomBasis(input, { lineBasis: bom.lineBasis as BomLineBasis, batchQty: bom.batchQty })
     await tx.bomItem.deleteMany({ where: { bomId: id } })
     return tx.bom.update({
       where: { id },
       data: {
+        lineBasis: basis.lineBasis,
+        batchQty: basis.batchQty,
         productName: input.productName?.trim() || bom.productName,
         drawingRef: input.drawingRef ?? null,
         notes: input.notes ?? null,
@@ -713,6 +723,8 @@ export async function reviseBom(id: string, input?: { notes?: string | null; eff
         itemId: source.itemId,
         revision,
         supersedesId: source.id,
+        lineBasis: source.lineBasis,
+        batchQty: source.batchQty,
         productName: source.productName,
         drawingRef: source.drawingRef,
         effectiveFrom: input?.effectiveFrom ? dayStart(input.effectiveFrom) : dayStart(new Date()),
@@ -839,7 +851,7 @@ export interface EffectiveBomLine {
   itemId: string
   item: { id: string; code: string; name: string; uom: string; isStockItem: boolean; isService: boolean }
   qty: number
-  grossQty: number // qty × (1 + wastage%)
+  grossQty: number // per ONE output unit: qty × (1 + wastage%) ÷ units per BOM set
   uom: string
   wastagePct: number
 }
@@ -883,7 +895,9 @@ export async function effectiveBomMap(client: Tx, asOf: Date = new Date()): Prom
         itemId: i.itemId,
         item: i.item,
         qty: i.qty,
-        grossQty: r2(i.qty * (1 + i.wastagePct / 100)),
+        // 6 dp: a per-unit share of a large batch must not round to zero before
+        // MRP multiplies it back up by the demand quantity.
+        grossQty: Math.round(((i.qty * (1 + i.wastagePct / 100)) / bomUnitsPerSet(b)) * 1e6) / 1e6,
         uom: i.uom,
         wastagePct: i.wastagePct,
       })),
@@ -999,11 +1013,13 @@ export async function createWorkOrderTx(tx: Tx, input: WorkOrderInput) {
     if (!outputItemId) {
       throw new BusinessError(`${bom.bomNo} has no linked output item — link it in the BOM before creating a work order`, 409)
     }
-    // WO quantity = BOM net + wastage allowance, scaled to the output batch.
+    // WO quantity = BOM net + wastage allowance, scaled to the output: a UNIT
+    // BOM needs line × outputQty, a BATCH BOM line × outputQty / batchQty.
+    const sets = outputQty / bomUnitsPerSet(bom)
     lines = bom.items.map((bi) => ({
       itemId: bi.itemId,
       description: bom.productName,
-      plannedQty: r2(bi.qty * (1 + bi.wastagePct / 100) * outputQty),
+      plannedQty: r2(bi.qty * (1 + bi.wastagePct / 100) * sets),
       uom: bi.uom,
       bomItemId: bi.id,
     }))

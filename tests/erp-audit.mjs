@@ -187,7 +187,7 @@ async function main() {
   check(
     'production cost report reconciles material, labour, actual and variance',
     productionRows.length > 0 && productionRows.every((r) =>
-      Math.abs(r.actualCost - (r.materialCost + r.labourCost)) < 0.005 &&
+      Math.abs(r.actualCost - (r.materialCost + r.labourCost + (r.overheadCost ?? 0))) < 0.005 &&
       Math.abs(r.costVariance - (r.actualCost - r.expectedCost)) < 0.005 &&
       Math.abs(r.projectedMargin - (r.budget - r.actualCost)) < 0.005
     ),
@@ -521,7 +521,7 @@ async function main() {
   const mrpRuns = await req('GET', '/api/manufacturing/mrp')
   check('MRP run history responds', mrpRuns.status === 200 && Array.isArray(data(mrpRuns)), `status=${mrpRuns.status}`)
   const whereUsed = await req('GET', `/api/manufacturing/boms/where-used?itemId=${materialItemId}`)
-  check('BOM where-used responds', whereUsed.status === 200 && Array.isArray(data(whereUsed)), `status=${whereUsed.status}`)
+  check('BOM where-used responds', whereUsed.status === 200 && Array.isArray(data(whereUsed)?.usedIn), `status=${whereUsed.status}`)
 
   const bomsList = data(await req('GET', '/api/manufacturing/boms')) ?? []
   if (bomsList[0]?.id) {

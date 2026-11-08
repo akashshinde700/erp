@@ -8,6 +8,7 @@ import { Prisma } from '@prisma/client'
 import { EPS, r2 } from './erp'
 import { tenantCompany } from './tenant'
 import { overheadRatePct } from './costing'
+import { bomUnitsPerSet } from './bom-basis'
 
 const dayStart = (d: Date): Date => new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()))
 
@@ -1226,7 +1227,7 @@ export async function manufacturingCostVarianceReport(filters?: { from?: string;
       project: { select: { projectNo: true, name: true } },
       bom: {
         select: {
-          bomNo: true, revision: true, standardLabourCost: true, standardMinutes: true,
+          bomNo: true, revision: true, standardLabourCost: true, standardMinutes: true, lineBasis: true, batchQty: true,
           items: { select: { estCost: true } },
         },
       },
@@ -1246,7 +1247,7 @@ export async function manufacturingCostVarianceReport(filters?: { from?: string;
     const overheadActual = r2(wo.tasks.reduce((s, t) => s + t.overheadCost, 0))
     const actualCost = r2(materialActual + labourActual + overheadActual)
     const accepted = r2(wo.productionReceipts.reduce((s, r) => s + r.acceptedQty, 0))
-    const standardMaterialPerUnit = r2(wo.bom?.items.reduce((s, i) => s + i.estCost, 0) ?? 0)
+    const standardMaterialPerUnit = r2((wo.bom?.items.reduce((s, i) => s + i.estCost, 0) ?? 0) / bomUnitsPerSet(wo.bom))
     const standardLabourPerUnit = r2(wo.bom?.standardLabourCost ?? 0)
     const standardOverheadPerUnit = r2((standardMaterialPerUnit + standardLabourPerUnit) * (rate / 100))
     const units = accepted > EPS ? accepted : 0

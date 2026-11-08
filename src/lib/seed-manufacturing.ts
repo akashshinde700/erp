@@ -172,27 +172,31 @@ export async function seedManufacturingDemo(deps: ManufacturingSeedDeps) {
   // Operation tasks (job cards): the route created the first seven; the demo
   // then assigns and progresses them exactly as a planner would. Completed ones
   // consume real stock.
-  const routed = async (seq: number) => {
+  // Routed tasks are generated with plannedQty = the order's output quantity
+  // (one frame). The shop records job cards in their own unit (kg cut, pieces
+  // welded), so the planner sets each card's planned quantity before release.
+  const routed = async (seq: number, plannedQty: number) => {
     const task = await db.productionTask.findFirst({ where: { workOrderId: canopyWo.id, seq }, select: { id: true } })
     if (!task) throw new Error(`seed: routed task ${seq} is missing on ${canopyWo.woNo}`)
+    await db.productionTask.update({ where: { id: task.id }, data: { plannedQty } })
     return task
   }
-  const cut = await routed(1)
+  const cut = await routed(1, 525)
   await assignTask(cut.id, { employeeId: prakash.id, dueDate: daysAgo(30) })
   await startTask(cut.id) // lifecycle guard: ASSIGNED -> IN_PROGRESS -> COMPLETED
   await completeTask(cut.id, { actualQty: 515, rejectionQty: 10, hours: 16, materialItemId: msPlate.id, materialQty: 520, completedAt: daysAgo(31) })
 
-  const laser = await routed(2)
+  const laser = await routed(2, 100)
   await assignTask(laser.id, { employeeId: imran.id, dueDate: daysAgo(26) })
   await startTask(laser.id) // lifecycle guard: ASSIGNED -> IN_PROGRESS -> COMPLETED
   await completeTask(laser.id, { actualQty: 100, hours: 8, completedAt: daysAgo(26) })
 
-  const bend = await routed(3)
+  const bend = await routed(3, 100)
   await assignTask(bend.id, { employeeId: prakash.id, dueDate: daysAgo(22) })
   await startTask(bend.id) // lifecycle guard: ASSIGNED -> IN_PROGRESS -> COMPLETED
   await completeTask(bend.id, { actualQty: 100, hours: 6, materialItemId: msPipe.id, materialQty: 216, completedAt: daysAgo(22) })
 
-  const weld = await routed(4)
+  const weld = await routed(4, 100)
   await assignTask(weld.id, { employeeId: sandeep.id, dueDate: daysAgo(15) })
   await startTask(weld.id) // lifecycle guard: ASSIGNED -> IN_PROGRESS -> COMPLETED
   await completeTask(weld.id, { actualQty: 100, rejectionQty: 2, hours: 24, materialItemId: weldRod.id, materialQty: 25, completedAt: daysAgo(14) })
@@ -200,11 +204,11 @@ export async function seedManufacturingDemo(deps: ManufacturingSeedDeps) {
   // Route order: 1 cut → 2 laser → 3 bend → 4 weld → 5 paint → 6 assemble.
   // The demo keeps painting in progress and assembly assigned but OVERDUE, so
   // the pending board and the finite schedule both have something to show.
-  const pnt = await routed(5)
+  const pnt = await routed(5, 100)
   await assignTask(pnt.id, { employeeId: anita.id, dueDate: daysAhead(2) })
   await startTask(pnt.id)
 
-  const asm = await routed(6)
+  const asm = await routed(6, 100)
   await assignTask(asm.id, { employeeId: vilas.id, dueDate: daysAgo(2) }) // overdue
 
   const qcTask = await createTask({
@@ -337,7 +341,7 @@ export async function seedManufacturingDemo(deps: ManufacturingSeedDeps) {
   )
 
   return {
-    counts: { employees: 6, projects: 3, boms: 3, workOrders: 2, productionTasks: 15, workCenters: CENTERS.length },
+    counts: { employees: 6, projects: 3, boms: 3, workOrders: 2, productionTasks: 11, workCenters: CENTERS.length },
     projects: { running: canopy.projectNo, pending: gantry.projectNo, completed: tank.projectNo },
   }
 }

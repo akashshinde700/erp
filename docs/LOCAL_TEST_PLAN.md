@@ -174,7 +174,7 @@ KEY=$(cat db/platform-key.key)                   # the server creates it on firs
 curl -s -X POST -H "x-platform-key: $KEY" localhost:3011/api/seed | head -c 600
 ```
 
-The seed now claims `productionTasks: 15, workCenters: 6, overheadRatePct: 18`.
+The seed now claims `productionTasks: 11, workCenters: 6, overheadRatePct: 18`.
 If `workCenters` is missing from the response, you are running stale code.
 
 ---
@@ -320,12 +320,9 @@ Twenty minutes in the browser, seeded demo data. In this order:
    credentials. Verify every deployment reads secrets from the environment.
 3. **P0 — a real shop-floor pilot.** A green audit suite is not evidence that a
    fabricator can run a job card on a tablet.
-4. **The finished-goods receipt is still valued at the material standard**, so
-   labour and overhead credit out of WIP into `MFGV` instead of stock. Needs one
-   decision: **is a BOM line per output unit or per batch?** Legacy revisions are
-   per batch (`outputQty` defaults to 1). Until that is settled, use
-   `GET /api/manufacturing/costing` for per-unit standard-vs-actual, and read the
-   receipt's `variance` column as material-only.
+4. ~~Finished-goods receipt valued at material standard only~~ — resolved by the
+   BOM line basis (UNIT / BATCH), see `docs/MANUFACTURING_COSTING.md`. UNIT BOMs
+   receive at full standard; BATCH (all legacy revisions) keep the old rule.
 5. **No reservations/ATP.** MRP netting and the capacity plan are advice; two
    plans can suggest the same quantity twice.
 6. **Not built, by design:** sequence-dependent changeover, a persisted/frozen

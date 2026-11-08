@@ -10,15 +10,18 @@
 import { useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import {
+  Activity,
   ArrowLeft,
   BadgeCheck,
   Building2,
   CalendarClock,
   CheckCircle2,
+  ChevronDown,
   ClipboardList,
   Coins,
   FolderKanban,
   ListTodo,
+  ListTree,
   Loader2,
   PackageSearch,
   Pencil,
@@ -33,6 +36,7 @@ import {
   Wrench,
   XCircle,
   PackageCheck,
+  type LucideIcon,
 } from 'lucide-react'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
@@ -44,7 +48,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Textarea } from '@/components/ui/textarea'
 import {
   apiDelete,
@@ -98,7 +102,7 @@ import { ProductionReceiptsWorkspace } from './production-receipts'
 // Module shell
 // ===========================================================================
 
-type MfgTab = 'projects' | 'boms' | 'work-orders' | 'mrp' | 'capacity' | 'material-plan' | 'tasks' | 'pending' | 'employees' | 'centers' | 'oee' | 'costing' | 'quality'
+type MfgTab = 'projects' | 'boms' | 'work-orders' | 'mrp' | 'capacity' | 'material-plan' | 'tasks' | 'pending' | 'employees' | 'receipts' | 'centers' | 'oee' | 'costing' | 'quality'
 
 export function ManufacturingView() {
   const [tab, setTab] = useState<MfgTab>('projects')
@@ -157,98 +161,212 @@ export function ManufacturingView() {
         />
       </div>
 
-      <Tabs value={tab} onValueChange={(v) => setTab(v as MfgTab)}>
-        {/* The tab row scrolls horizontally on phones (6 module tabs don't fit
-            320-360px); globals.css adds a right-edge fade affordance on <sm. */}
-        <TabsList className="h-11 w-full justify-start overflow-x-auto sm:w-auto">
-          <TabsTrigger value="projects" className="h-11 gap-1.5 sm:h-9">
-            <FolderKanban className="size-4" aria-hidden /> Projects
-          </TabsTrigger>
-          <TabsTrigger value="boms" className="h-11 gap-1.5 sm:h-9">
-            <PackageSearch className="size-4" aria-hidden /> BOMs
-          </TabsTrigger>
-          <TabsTrigger value="work-orders" className="h-11 gap-1.5 sm:h-9">
-            <ClipboardList className="size-4" aria-hidden /> Work Orders
-          </TabsTrigger>
-          <TabsTrigger value="mrp" className="h-11 gap-1.5 sm:h-9">
-            <CalendarClock className="size-4" aria-hidden /> MRP
-          </TabsTrigger>
-          <TabsTrigger value="capacity" className="h-11 gap-1.5 sm:h-9">
-            <Gauge className="size-4" aria-hidden /> Capacity
-          </TabsTrigger>
-          <TabsTrigger value="material-plan" className="h-11 gap-1.5 sm:h-9">
-            <PackageSearch className="size-4" aria-hidden /> Material Plan
-          </TabsTrigger>
-          <TabsTrigger value="tasks" className="h-11 gap-1.5 sm:h-9">
-            <Wrench className="size-4" aria-hidden /> Tasks
-          </TabsTrigger>
-          <TabsTrigger value="pending" className="h-11 gap-1.5 sm:h-9">
-            <ListTodo className="size-4" aria-hidden /> Pending
-          </TabsTrigger>
-          <TabsTrigger value="employees" className="h-11 gap-1.5 sm:h-9">
-            <Users className="size-4" aria-hidden /> Employees
-          </TabsTrigger>
-          <TabsTrigger value="receipts" className="h-11 gap-1.5 sm:h-9">
-            <PackageCheck className="size-4" aria-hidden /> FG Receipts
-          </TabsTrigger>
-          <TabsTrigger value="centers" className="h-11 gap-1.5 sm:h-9">
-            <Building2 className="size-4" aria-hidden /> Work Centers
-          </TabsTrigger>
-          <TabsTrigger value="oee" className="h-11 gap-1.5 sm:h-9">
-            <Gauge className="size-4" aria-hidden /> OEE
-          </TabsTrigger>
-          <TabsTrigger value="costing" className="h-11 gap-1.5 sm:h-9">
-            <Coins className="size-4" aria-hidden /> Costing
-          </TabsTrigger>
-          <TabsTrigger value="quality" className="h-11 gap-1.5 sm:h-9">
-            <CheckCircle2 className="size-4" aria-hidden /> Quality
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="projects" className="mt-4">
-          <ProjectsTab onChanged={() => stats.reload()} />
-        </TabsContent>
-        <TabsContent value="boms" className="mt-4">
-          <BomsTab onChanged={() => stats.reload()} />
-        </TabsContent>
-        <TabsContent value="work-orders" className="mt-4">
-          <WorkOrdersTab onViewTasks={gotoTasks} onChanged={() => stats.reload()} />
-        </TabsContent>
-        <TabsContent value="mrp" className="mt-4">
-          <MrpTab onChanged={() => stats.reload()} />
-        </TabsContent>
-        <TabsContent value="capacity" className="mt-4">
-          <CapacityTab />
-        </TabsContent>
-        <TabsContent value="material-plan" className="mt-4">
-          <MaterialPlanTab />
-        </TabsContent>
-        <TabsContent value="tasks" className="mt-4">
-          <TasksTab woFilter={taskWoFilter} onWoFilterChange={setTaskWoFilter} onChanged={() => stats.reload()} />
-        </TabsContent>
-        <TabsContent value="pending" className="mt-4">
-          <PendingTab onGoTasks={gotoTasks} onChanged={() => stats.reload()} />
-        </TabsContent>
-        <TabsContent value="employees" className="mt-4">
-          <EmployeesTab onChanged={() => stats.reload()} />
-        </TabsContent>
-        <TabsContent value="receipts" className="mt-4">
-          <ProductionReceiptsWorkspace />
-        </TabsContent>
-        <TabsContent value="centers" className="mt-4">
-          <WorkCentersTab />
-        </TabsContent>
-        <TabsContent value="oee" className="mt-4">
-          <OeeTab />
-        </TabsContent>
-        <TabsContent value="costing" className="mt-4">
-          <CostingTab />
-        </TabsContent>
-        <TabsContent value="quality" className="mt-4">
-          <QualityWorkspace />
-        </TabsContent>
-      </Tabs>
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
+        <ModuleNav tab={tab} onChange={setTab} stats={s ?? null} />
+        <div className="min-w-0 flex-1">
+          {tab === 'projects' && <ProjectsTab onChanged={() => stats.reload()} />}
+          {tab === 'boms' && <BomsTab onChanged={() => stats.reload()} />}
+          {tab === 'work-orders' && <WorkOrdersTab onViewTasks={gotoTasks} onChanged={() => stats.reload()} />}
+          {tab === 'mrp' && <MrpTab onChanged={() => stats.reload()} />}
+          {tab === 'capacity' && <CapacityTab />}
+          {tab === 'material-plan' && <MaterialPlanTab />}
+          {tab === 'tasks' && <TasksTab woFilter={taskWoFilter} onWoFilterChange={setTaskWoFilter} onChanged={() => stats.reload()} />}
+          {tab === 'pending' && <PendingTab onGoTasks={gotoTasks} onChanged={() => stats.reload()} />}
+          {tab === 'employees' && <EmployeesTab onChanged={() => stats.reload()} />}
+          {tab === 'receipts' && <ProductionReceiptsWorkspace />}
+          {tab === 'centers' && <WorkCentersTab />}
+          {tab === 'oee' && <OeeTab />}
+          {tab === 'costing' && <CostingTab />}
+          {tab === 'quality' && <QualityWorkspace />}
+        </div>
+      </div>
     </div>
+  )
+}
+
+// ===========================================================================
+// Section navigation — grouped, sticky sub-nav on desktop (replaces the old
+// single horizontally-scrolling 14-tab row) + grouped dropdown on phones.
+// ===========================================================================
+
+interface MfgNavItem {
+  value: MfgTab
+  label: string
+  icon: LucideIcon
+  /** Count chip — live numbers from /api/manufacturing/stats. */
+  badge?: number
+  /** Amber chip when the count needs attention (unassigned work). */
+  badgeTone?: 'neutral' | 'attention'
+}
+
+interface MfgNavGroup {
+  label: string
+  items: MfgNavItem[]
+}
+
+function buildNavGroups(s: ManufacturingStats | null): MfgNavGroup[] {
+  const workOrders = s ? s.workOrders.open + s.workOrders.inProgress : undefined
+  const wip = s ? s.tasks.assigned + s.tasks.inProgress : undefined
+  const pending = s?.tasks.pending
+  return [
+    {
+      label: 'Plan',
+      items: [
+        { value: 'projects', label: 'Projects', icon: FolderKanban, badge: s?.projects.running },
+        { value: 'boms', label: 'BOMs', icon: ListTree },
+        { value: 'mrp', label: 'MRP', icon: CalendarClock },
+        { value: 'material-plan', label: 'Material Plan', icon: PackageSearch },
+        { value: 'capacity', label: 'Capacity', icon: Gauge },
+      ],
+    },
+    {
+      label: 'Shop floor',
+      items: [
+        { value: 'work-orders', label: 'Work Orders', icon: ClipboardList, badge: workOrders },
+        { value: 'tasks', label: 'Tasks', icon: Wrench, badge: wip },
+        { value: 'pending', label: 'Pending', icon: ListTodo, badge: pending, badgeTone: pending ? 'attention' : 'neutral' },
+        { value: 'receipts', label: 'FG Receipts', icon: PackageCheck },
+      ],
+    },
+    {
+      label: 'Setup',
+      items: [
+        { value: 'centers', label: 'Work Centers', icon: Building2 },
+        { value: 'employees', label: 'Employees', icon: Users },
+      ],
+    },
+    {
+      label: 'Analyse',
+      items: [
+        { value: 'oee', label: 'OEE', icon: Activity },
+        { value: 'costing', label: 'Costing', icon: Coins },
+        { value: 'quality', label: 'Quality', icon: CheckCircle2 },
+      ],
+    },
+  ]
+}
+
+function navBadge(item: MfgNavItem) {
+  if (item.badge === undefined) return null
+  return (
+    <span
+      className={cn(
+        'ml-auto inline-flex min-w-6 items-center justify-center rounded-full px-1.5 py-0.5 text-[11px] font-semibold tabular-nums',
+        item.badgeTone === 'attention' && item.badge > 0
+          ? 'bg-amber-100 text-amber-800 dark:bg-amber-500/15 dark:text-amber-300'
+          : 'bg-muted text-muted-foreground'
+      )}
+    >
+      {item.badge}
+    </span>
+  )
+}
+
+function ModuleNav({ tab, onChange, stats }: { tab: MfgTab; onChange: (t: MfgTab) => void; stats: ManufacturingStats | null }) {
+  const groups = buildNavGroups(stats)
+  const active = groups.flatMap((g) => g.items).find((i) => i.value === tab) ?? groups[0].items[0]
+  const ActiveIcon = active.icon
+
+  return (
+    <>
+      {/* Desktop / laptop — sticky vertical section rail */}
+      <nav
+        aria-label="Manufacturing sections"
+        className="hidden w-56 shrink-0 self-start rounded-xl border bg-card p-2 shadow-sm lg:sticky lg:top-[4.5rem] lg:block xl:w-60"
+      >
+        {groups.map((group) => (
+          <div key={group.label} className="py-1 first:pt-0 last:pb-0">
+            <p className="px-2.5 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+              {group.label}
+            </p>
+            <ul className="space-y-0.5">
+              {group.items.map((item) => {
+                const isActive = item.value === tab
+                const Icon = item.icon
+                return (
+                  <li key={item.value}>
+                    <button
+                      type="button"
+                      aria-current={isActive ? 'page' : undefined}
+                      onClick={() => onChange(item.value)}
+                      className={cn(
+                        'flex h-9 w-full items-center gap-2 rounded-md px-2.5 text-[13px] transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                        isActive
+                          ? 'bg-primary/10 font-medium text-primary'
+                          : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                      )}
+                    >
+                      <Icon className={cn('size-4 shrink-0', isActive ? 'text-primary' : 'text-muted-foreground/80')} aria-hidden />
+                      <span className="truncate">{item.label}</span>
+                      {navBadge(item)}
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        ))}
+        <div className="mt-1 border-t px-2.5 pb-1 pt-2">
+          <p className="text-[10.5px] leading-snug text-muted-foreground/80">
+            Press{' '}
+            <kbd className="rounded border bg-muted px-1 py-0.5 font-sans text-[9.5px] font-medium text-foreground">Ctrl</kbd>{' '}
+            <kbd className="rounded border bg-muted px-1 py-0.5 font-sans text-[9.5px] font-medium text-foreground">K</kbd>{' '}
+            to search anywhere
+          </p>
+        </div>
+      </nav>
+
+      {/* Phone / tablet — compact trigger + grouped dropdown (no horizontal scroll) */}
+      <div className="lg:hidden">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="outline"
+              className="h-11 w-full justify-between gap-3 rounded-xl px-3 text-left"
+              aria-label={`Section: ${active.label} — open section menu`}
+            >
+              <span className="flex min-w-0 items-center gap-2.5">
+                <ActiveIcon className="size-4 shrink-0 text-primary" aria-hidden />
+                <span className="truncate font-medium">{active.label}</span>
+              </span>
+              <span className="flex shrink-0 items-center gap-1.5 text-xs font-normal text-muted-foreground">
+                14 sections
+                <ChevronDown className="size-4" aria-hidden />
+              </span>
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" sideOffset={8} className="max-h-[70dvh] w-[min(92vw,21rem)] overflow-y-auto p-1.5">
+            {groups.map((group, gi) => (
+              <DropdownMenuGroup key={group.label}>
+                {gi > 0 && <DropdownMenuSeparator />}
+                <DropdownMenuLabel className="px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+                  {group.label}
+                </DropdownMenuLabel>
+                {group.items.map((item) => {
+                  const isActive = item.value === tab
+                  const Icon = item.icon
+                  return (
+                    <DropdownMenuItem
+                      key={item.value}
+                      aria-current={isActive ? 'page' : undefined}
+                      onSelect={() => onChange(item.value)}
+                      className={cn(
+                        'h-10 cursor-pointer gap-2.5 rounded-md px-2 text-[13px]',
+                        isActive && 'bg-primary/10 font-medium text-primary focus:bg-primary/15 focus:text-primary'
+                      )}
+                    >
+                      <Icon className={cn('size-4', isActive ? 'text-primary' : 'text-muted-foreground/80')} aria-hidden />
+                      <span className="truncate">{item.label}</span>
+                      {navBadge(item)}
+                    </DropdownMenuItem>
+                  )
+                })}
+              </DropdownMenuGroup>
+            ))}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
+    </>
   )
 }
 

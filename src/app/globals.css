@@ -139,10 +139,11 @@
 }
 
 /* ---------- Mobile scrollable tab rows ----------
-ERP module tab rows (Projects/BOMs/Work Orders/… , Parties/Items/…) use
+ERP module tab rows (Accounting, CRM, Inventory, Jobwork, Masters …) use
 `overflow-x-auto` tabs that swipe horizontally on phones. A right-edge fade
 on the tab TRACK hints that more tabs are available. Only rendered <sm where
-the rows actually scroll. */
+the rows actually scroll. (Own Projects & Manufacturing uses a grouped section
+rail / dropdown instead — see manufacturing.tsx.) */
 @media (max-width: 639px) {
   [data-slot="tabs"]:has(> [data-slot="tabs-list"].overflow-x-auto) {
     position: relative;

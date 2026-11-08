@@ -16,6 +16,7 @@ import { Label } from '@/components/ui/label'
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { dateStr, money, qty as qtyFmt } from '@/lib/erp'
 import { BarChart3 } from 'lucide-react'
+import { ReminderButton, RemindAllButton } from './email-ui'
 
 const fyStart = () => { const d = new Date(); const y = d.getUTCMonth() >= 3 ? d.getUTCFullYear() : d.getUTCFullYear() - 1; return `${y}-04-01` }
 const todayIso = () => new Date().toISOString().slice(0, 10)
@@ -56,13 +57,14 @@ export function AgingTab() {
   const { data, loading } = useApi<Aging>(`/api/reports?type=aging&kind=${kind}`)
   return <div className="space-y-3">
     <div className="flex flex-wrap gap-2"><Button variant={kind === 'sales' ? 'default' : 'outline'} className="h-11" onClick={() => setKind('sales')}>Receivables</Button><Button variant={kind === 'purchase' ? 'default' : 'outline'} className="h-11" onClick={() => setKind('purchase')}>Payables</Button>
-      {data ? <Csv name={`${kind}-aging.csv`} rows={[['Party', 'Code', ...data.buckets.map((b) => b.label), 'Total'], ...data.parties.map((p) => [p.party, p.code, ...data.buckets.map((b) => p[b.key] ?? 0), p.total])]} /> : null}</div>
+      {data ? <Csv name={`${kind}-aging.csv`} rows={[['Party', 'Code', ...data.buckets.map((b) => b.label), 'Total'], ...data.parties.map((p) => [p.party, p.code, ...data.buckets.map((b) => p[b.key] ?? 0), p.total])]} /> : null}
+      {kind === 'sales' && data && data.overdue > 0 ? <RemindAllButton /> : null}</div>
     <p className="text-sm text-muted-foreground">Due date = invoice date + the party&apos;s credit days (set in Masters → Parties).</p>
     {loading ? <TableSkeleton rows={6} cols={7} /> : !data?.parties.length ? <EmptyState icon={BarChart3} title="Nothing outstanding" hint={kind === 'sales' ? 'Every posted sales invoice is fully received.' : 'Every posted purchase invoice is fully paid.'} /> : <>
       <p className="text-sm">Open <strong>₹ {money(data.total)}</strong> · past due <strong className={data.overdue > 0 ? 'text-destructive' : ''}>₹ {money(data.overdue)} ({data.overduePct}%)</strong></p>
-      <Card className="p-0"><CardContent className="p-0"><div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Party</TableHead>{data.buckets.map((b) => <TableHead key={b.key} className="text-right">{b.label}</TableHead>)}<TableHead className="text-right">Total</TableHead></TableRow></TableHeader><TableBody>
-        {data.parties.map((p) => <TableRow key={p.partyId}><TableCell className="font-medium">{p.party}<p className="text-xs text-muted-foreground">{p.code}</p></TableCell>{data.buckets.map((b) => <TableCell key={b.key} className={`text-right ${b.key !== 'notDue' && p[b.key] > 0 ? 'text-destructive' : ''}`}>{p[b.key] ? money(p[b.key]) : '—'}</TableCell>)}<TableCell className="text-right font-medium"><Money value={p.total} /></TableCell></TableRow>)}
-      </TableBody><TableFooter><TableRow><TableCell>Total</TableCell>{data.buckets.map((b) => <TableCell key={b.key} className="text-right">{money(data.totals[b.key] ?? 0)}</TableCell>)}<TableCell className="text-right">{money(data.total)}</TableCell></TableRow></TableFooter></Table></div></CardContent></Card>
+      <Card className="p-0"><CardContent className="p-0"><div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Party</TableHead>{data.buckets.map((b) => <TableHead key={b.key} className="text-right">{b.label}</TableHead>)}<TableHead className="text-right">Total</TableHead>{kind === 'sales' ? <TableHead><span className="sr-only">Reminder</span></TableHead> : null}</TableRow></TableHeader><TableBody>
+        {data.parties.map((p) => <TableRow key={p.partyId}><TableCell className="font-medium">{p.party}<p className="text-xs text-muted-foreground">{p.code}</p></TableCell>{data.buckets.map((b) => <TableCell key={b.key} className={`text-right ${b.key !== 'notDue' && p[b.key] > 0 ? 'text-destructive' : ''}`}>{p[b.key] ? money(p[b.key]) : '—'}</TableCell>)}<TableCell className="text-right font-medium"><Money value={p.total} /></TableCell>{kind === 'sales' ? <TableCell className="text-right">{p.total - (p.notDue ?? 0) > 0.004 ? <ReminderButton partyId={p.partyId} partyName={p.party} /> : null}</TableCell> : null}</TableRow>)}
+      </TableBody><TableFooter><TableRow><TableCell>Total</TableCell>{data.buckets.map((b) => <TableCell key={b.key} className="text-right">{money(data.totals[b.key] ?? 0)}</TableCell>)}<TableCell className="text-right">{money(data.total)}</TableCell>{kind === 'sales' ? <TableCell /> : null}</TableRow></TableFooter></Table></div></CardContent></Card>
     </>}
   </div>
 }

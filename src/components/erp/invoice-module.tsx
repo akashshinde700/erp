@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useMemo, useState } from 'react'
+import { EmailInvoiceDialog } from './email-ui'
 import { toast } from 'sonner'
 import {
   ArrowLeft,
@@ -20,6 +21,7 @@ import {
   HandCoins,
   Loader2,
   Plus,
+  Mail,
   Printer,
   RefreshCw,
   ScrollText,
@@ -116,6 +118,7 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
   const [presetPartyId, setPresetPartyId] = useState('')
   const [prefill, setPrefill] = useState<AnyInvoice | null>(null)
   const [reloadTick, setReloadTick] = useState(0)
+  const [emailInv, setEmailInv] = useState<{ id: string; invoiceNo: string; partyName: string } | null>(null)
 
   // Cross-module create preset (dashboard / palette / party view / Alt+S) —
   // opens the create dialog prefilled with the party.
@@ -342,6 +345,14 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
+                              {isSales ? (
+                                <>
+                                  <DropdownMenuItem onClick={() => setEmailInv({ id: inv.id, invoiceNo: inv.invoiceNo, partyName: inv.party?.name ?? 'the customer' })}>
+                                    <Mail className="size-4" aria-hidden /> Email invoice…
+                                  </DropdownMenuItem>
+                                  <DropdownMenuSeparator />
+                                </>
+                              ) : null}
                               <DropdownMenuItem onClick={() => void exportTallyVoucher(isSales ? 'SALES' : 'PURCHASE', inv.id, 'xml')}>
                                 <FileCode2 className="size-4" aria-hidden /> Tally XML (import file)
                               </DropdownMenuItem>
@@ -414,6 +425,7 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
         }}
         key={`create-${reloadTick}`}
       />
+      <EmailInvoiceDialog invoice={emailInv} onOpenChange={(o) => { if (!o) setEmailInv(null) }} />
     </div>
   )
 }

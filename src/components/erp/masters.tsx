@@ -58,6 +58,7 @@ import { useErpUi } from './store'
 import { setCreatePreset } from './nav'
 import { INDIAN_STATES, stateName, gstinChecksumValid, dateStr, money, PARTY_TYPES, UOMS } from '@/lib/erp'
 import { useResetOnChange } from '@/hooks/use-reset-on-change'
+import { EmailSettingsCard } from './email-ui'
 
 const GST_RATES = [0, 5, 12, 18, 28]
 
@@ -1699,7 +1700,8 @@ function CompanyTab() {
   if (comp.loading) return <TableSkeleton rows={6} cols={2} />
 
   return (
-    <Card className="mx-auto w-full max-w-3xl p-6">
+    <div className="mx-auto w-full max-w-3xl">
+    <Card className="w-full p-6">
       <div className="flex items-center gap-2">
         <span className="flex size-9 items-center justify-center rounded-md bg-primary text-primary-foreground">
           <Database className="size-4" aria-hidden />
@@ -1813,5 +1815,7 @@ function CompanyTab() {
         </Button>
       </div>
     </Card>
+    <EmailSettingsCard />
+    </div>
   )
 }

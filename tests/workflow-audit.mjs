@@ -357,6 +357,69 @@ async function phaseP2P() {
   await reconcile('after P2P')
 }
 
+
+// ---------------------------------------------------------------- Phase 6b: RFQ and supplier comparison
+async function phaseRfq() {
+  phase = 'P6b-rfq'
+  const P = '/api/procurement', Q = '/api/rfq'
+  const req = await post(P, { action: 'create-requisition', department: 'Stores', requiredBy: daysFromNow(7), lines: [{ itemId: F.rm, qty: 20, rate: 100 }, { itemId: F.fg, qty: 10, rate: 300 }] })
+  await post(P, { action: 'transition-requisition', id: req.data.id, transition: 'SUBMIT' }); await post(P, { action: 'transition-requisition', id: req.data.id, transition: 'APPROVE' })
+  expectReject('RFQ cannot invite a customer as supplier', await post(Q, { action: 'create-rfq', requisitionId: req.data.id, supplierIds: [F.cust] }), /supplier/i)
+  expectReject('RFQ line above the open requisition quantity is rejected', await post(Q, { action: 'create-rfq', requisitionId: req.data.id, supplierIds: [F.sup1], lines: [{ itemId: F.rm, qty: 25 }] }), /exceeds/i)
+  const rfq = await post(Q, { action: 'create-rfq', requisitionId: req.data.id, supplierIds: [F.sup1, F.sup2], dueDate: daysFromNow(3) })
+  expectOk('RFQ from approved requisition, two suppliers invited', rfq)
+  const lines = await qa('SELECT id, itemId, qty FROM RfqLine WHERE rfqId=? ORDER BY qty DESC', [rfq.data.id])
+  check('RFQ carries the requisition open quantities (20 + 10)', lines.length === 2 && near(lines[0].qty, 20) && near(lines[1].qty, 10), JSON.stringify(lines))
+  const rmLine = lines.find((l) => l.itemId === F.rm).id, fgLine = lines.find((l) => l.itemId === F.fg).id
+  const quote = (supplierId, rm, fg, extra = {}) => post(Q, { action: 'record-quote', rfqId: rfq.data.id, supplierId, validUntil: daysFromNow(15), deliveryDays: 10, lines: [{ rfqLineId: rmLine, rate: rm }, { rfqLineId: fgLine, rate: fg }], ...extra })
+  expectReject('a supplier that was not invited cannot quote', await quote(F.custLow, 90, 280), /not invited/i)
+  expectReject('every RFQ line must be quoted', await post(Q, { action: 'record-quote', rfqId: rfq.data.id, supplierId: F.sup1, validUntil: daysFromNow(15), deliveryDays: 5, lines: [{ rfqLineId: rmLine, rate: 99 }] }), /every RFQ line/i)
+  expectReject('quotation validity cannot end before its date', await quote(F.sup1, 100, 300, { quoteDate: daysFromNow(2), validUntil: daysFromNow(1) }), /validity/i)
+  expectOk('supplier 1 quotation (rate 100/300, freight 500, 10 days)', await quote(F.sup1, 100, 300, { freight: 500, deliveryDays: 10 }))
+  expectOk('supplier 2 quotation (rate 98/295, 5% off FG, no freight, 20 days)', await post(Q, { action: 'record-quote', rfqId: rfq.data.id, supplierId: F.sup2, validUntil: daysFromNow(15), deliveryDays: 20, lines: [{ rfqLineId: rmLine, rate: 98 }, { rfqLineId: fgLine, rate: 295, discountPct: 5 }] }))
+  const dash = await get(Q)
+  const mine = (dash.data ?? []).find((r) => r.id === rfq.data.id)
+  const c = mine?.comparison
+  const s1 = c?.quotes.find((q) => q.supplierId === F.sup1), s2 = c?.quotes.find((q) => q.supplierId === F.sup2)
+  const s1Landed = (20 * 100 + 10 * 300) * 1.18 + 500, s2Landed = (20 * 98 + 10 * 295 * 0.95) * 1.18
+  check('landed totals = qty x net rate + GST + freight', s1 && s2 && near(s1.landedTotal, s1Landed) && near(s2.landedTotal, s2Landed), `s1=${s1?.landedTotal}/${s1Landed} s2=${s2?.landedTotal}/${s2Landed}`)
+  check('comparison flags the lowest landed and the fastest delivery', c?.lowestQuoteId === s2?.id && c?.fastestQuoteId === s1?.id, JSON.stringify({ low: c?.lowestQuoteId, fast: c?.fastestQuoteId }))
+  check('per-line lowest net rate is identified', c?.lines.every((l) => l.lowestQuoteId === s2?.id), JSON.stringify(c?.lines.map((l) => l.lowestQuoteId)))
+  // an accountant may not approve supplier selection
+  const salt = 'a1b2c3d4e5f6a7b8a1b2c3d4e5f6a7b8'
+  await db.run('DELETE FROM OrgUser WHERE email=?', ['acct-rfq@local.test'])
+  await db.run('INSERT INTO OrgUser (id,email,passwordHash,name,role,companyId,tokenVersion,createdAt) VALUES (?,?,?,?,?,?,0,?)', ['aud-acct-rfq', 'acct-rfq@local.test', `${salt}:${scryptSync('acct-pass-123', salt, 64).toString('hex')}`, 'RFQ Accountant', 'ACCOUNTANT', F.company.id, new Date()])
+  await post('/api/auth/login', { email: 'acct-rfq@local.test', password: 'acct-pass-123' }, { cookie: '' })
+  const acct = cookie; cookie = F.ownerCookie
+  expectReject('an ACCOUNTANT cannot award (OWNER approval)', await post(Q, { action: 'award', rfqId: rfq.data.id, quoteId: s1.id, reason: 'x' }, { cookie: acct }), /OWNER/i)
+  expectReject('award needs a reason', await post(Q, { action: 'award', rfqId: rfq.data.id, quoteId: s1.id, reason: '  ' }), /reason/i)
+  const races = await Promise.all([post(Q, { action: 'award', rfqId: rfq.data.id, quoteId: s1.id, reason: 'Faster delivery for the line restart' }), post(Q, { action: 'award', rfqId: rfq.data.id, quoteId: s2.id, reason: 'Lowest landed cost' })])
+  check('two concurrent awards: exactly one wins', races.filter((r) => r.status === 200).length === 1, `statuses=${races.map((r) => r.status)}`)
+  const winner = races[0].status === 200 ? s1 : s2
+  const rows = await qa('SELECT supplierId, status, rejectionReason FROM SupplierQuote WHERE rfqId=?', [rfq.data.id])
+  check('winning quote SELECTED, the other REJECTED with the reason', rows.find((r) => r.supplierId === winner.supplierId)?.status === 'SELECTED' && rows.filter((r) => r.supplierId !== winner.supplierId).every((r) => r.status === 'REJECTED' && /Not selected/.test(r.rejectionReason ?? '')), JSON.stringify(rows))
+  check('award and rejection are in the audit trail', Number((await q1("SELECT COUNT(*) c FROM AuditLog WHERE entity='Rfq' AND action='AWARD' AND entityId=?", [rfq.data.id])).c) === 1 && Number((await q1("SELECT COUNT(*) c FROM AuditLog WHERE entity='SupplierQuote' AND action='REJECT'")).c) >= 1)
+  expectReject('quotations cannot be changed after the award', await quote(F.sup1, 1, 1), /open RFQ/i)
+  const reqBefore = await q1('SELECT orderedQty FROM PurchaseRequisitionLine WHERE requisitionId=? AND itemId=?', [req.data.id, F.rm])
+  const pos = await Promise.all([1, 2].map(() => post(Q, { action: 'create-po', rfqId: rfq.data.id })))
+  check('raising the PO twice at once creates one purchase order', pos.filter((r) => r.status === 200).length === 1, `statuses=${pos.map((r) => r.status)}`)
+  const po = pos.find((r) => r.status === 200)?.data
+  const poLines = po ? await qa('SELECT itemId, qty, rate FROM PurchaseOrderLine WHERE purchaseOrderId=?', [po.id]) : []
+  const expectFgRate = winner === s2 ? 295 * 0.95 : 300
+  check('PO goes to the awarded supplier at the quoted net rates', po?.supplierId === winner.supplierId && near(poLines.find((l) => l.itemId === F.fg)?.rate, expectFgRate), JSON.stringify(poLines))
+  check('PO consumes the requisition quantity', near((await q1('SELECT orderedQty FROM PurchaseRequisitionLine WHERE requisitionId=? AND itemId=?', [req.data.id, F.rm])).orderedQty, num(reqBefore.orderedQty) + 20))
+  check('RFQ is ORDERED and linked to the PO', (await q1('SELECT status, purchaseOrderId FROM Rfq WHERE id=?', [rfq.data.id])).purchaseOrderId === po?.id)
+  expectReject('an ORDERED RFQ cannot be cancelled', await post(Q, { action: 'cancel', rfqId: rfq.data.id, reason: 'x' }), /purchase order/i)
+  // an expired quotation cannot be awarded
+  const r2 = await post(Q, { action: 'create-rfq', supplierIds: [F.sup1], lines: [{ itemId: F.rm, qty: 5 }] })
+  const r2line = (await q1('SELECT id FROM RfqLine WHERE rfqId=?', [r2.data.id])).id
+  await post(Q, { action: 'record-quote', rfqId: r2.data.id, supplierId: F.sup1, quoteDate: '2026-01-01', validUntil: '2026-01-31', deliveryDays: 3, lines: [{ rfqLineId: r2line, rate: 90 }] })
+  const q2 = await q1('SELECT id FROM SupplierQuote WHERE rfqId=?', [r2.data.id])
+  expectReject('an expired quotation cannot be awarded', await post(Q, { action: 'award', rfqId: r2.data.id, quoteId: q2.id, reason: 'cheap' }), /expired/i)
+  expectOk('an open RFQ can be cancelled with a reason', await post(Q, { action: 'cancel', rfqId: r2.data.id, reason: 'requirement dropped' }))
+  await reconcile('after RFQ')
+}
+
 // ---------------------------------------------------------------- Phase 7: Quote-to-Cash
 async function phaseQ2C() {
   phase = 'P7-q2c'
@@ -526,7 +589,14 @@ async function phaseMfg() {
   check('20 cancellation writes a mirrored GL reversal (no active rows left)', mrGl.length === 1 && num(mrGl[0].isCancelled) === 1 && near(mrGl[0].dr, mrGl[0].cr), JSON.stringify(mrGl))
   const rb = await post(R, { workOrderId: F.wo, outputItemId: F.fg, warehouseId: F.w2, producedQty: 4, acceptedQty: 4, batchNo: 'FGLOT-B', manufacturedAt: today })
   expectOk('FG receipt B (4 of 10)', rb)
+  const pv = await get(`${R}?preview=1&workOrderId=${F.wo}&producedQty=6&acceptedQty=5`)
+  expectOk('receipt preview before posting', pv)
   const rc = await post(R, { workOrderId: F.wo, outputItemId: F.fg, warehouseId: F.w2, producedQty: 6, acceptedQty: 5, rejectedQty: 1, qcNotes: 'weld porosity', batchNo: 'FGLOT-C', manufacturedAt: today })
+  check('preview predicted the posted expected/actual cost and variance exactly', pv.data && near(pv.data.expectedCost, rc.data?.expectedCost) && near(pv.data.actualCost, rc.data?.actualCost) && near(pv.data.variance, rc.data?.variance), JSON.stringify({ preview: pv.data && [pv.data.expectedCost, pv.data.actualCost, pv.data.variance], posted: rc.data && [rc.data.expectedCost, rc.data.actualCost, rc.data.variance] }))
+  check('preview says this receipt settles the WIP and lets the WO close', pv.data?.closesWorkOrder === true && near(pv.data?.wipAfter, 0), JSON.stringify(pv.data?.warnings))
+  const ready = (await get(`${R}?readiness=1`)).data ?? []
+  check('readiness board shows the WO ready to close', ready.find((w) => w.id === F.wo)?.readyToClose === true, JSON.stringify(ready.find((w) => w.id === F.wo)))
+  expectReject('preview validates its input', await get(`${R}?preview=1&workOrderId=${F.wo}&producedQty=-1&acceptedQty=0`), /positive/i)
   expectOk('FG receipt C (produced 6: 5 accepted, 1 rejected)', rc)
   const settled = num((await q1("SELECT SUM(actualCost) s FROM ProductionReceipt WHERE workOrderId=? AND status='POSTED'", [F.wo])).s)
   check('15/16 producing the full planned 10 settles all WIP even with a QC rejection', near(settled, actualTotal), `settled=${settled} actual=${actualTotal} residue=${(actualTotal - settled).toFixed(2)}`)
@@ -859,7 +929,7 @@ async function phaseFuzz() {
 async function main() {
   const t0 = Date.now()
   await setup()
-  const phases = [phaseAuth, phaseP2P, phaseQ2C, phaseMfg, phaseQuality, phaseLots, phaseFinance, phaseGst, phaseFuzz]
+  const phases = [phaseAuth, phaseP2P, phaseRfq, phaseQ2C, phaseMfg, phaseQuality, phaseLots, phaseFinance, phaseGst, phaseFuzz]
   for (const fn of phases) {
     try { await fn() } catch (e) { check(`${fn.name} completed without a harness exception`, false, e?.stack?.split('\n').slice(0, 3).join(' ') ?? String(e)) }
   }

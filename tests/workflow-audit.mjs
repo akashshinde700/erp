@@ -215,16 +215,22 @@ async function phaseAuth() {
   const l2 = await post('/api/auth/login', { email: 'owner2-audit@local.test', password: 'second-pass-123' }, { cookie: '' })
   const c2 = cookie; cookie = F.ownerCookie
   check('second organisation owner can sign in', l2.status === 200, `status=${l2.status}`)
-  for (const path of ['/api/sales-invoices', '/api/masters/parties', '/api/masters/items', '/api/procurement', '/api/order-to-cash', '/api/traceability', '/api/finance-adjustments', '/api/manufacturing/projects', '/api/returns', '/api/payments']) {
+  for (const path of ['/api/sales-invoices', '/api/masters/parties', '/api/masters/items', '/api/manufacturing/projects', '/api/payments']) {
     const r = await get(path, { cookie: c2 })
-    check(`second-org user GET ${path} is refused (403), never sees org-1 rows`, r.status === 403, `status=${r.status}`)
+    check(`second-org user GET ${path} sees its own (empty) workspace, no org-1 rows`, r.status === 200 && Array.isArray(r.data) && r.data.length === 0, `status=${r.status} rows=${r.data?.length}`)
   }
   const anyInvoice = await q1('SELECT id FROM SalesInvoice LIMIT 1')
   const x = await get(`/api/sales-invoices/${anyInvoice.id}`, { cookie: c2 })
-  check('second-org user cannot read an org-1 invoice by id', x.status === 403 || x.status === 401, `status=${x.status}`)
-  const legacy = await qa(`SELECT t.table_name tn FROM information_schema.tables t WHERE t.table_schema=DATABASE() AND t.table_name NOT IN ('_prisma_migrations','IdempotencyKey','Company','Plan','PlatformInquiry','PlatformInquiryFollowUp','PlatformBlogPost')
-    AND NOT EXISTS (SELECT 1 FROM information_schema.columns c WHERE c.table_schema=t.table_schema AND c.table_name=t.table_name AND c.column_name='companyId')`)
-  check('every business table carries companyId (row-level tenant isolation)', legacy.length === 0, `${legacy.length} tables without companyId: ${legacy.map((r) => r.tn ?? r.TABLE_NAME).join(', ')}`)
+  check('second-org user cannot read an org-1 invoice by id', x.status === 404 || x.status === 403, `status=${x.status}`)
+  // Root tables carry companyId; line/child tables are owned through a NOT NULL
+  // foreign key to a root table (the tenant extension filters them through it).
+  const unscoped = await qa(`SELECT t.table_name tn FROM information_schema.tables t WHERE t.table_schema=DATABASE()
+    AND t.table_name NOT IN ('_prisma_migrations','IdempotencyKey','Company','Plan','PlatformInquiry','PlatformInquiryFollowUp','PlatformBlogPost','Counter','OrgUser')
+    AND NOT EXISTS (SELECT 1 FROM information_schema.columns c WHERE c.table_schema=t.table_schema AND c.table_name=t.table_name AND c.column_name='companyId')
+    AND NOT EXISTS (SELECT 1 FROM information_schema.key_column_usage k JOIN information_schema.columns c ON c.table_schema=k.table_schema AND c.table_name=k.table_name AND c.column_name=k.column_name AND c.is_nullable='NO'
+                    JOIN information_schema.columns pc ON pc.table_schema=k.referenced_table_schema AND pc.table_name=k.referenced_table_name AND pc.column_name='companyId'
+                    WHERE k.table_schema=t.table_schema AND k.table_name=t.table_name AND k.referenced_table_name IS NOT NULL)`)
+  check('every business table is organisation-owned (companyId, or a required FK to a table that has one)', unscoped.length === 0, `${unscoped.length} unowned: ${unscoped.map((r) => r.tn ?? r.TABLE_NAME).join(', ')}`)
   // platform admin session must not reach org business data
   const pl = await post('/api/platform/auth', { email: 'admin@forgeplatform.example.com', password: 'platform123' }, { cookie: '' })
   const pc = cookie; cookie = F.ownerCookie
@@ -349,6 +355,69 @@ async function phaseP2P() {
   expectReject('purchase invoice with a posted debit note cannot be cancelled', await api('DELETE', `/api/purchase-invoices/${F.pin1.id}`), /debit note|payments/i)
   check('P10-5 GRN cancellation reverses the lot receipt (balance 0)', lot3 && near(await lotBal(lot3.id), 0), lot3 ? `balance=${await lotBal(lot3.id)}` : 'lot missing')
   await reconcile('after P2P')
+}
+
+
+// ---------------------------------------------------------------- Phase 6b: RFQ and supplier comparison
+async function phaseRfq() {
+  phase = 'P6b-rfq'
+  const P = '/api/procurement', Q = '/api/rfq'
+  const req = await post(P, { action: 'create-requisition', department: 'Stores', requiredBy: daysFromNow(7), lines: [{ itemId: F.rm, qty: 20, rate: 100 }, { itemId: F.fg, qty: 10, rate: 300 }] })
+  await post(P, { action: 'transition-requisition', id: req.data.id, transition: 'SUBMIT' }); await post(P, { action: 'transition-requisition', id: req.data.id, transition: 'APPROVE' })
+  expectReject('RFQ cannot invite a customer as supplier', await post(Q, { action: 'create-rfq', requisitionId: req.data.id, supplierIds: [F.cust] }), /supplier/i)
+  expectReject('RFQ line above the open requisition quantity is rejected', await post(Q, { action: 'create-rfq', requisitionId: req.data.id, supplierIds: [F.sup1], lines: [{ itemId: F.rm, qty: 25 }] }), /exceeds/i)
+  const rfq = await post(Q, { action: 'create-rfq', requisitionId: req.data.id, supplierIds: [F.sup1, F.sup2], dueDate: daysFromNow(3) })
+  expectOk('RFQ from approved requisition, two suppliers invited', rfq)
+  const lines = await qa('SELECT id, itemId, qty FROM RfqLine WHERE rfqId=? ORDER BY qty DESC', [rfq.data.id])
+  check('RFQ carries the requisition open quantities (20 + 10)', lines.length === 2 && near(lines[0].qty, 20) && near(lines[1].qty, 10), JSON.stringify(lines))
+  const rmLine = lines.find((l) => l.itemId === F.rm).id, fgLine = lines.find((l) => l.itemId === F.fg).id
+  const quote = (supplierId, rm, fg, extra = {}) => post(Q, { action: 'record-quote', rfqId: rfq.data.id, supplierId, validUntil: daysFromNow(15), deliveryDays: 10, lines: [{ rfqLineId: rmLine, rate: rm }, { rfqLineId: fgLine, rate: fg }], ...extra })
+  expectReject('a supplier that was not invited cannot quote', await quote(F.custLow, 90, 280), /not invited/i)
+  expectReject('every RFQ line must be quoted', await post(Q, { action: 'record-quote', rfqId: rfq.data.id, supplierId: F.sup1, validUntil: daysFromNow(15), deliveryDays: 5, lines: [{ rfqLineId: rmLine, rate: 99 }] }), /every RFQ line/i)
+  expectReject('quotation validity cannot end before its date', await quote(F.sup1, 100, 300, { quoteDate: daysFromNow(2), validUntil: daysFromNow(1) }), /validity/i)
+  expectOk('supplier 1 quotation (rate 100/300, freight 500, 10 days)', await quote(F.sup1, 100, 300, { freight: 500, deliveryDays: 10 }))
+  expectOk('supplier 2 quotation (rate 98/295, 5% off FG, no freight, 20 days)', await post(Q, { action: 'record-quote', rfqId: rfq.data.id, supplierId: F.sup2, validUntil: daysFromNow(15), deliveryDays: 20, lines: [{ rfqLineId: rmLine, rate: 98 }, { rfqLineId: fgLine, rate: 295, discountPct: 5 }] }))
+  const dash = await get(Q)
+  const mine = (dash.data ?? []).find((r) => r.id === rfq.data.id)
+  const c = mine?.comparison
+  const s1 = c?.quotes.find((q) => q.supplierId === F.sup1), s2 = c?.quotes.find((q) => q.supplierId === F.sup2)
+  const s1Landed = (20 * 100 + 10 * 300) * 1.18 + 500, s2Landed = (20 * 98 + 10 * 295 * 0.95) * 1.18
+  check('landed totals = qty x net rate + GST + freight', s1 && s2 && near(s1.landedTotal, s1Landed) && near(s2.landedTotal, s2Landed), `s1=${s1?.landedTotal}/${s1Landed} s2=${s2?.landedTotal}/${s2Landed}`)
+  check('comparison flags the lowest landed and the fastest delivery', c?.lowestQuoteId === s2?.id && c?.fastestQuoteId === s1?.id, JSON.stringify({ low: c?.lowestQuoteId, fast: c?.fastestQuoteId }))
+  check('per-line lowest net rate is identified', c?.lines.every((l) => l.lowestQuoteId === s2?.id), JSON.stringify(c?.lines.map((l) => l.lowestQuoteId)))
+  // an accountant may not approve supplier selection
+  const salt = 'a1b2c3d4e5f6a7b8a1b2c3d4e5f6a7b8'
+  await db.run('DELETE FROM OrgUser WHERE email=?', ['acct-rfq@local.test'])
+  await db.run('INSERT INTO OrgUser (id,email,passwordHash,name,role,companyId,tokenVersion,createdAt) VALUES (?,?,?,?,?,?,0,?)', ['aud-acct-rfq', 'acct-rfq@local.test', `${salt}:${scryptSync('acct-pass-123', salt, 64).toString('hex')}`, 'RFQ Accountant', 'ACCOUNTANT', F.company.id, new Date()])
+  await post('/api/auth/login', { email: 'acct-rfq@local.test', password: 'acct-pass-123' }, { cookie: '' })
+  const acct = cookie; cookie = F.ownerCookie
+  expectReject('an ACCOUNTANT cannot award (OWNER approval)', await post(Q, { action: 'award', rfqId: rfq.data.id, quoteId: s1.id, reason: 'x' }, { cookie: acct }), /OWNER/i)
+  expectReject('award needs a reason', await post(Q, { action: 'award', rfqId: rfq.data.id, quoteId: s1.id, reason: '  ' }), /reason/i)
+  const races = await Promise.all([post(Q, { action: 'award', rfqId: rfq.data.id, quoteId: s1.id, reason: 'Faster delivery for the line restart' }), post(Q, { action: 'award', rfqId: rfq.data.id, quoteId: s2.id, reason: 'Lowest landed cost' })])
+  check('two concurrent awards: exactly one wins', races.filter((r) => r.status === 200).length === 1, `statuses=${races.map((r) => r.status)}`)
+  const winner = races[0].status === 200 ? s1 : s2
+  const rows = await qa('SELECT supplierId, status, rejectionReason FROM SupplierQuote WHERE rfqId=?', [rfq.data.id])
+  check('winning quote SELECTED, the other REJECTED with the reason', rows.find((r) => r.supplierId === winner.supplierId)?.status === 'SELECTED' && rows.filter((r) => r.supplierId !== winner.supplierId).every((r) => r.status === 'REJECTED' && /Not selected/.test(r.rejectionReason ?? '')), JSON.stringify(rows))
+  check('award and rejection are in the audit trail', Number((await q1("SELECT COUNT(*) c FROM AuditLog WHERE entity='Rfq' AND action='AWARD' AND entityId=?", [rfq.data.id])).c) === 1 && Number((await q1("SELECT COUNT(*) c FROM AuditLog WHERE entity='SupplierQuote' AND action='REJECT'")).c) >= 1)
+  expectReject('quotations cannot be changed after the award', await quote(F.sup1, 1, 1), /open RFQ/i)
+  const reqBefore = await q1('SELECT orderedQty FROM PurchaseRequisitionLine WHERE requisitionId=? AND itemId=?', [req.data.id, F.rm])
+  const pos = await Promise.all([1, 2].map(() => post(Q, { action: 'create-po', rfqId: rfq.data.id })))
+  check('raising the PO twice at once creates one purchase order', pos.filter((r) => r.status === 200).length === 1, `statuses=${pos.map((r) => r.status)}`)
+  const po = pos.find((r) => r.status === 200)?.data
+  const poLines = po ? await qa('SELECT itemId, qty, rate FROM PurchaseOrderLine WHERE purchaseOrderId=?', [po.id]) : []
+  const expectFgRate = winner === s2 ? 295 * 0.95 : 300
+  check('PO goes to the awarded supplier at the quoted net rates', po?.supplierId === winner.supplierId && near(poLines.find((l) => l.itemId === F.fg)?.rate, expectFgRate), JSON.stringify(poLines))
+  check('PO consumes the requisition quantity', near((await q1('SELECT orderedQty FROM PurchaseRequisitionLine WHERE requisitionId=? AND itemId=?', [req.data.id, F.rm])).orderedQty, num(reqBefore.orderedQty) + 20))
+  check('RFQ is ORDERED and linked to the PO', (await q1('SELECT status, purchaseOrderId FROM Rfq WHERE id=?', [rfq.data.id])).purchaseOrderId === po?.id)
+  expectReject('an ORDERED RFQ cannot be cancelled', await post(Q, { action: 'cancel', rfqId: rfq.data.id, reason: 'x' }), /purchase order/i)
+  // an expired quotation cannot be awarded
+  const r2 = await post(Q, { action: 'create-rfq', supplierIds: [F.sup1], lines: [{ itemId: F.rm, qty: 5 }] })
+  const r2line = (await q1('SELECT id FROM RfqLine WHERE rfqId=?', [r2.data.id])).id
+  await post(Q, { action: 'record-quote', rfqId: r2.data.id, supplierId: F.sup1, quoteDate: '2026-01-01', validUntil: '2026-01-31', deliveryDays: 3, lines: [{ rfqLineId: r2line, rate: 90 }] })
+  const q2 = await q1('SELECT id FROM SupplierQuote WHERE rfqId=?', [r2.data.id])
+  expectReject('an expired quotation cannot be awarded', await post(Q, { action: 'award', rfqId: r2.data.id, quoteId: q2.id, reason: 'cheap' }), /expired/i)
+  expectOk('an open RFQ can be cancelled with a reason', await post(Q, { action: 'cancel', rfqId: r2.data.id, reason: 'requirement dropped' }))
+  await reconcile('after RFQ')
 }
 
 // ---------------------------------------------------------------- Phase 7: Quote-to-Cash
@@ -520,7 +589,14 @@ async function phaseMfg() {
   check('20 cancellation writes a mirrored GL reversal (no active rows left)', mrGl.length === 1 && num(mrGl[0].isCancelled) === 1 && near(mrGl[0].dr, mrGl[0].cr), JSON.stringify(mrGl))
   const rb = await post(R, { workOrderId: F.wo, outputItemId: F.fg, warehouseId: F.w2, producedQty: 4, acceptedQty: 4, batchNo: 'FGLOT-B', manufacturedAt: today })
   expectOk('FG receipt B (4 of 10)', rb)
+  const pv = await get(`${R}?preview=1&workOrderId=${F.wo}&producedQty=6&acceptedQty=5`)
+  expectOk('receipt preview before posting', pv)
   const rc = await post(R, { workOrderId: F.wo, outputItemId: F.fg, warehouseId: F.w2, producedQty: 6, acceptedQty: 5, rejectedQty: 1, qcNotes: 'weld porosity', batchNo: 'FGLOT-C', manufacturedAt: today })
+  check('preview predicted the posted expected/actual cost and variance exactly', pv.data && near(pv.data.expectedCost, rc.data?.expectedCost) && near(pv.data.actualCost, rc.data?.actualCost) && near(pv.data.variance, rc.data?.variance), JSON.stringify({ preview: pv.data && [pv.data.expectedCost, pv.data.actualCost, pv.data.variance], posted: rc.data && [rc.data.expectedCost, rc.data.actualCost, rc.data.variance] }))
+  check('preview says this receipt settles the WIP and lets the WO close', pv.data?.closesWorkOrder === true && near(pv.data?.wipAfter, 0), JSON.stringify(pv.data?.warnings))
+  const ready = (await get(`${R}?readiness=1`)).data ?? []
+  check('readiness board shows the WO ready to close', ready.find((w) => w.id === F.wo)?.readyToClose === true, JSON.stringify(ready.find((w) => w.id === F.wo)))
+  expectReject('preview validates its input', await get(`${R}?preview=1&workOrderId=${F.wo}&producedQty=-1&acceptedQty=0`), /positive/i)
   expectOk('FG receipt C (produced 6: 5 accepted, 1 rejected)', rc)
   const settled = num((await q1("SELECT SUM(actualCost) s FROM ProductionReceipt WHERE workOrderId=? AND status='POSTED'", [F.wo])).s)
   check('15/16 producing the full planned 10 settles all WIP even with a QC rejection', near(settled, actualTotal), `settled=${settled} actual=${actualTotal} residue=${(actualTotal - settled).toFixed(2)}`)
@@ -723,6 +799,42 @@ async function phaseFinance() {
   // 5 return cancellation stock guard
   const fgMain = await stockNet(F.fg, F.main)
   check('5 sales-return cancellation succeeds while restocked units are on hand', (await post('/api/returns', { action: 'cancel', id: F.cn.id })).status === 200 && near(await stockNet(F.fg, F.main), fgMain - 3))
+  // ---- payment milestones follow collections (FIFO by due date)
+  const OC = '/api/order-to-cash'
+  const mq = await post(OC, { action: 'create-quotation', partyId: F.cust, validUntil: daysFromNow(10), lines: [{ itemId: F.fg, qty: 4, rate: 500 }] })
+  await post(OC, { action: 'transition-quotation', id: mq.data.id, transition: 'SUBMIT' }); await post(OC, { action: 'transition-quotation', id: mq.data.id, transition: 'APPROVE' })
+  const mso = (await post(OC, { action: 'quotation-to-order', id: mq.data.id })).data
+  const mTotal = num(mso.grandTotal), mFirst = Math.round(mTotal * 30) / 100
+  expectOk('schedule: 30% due last week, balance next month', await post(FA, { action: 'set-schedule', salesOrderId: mso.id, rows: [{ milestone: 'Advance', dueDate: daysFromNow(-7), amount: mFirst }, { milestone: 'Balance', dueDate: daysFromNow(30), amount: Math.round((mTotal - mFirst) * 100) / 100 }] }))
+  await post(OC, { action: 'approve-order', id: mso.id })
+  const ms = async () => (await qa('SELECT milestone, paidAmount, status FROM PaymentSchedule WHERE salesOrderId=? ORDER BY dueDate', [mso.id]))
+  check('unpaid past-due milestone is OVERDUE, future one PENDING', (await ms()).map((r) => r.status).join() === 'OVERDUE,PENDING', JSON.stringify(await ms()))
+  const advPay = await post('/api/payments', { type: 'RECEIPT', partyId: F.cust, amount: 1000, mode: 'BANK' })
+  const mAdv = await q1('SELECT id FROM PartyAdvance WHERE paymentId=?', [advPay.data.id])
+  expectReject('an advance cannot be tagged to another customer order', await post(FA, { action: 'tag-advance', advanceId: mAdv.id, salesOrderId: (await q1('SELECT id FROM SalesOrder WHERE partyId=? LIMIT 1', [F.custLow]))?.id ?? 'x' }), /different customers|not found/i)
+  expectOk('tag the 1000 advance to the order', await post(FA, { action: 'tag-advance', advanceId: mAdv.id, salesOrderId: mso.id }))
+  let m1 = await ms()
+  check('tagged advance pays the first milestone in full, rest goes to the next (FIFO)', m1[0].status === 'PAID' && near(m1[0].paidAmount, mFirst) && near(m1[1].paidAmount, 1000 - mFirst) && m1[1].status === 'PART_PAID', JSON.stringify(m1))
+  expectReject('a schedule with collected amounts cannot be replaced', await post(FA, { action: 'set-schedule', salesOrderId: mso.id, rows: [{ milestone: 'All', dueDate: daysFromNow(5), amount: mTotal }] }), /collected/i)
+  const msoLine = (await q1('SELECT id FROM SalesOrderLine WHERE salesOrderId=?', [mso.id])).id
+  const mdc = await post(OC, { action: 'create-challan', salesOrderId: mso.id, warehouseId: F.main, lines: [{ salesOrderLineId: msoLine, qty: 4 }] })
+  const mdl = (await q1('SELECT id FROM DeliveryChallanLine WHERE deliveryChallanId=?', [mdc.data.id])).id
+  await post(OC, { action: 'inspect-dispatch', deliveryChallanId: mdc.data.id, lines: [{ deliveryChallanLineId: mdl, acceptedQty: 4, rejectedQty: 0 }] })
+  const minv = await post(OC, { action: 'invoice-dispatch', deliveryChallanId: mdc.data.id, lines: [{ deliveryChallanLineId: mdl, qty: 4 }] })
+  expectOk('dispatch-backed invoice for the order', minv)
+  expectOk('apply the tagged advance to that invoice', await post(FA, { action: 'apply-advance', advanceId: mAdv.id, invoiceType: 'SALES', invoiceNo: minv.data.invoiceNo, amount: 1000 }))
+  const m2 = await ms()
+  check('applying the advance to the order invoice does not double count', near(m2[0].paidAmount + m2[1].paidAmount, 1000), JSON.stringify(m2))
+  const mRest = Math.round((num(minv.data.grandTotal) - 1000) * 100) / 100
+  const settle = await post('/api/payments', { type: 'RECEIPT', partyId: F.cust, amount: mRest, mode: 'BANK', allocations: [{ invoiceType: 'SALES', invoiceNo: minv.data.invoiceNo, amount: mRest }] })
+  expectOk('receipt for the invoice balance', settle)
+  check('collections that cover the order mark every milestone PAID', (await ms()).every((r) => r.status === 'PAID'), JSON.stringify(await ms()))
+  expectOk('cancel that receipt', await api('DELETE', `/api/payments/${settle.data.id}`))
+  const m3 = await ms()
+  check('cancelling a collection re-opens the milestones', m3[1].status === 'PART_PAID' && near(m3[0].paidAmount + m3[1].paidAmount, 1000), JSON.stringify(m3))
+  const fd = await get(FA)
+  const mRec = (fd.data?.reconciliation ?? []).find((r) => r.salesOrderId === mso.id)
+  check('schedule reconciliation: scheduled = order total, invoiced and collected reported', mRec && near(mRec.scheduled, mTotal) && near(mRec.invoiced, num(minv.data.grandTotal)) && near(mRec.collected, 1000) && mRec.issues.length === 0, JSON.stringify(mRec))
   await reconcile('after finance')
 }
 
@@ -817,7 +929,7 @@ async function phaseFuzz() {
 async function main() {
   const t0 = Date.now()
   await setup()
-  const phases = [phaseAuth, phaseP2P, phaseQ2C, phaseMfg, phaseQuality, phaseLots, phaseFinance, phaseGst, phaseFuzz]
+  const phases = [phaseAuth, phaseP2P, phaseRfq, phaseQ2C, phaseMfg, phaseQuality, phaseLots, phaseFinance, phaseGst, phaseFuzz]
   for (const fn of phases) {
     try { await fn() } catch (e) { check(`${fn.name} completed without a harness exception`, false, e?.stack?.split('\n').slice(0, 3).join(' ') ?? String(e)) }
   }

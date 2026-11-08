@@ -5,6 +5,7 @@
  */
 import { db } from './db'
 import { r2 } from './erp'
+import { tenantCompany } from './tenant'
 
 // ---------- shared UTC day-range helper ----------
 
@@ -57,20 +58,29 @@ export async function stockSummaryReport() {
   // Including them (a) inflates closing quantities with stock we do not own,
   // (b) dilutes avgCost toward 0 and distorts closingValue/lowStock. JW
   // movements remain fully visible in the stock LEDGER report.
-  const led = await db.stockLedger.findMany({
-    where: { isCancelled: false, voucherType: { not: 'JOBWORK_IN' } },
-  })
+  // Aggregated in the database (one row per item/warehouse) instead of loading
+  // every ledger row. Raw SQL bypasses the tenant extension, so the
+  // organisation filter is explicit.
+  const company = await tenantCompany(db)
+  const led = company
+    ? await db.$queryRaw<{ itemId: string; warehouseId: string; inQty: number | null; outQty: number | null; inValue: number | null }[]>`
+        SELECT itemId, warehouseId, SUM(qtyIn) AS inQty, SUM(qtyOut) AS outQty, SUM(qtyIn * rate) AS inValue
+          FROM StockLedger
+         WHERE companyId = ${company.id} AND isCancelled = 0 AND voucherType <> 'JOBWORK_IN'
+         GROUP BY itemId, warehouseId`
+    : []
   const byItem = new Map<
     string,
     { inQty: number; outQty: number; inValue: number; byWh: Map<string, number> }
   >()
   for (const l of led) {
+    const qIn = Number(l.inQty ?? 0), qOut = Number(l.outQty ?? 0), vIn = Number(l.inValue ?? 0)
     const prev = byItem.get(l.itemId) ?? { inQty: 0, outQty: 0, inValue: 0, byWh: new Map<string, number>() }
     byItem.set(l.itemId, {
-      inQty: r2(prev.inQty + l.qtyIn),
-      outQty: r2(prev.outQty + l.qtyOut),
-      inValue: r2(prev.inValue + l.qtyIn * l.rate),
-      byWh: prev.byWh.set(l.warehouseId, r2((prev.byWh.get(l.warehouseId) ?? 0) + l.qtyIn - l.qtyOut)),
+      inQty: r2(prev.inQty + qIn),
+      outQty: r2(prev.outQty + qOut),
+      inValue: r2(prev.inValue + vIn),
+      byWh: prev.byWh.set(l.warehouseId, r2((prev.byWh.get(l.warehouseId) ?? 0) + qIn - qOut)),
     })
   }
   return items.map((it) => {

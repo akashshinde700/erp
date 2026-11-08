@@ -3,6 +3,7 @@ import { db } from './db'
 import { BusinessError, postGl, cancelGlForVoucher, AccountCode } from './accounting'
 import { computeInvoiceTotals, EPS, fyCode, r2 } from './erp'
 import { cancelLotMovementsTx, consumeLotsFefoTx } from './traceability'
+import { tenantCompany } from './tenant'
 
 type Tx = Prisma.TransactionClient
 
@@ -17,7 +18,7 @@ type ReturnInput = {
 }
 
 async function company(tx: Tx) {
-  const row = await tx.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } })
+  const row = await tenantCompany(tx)
   if (!row) throw new BusinessError('Operating company is not configured', 409)
   return row
 }
@@ -129,7 +130,7 @@ export async function cancelReturn(id: string) {
 }
 
 export async function listReturns() {
-  const org = await db.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } })
+  const org = await tenantCompany(db)
   if (!org) throw new BusinessError('Operating company is not configured', 409)
   return db.returnDocument.findMany({ where: { companyId: org.id }, orderBy: { date: 'desc' }, include: { party: true, lines: { include: { item: true } } } })
 }

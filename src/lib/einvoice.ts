@@ -24,6 +24,8 @@
 
 import { db } from './db'
 import { r2 } from './erp'
+import { tenantCompany } from './tenant'
+import { BusinessError } from './accounting'
 
 // ---------- types ----------
 
@@ -313,8 +315,8 @@ export function buildEInvoice(inv: IrpInvoiceRow, company: IrpCompany): BuiltEIn
 
 export async function loadSalesInvoiceForIrp(id: string): Promise<{ inv: IrpInvoiceRow; company: IrpCompany }> {
   // OPERATING org only — see services.getCompany (platform company is older).
-  const company = await db.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } })
-  if (!company) throw new Error('Company not set up')
+  const company = await tenantCompany(db)
+  if (!company) throw new BusinessError('Company not set up', 409)
   const inv = await db.salesInvoice.findUnique({
     where: { id },
     include: {
@@ -322,14 +324,14 @@ export async function loadSalesInvoiceForIrp(id: string): Promise<{ inv: IrpInvo
       items: { include: { item: { select: { code: true, name: true, hsn: true, uom: true, isService: true } } } },
     },
   })
-  if (!inv) throw new Error('Sales invoice not found')
+  if (!inv) throw new BusinessError('Sales invoice not found', 404)
   return { inv: inv as unknown as IrpInvoiceRow, company: company as unknown as IrpCompany }
 }
 
 export async function loadSalesInvoicesForIrp(from?: string, to?: string): Promise<{ invs: IrpInvoiceRow[]; company: IrpCompany }> {
   // OPERATING org only — see services.getCompany (platform company is older).
-  const company = await db.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } })
-  if (!company) throw new Error('Company not set up')
+  const company = await tenantCompany(db)
+  if (!company) throw new BusinessError('Company not set up', 409)
   const where: { date?: { gte?: Date; lte?: Date } } = {}
   if (from || to) {
     where.date = {}

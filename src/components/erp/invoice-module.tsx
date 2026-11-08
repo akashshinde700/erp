@@ -87,13 +87,31 @@ const emptyLine = (): LineDraft => ({ key: newKey(), itemId: '', detail: '', qty
 // List view
 // ===========================================================================
 
+const PAGE_SIZE = 100
+type PagedInvoices = { rows: AnyInvoice[]; total: number; summary: { count: number; grand: number; paid: number } }
+
 export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
   const setView = useErpUi((s) => s.setView)
   const isSales = kind === 'SALES'
   const path = isSales ? '/api/sales-invoices' : '/api/purchase-invoices'
-  const list = useApi<AnyInvoice[]>(path)
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'POSTED' | 'CANCELLED'>('ALL')
+  // Server-side paging: the search box is debounced and filters in the database,
+  // so the list stays fast with thousands of invoices.
+  const [query, setQuery] = useState('')
+  useEffect(() => {
+    const t = setTimeout(() => setQuery(search.trim()), 300)
+    return () => clearTimeout(t)
+  }, [search])
+  const [limit, setLimit] = useState(PAGE_SIZE)
+  useResetOnChange(true, [query, statusFilter], () => setLimit(PAGE_SIZE))
+  const listQuery = (take: number) => {
+    const qs = new URLSearchParams({ paged: '1', limit: String(take) })
+    if (query) qs.set('q', query)
+    if (statusFilter !== 'ALL') qs.set('status', statusFilter)
+    return `${path}?${qs.toString()}`
+  }
+  const list = useApi<PagedInvoices>(listQuery(limit))
   const [createOpen, setCreateOpen] = useState(useOpenNewParam())
   const [presetPartyId, setPresetPartyId] = useState('')
   const [prefill, setPrefill] = useState<AnyInvoice | null>(null)
@@ -114,25 +132,12 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
     return onPreset(apply)
   }, [])
 
-  const invoices = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    return (list.data ?? []).filter((inv) => {
-      if (statusFilter !== 'ALL' && inv.status !== statusFilter) return false
-      if (!q) return true
-      return (
-        inv.invoiceNo.toLowerCase().includes(q) ||
-        (inv.party?.name ?? '').toLowerCase().includes(q) ||
-        (inv.party?.code ?? '').toLowerCase().includes(q)
-      )
-    })
-  }, [list.data, search, statusFilter])
-
+  const invoices = useMemo(() => list.data?.rows ?? [], [list.data])
+  const total = list.data?.total ?? 0
   const totals = useMemo(() => {
-    const posted = invoices.filter((i) => i.status === 'POSTED')
-    const grand = posted.reduce((s, i) => s + i.grandTotal, 0)
-    const paid = posted.reduce((s, i) => s + i.paidAmount, 0)
-    return { count: posted.length, grand, paid, outstanding: grand - paid }
-  }, [invoices])
+    const s = list.data?.summary
+    return { count: s?.count ?? 0, grand: s?.grand ?? 0, paid: s?.paid ?? 0, outstanding: (s?.grand ?? 0) - (s?.paid ?? 0) }
+  }, [list.data])
 
   const duplicate = async (inv: AnyInvoice) => {
     try {
@@ -144,10 +149,18 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
     }
   }
 
-  const exportCsv = () => {
+  const exportCsv = async () => {
+    // Export the whole filtered set, not just the loaded page.
+    let all: AnyInvoice[] = invoices
+    try {
+      all = (await apiGet<PagedInvoices>(listQuery(500))).rows
+    } catch (e) {
+      toastError(e)
+      return
+    }
     const rows: (string | number)[][] = [
       ['Invoice No', 'Date', 'Party', 'Taxable', 'CGST', 'SGST', 'IGST', 'Grand Total', 'Paid', 'Status', 'Source'],
-      ...invoices.map((i) => [
+      ...all.map((i) => [
         i.invoiceNo,
         dateStr(i.date),
         i.party?.name ?? '',
@@ -178,7 +191,7 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
             <Button variant="outline" onClick={() => list.reload()} className="h-11 gap-2">
               <RefreshCw className="size-4" aria-hidden /> Refresh
             </Button>
-            <Button variant="outline" onClick={exportCsv} disabled={invoices.length === 0} className="h-11 gap-2">
+            <Button variant="outline" onClick={() => void exportCsv()} disabled={invoices.length === 0} className="h-11 gap-2">
               <FileDown className="size-4" aria-hidden /> CSV
             </Button>
             <Button onClick={() => { setPrefill(null); setCreateOpen(true) }} className="h-11 gap-2">
@@ -212,6 +225,7 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
         </Select>
         <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
           <Badge variant="secondary" className="tabular-nums">{totals.count} posted</Badge>
+          <span className="tabular-nums">{invoices.length < total ? `showing ${invoices.length} of ${total}` : `${total} shown`}</span>
           <span className="tabular-nums">Σ ₹ {money(totals.grand)}</span>
           <span className="tabular-nums">outstanding ₹ {money(totals.outstanding)}</span>
         </div>
@@ -370,6 +384,13 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
                   ))}
                 </TableBody>
               </Table>
+              {invoices.length < total ? (
+                <div className="flex justify-center border-t p-3">
+                  <Button variant="outline" className="h-11" onClick={() => setLimit((n) => n + PAGE_SIZE)} disabled={list.loading}>
+                    Load {Math.min(PAGE_SIZE, total - invoices.length)} more
+                  </Button>
+                </div>
+              ) : null}
             </div>
           )}
         </CardContent>

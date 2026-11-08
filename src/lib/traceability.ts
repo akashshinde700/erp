@@ -2,9 +2,10 @@ import { Prisma } from '@prisma/client'
 import { db } from './db'
 import { BusinessError } from './accounting'
 import { EPS, r2 } from './erp'
+import { tenantCompany } from './tenant'
 
 type Tx = Prisma.TransactionClient
-async function company(tx: Tx) { const row = await tx.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } }); if (!row) throw new BusinessError('Operating company is not configured', 409); return row }
+async function company(tx: Tx) { const row = await tenantCompany(tx); if (!row) throw new BusinessError('Operating company is not configured', 409); return row }
 
 /** Lots that can be issued: available, not expired. */
 const ISSUABLE = 'AVAILABLE'
@@ -169,8 +170,33 @@ export async function recallLot(id: string, reason: string) {
   })
 }
 
-export async function traceabilityDashboard() {
-  const org = await db.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } }); if (!org) throw new BusinessError('Operating company is not configured', 409)
-  const lots = await db.inventoryLot.findMany({ where: { companyId: org.id }, orderBy: { createdAt: 'desc' }, include: { item: true, warehouse: true, movements: { where: { isCancelled: false } }, serials: true, parentLinks: { include: { parentLot: { include: { item: true } } } }, childLinks: { include: { childLot: { include: { item: true } } } } } })
-  return lots.map((lot) => ({ ...lot, balance: r2(lot.movements.reduce((sum, row) => sum + row.qtyIn - row.qtyOut, 0)), expired: !!lot.expiryDate && lot.expiryDate < new Date(), availableSerials: lot.serials.filter((row) => row.status === 'AVAILABLE').length }))
+/**
+ * Lot list for the Lots & Serials workspace. Balances and available-serial
+ * counts are aggregated in the database (the previous version shipped every
+ * movement and serial row of every lot: ~3 MB for 1,000 lots / 5,000 serials).
+ * Newest first, filtered by lot/item text, capped at `limit` (max 500).
+ */
+export async function traceabilityDashboard(params: { q?: string; limit?: number } = {}) {
+  const org = await tenantCompany(db); if (!org) throw new BusinessError('Operating company is not configured', 409)
+  const q = params.q?.trim()
+  const where = { companyId: org.id, ...(q ? { OR: [{ lotNo: { contains: q } }, { item: { code: { contains: q } } }, { item: { name: { contains: q } } }] } : {}) }
+  const take = Math.min(500, Math.max(1, params.limit ?? 300))
+  const [lots, total] = await Promise.all([
+    db.inventoryLot.findMany({ where, orderBy: { createdAt: 'desc' }, take, include: {
+      item: { select: { id: true, code: true, name: true, uom: true } }, warehouse: { select: { id: true, code: true, name: true } },
+      parentLinks: { select: { consumedQty: true, parentLot: { select: { id: true, lotNo: true } } } },
+      childLinks: { select: { consumedQty: true, childLot: { select: { id: true, lotNo: true } } } },
+    } }),
+    db.inventoryLot.count({ where }),
+  ])
+  const ids = lots.map((lot) => lot.id)
+  const [moves, serials] = ids.length ? await Promise.all([
+    db.lotMovement.groupBy({ by: ['lotId'], where: { lotId: { in: ids }, isCancelled: false }, _sum: { qtyIn: true, qtyOut: true } }),
+    db.serialNumber.groupBy({ by: ['lotId'], where: { lotId: { in: ids }, status: 'AVAILABLE' }, _count: { _all: true } }),
+  ]) : [[], []]
+  const balance = new Map(moves.map((m) => [m.lotId, r2((m._sum.qtyIn ?? 0) - (m._sum.qtyOut ?? 0))]))
+  const available = new Map(serials.map((x) => [x.lotId, x._count._all]))
+  const now = new Date()
+  const rows = lots.map((lot) => ({ ...lot, balance: balance.get(lot.id) ?? 0, expired: !!lot.expiryDate && lot.expiryDate < now, availableSerials: available.get(lot.id) ?? 0 }))
+  return Object.assign(rows, { total })
 }

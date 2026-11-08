@@ -17,6 +17,7 @@ import { r2, fyCode, EPS } from './erp'
 import { isValidDateString } from './validation'
 import { BusinessError, postGl } from './accounting'
 import { consumeLotsFefoTx } from './traceability'
+import { tenantCompany } from './tenant'
 
 type Tx = Prisma.TransactionClient
 
@@ -58,22 +59,30 @@ const iso = (d?: string | Date | null): Date => {
 // ---------- numbering ----------
 
 /** FY-aware gapless doc number: BOM-2526-001 */
+async function orgKey(tx: Tx, key: string): Promise<string> {
+  const company = await tenantCompany(tx)
+  if (!company) throw new BusinessError('Company profile is not set up yet', 409)
+  return `${company.id}:${key}` // per-organisation series
+}
+
 async function nextDocNo(tx: Tx, prefix: string, date: Date): Promise<string> {
   const fy = fyCode(date)
-  const key = `${prefix}-${fy}`
+  const display = `${prefix}-${fy}`
+  const key = await orgKey(tx, display)
   const counter = await tx.counter.upsert({
     where: { key },
     create: { key, value: 1 },
     update: { value: { increment: 1 } },
   })
-  return `${key}-${String(counter.value).padStart(3, '0')}`
+  return `${display}-${String(counter.value).padStart(3, '0')}`
 }
 
 /** Global sequential project number: PRJ-0001 (projects span FYs). */
 async function nextProjectNo(tx: Tx): Promise<string> {
+  const key = await orgKey(tx, 'PRJ')
   const counter = await tx.counter.upsert({
-    where: { key: 'PRJ' },
-    create: { key: 'PRJ', value: 1 },
+    where: { key },
+    create: { key, value: 1 },
     update: { value: { increment: 1 } },
   })
   return `PRJ-${String(counter.value).padStart(4, '0')}`
@@ -143,7 +152,7 @@ export async function createEmployee(input: EmployeeInput) {
     const code = (input.code ?? '').trim().toUpperCase()
     if (!code) throw new BusinessError('Employee code is required')
     if (!input.name?.trim()) throw new BusinessError('Employee name is required')
-    const dup = await tx.employee.findUnique({ where: { code } })
+    const dup = await tx.employee.findFirst({ where: { code } })
     if (dup) throw new BusinessError(`Employee code "${code}" already exists`, 409)
     return tx.employee.create({
       data: {
@@ -412,7 +421,7 @@ export async function cancelProject(id: string) {
   return db.$transaction(async (tx) => {
     const p = await tx.project.findUnique({
       where: { id },
-      include: { workOrders: { select: { id: true, status: true }, include: { tasks: { select: { status: true } } } } },
+      include: { workOrders: { select: { id: true, status: true, tasks: { select: { status: true } } } } },
     })
     if (!p) throw new BusinessError('Project not found', 404)
     if (p.status === 'COMPLETED') throw new BusinessError('Completed projects cannot be cancelled')
@@ -854,7 +863,8 @@ export interface TaskInput {
   notes?: string | null
 }
 
-export async function listTasks(filters?: { status?: string; workOrderId?: string; employeeId?: string; projectId?: string }) {
+export const TASK_LIST_LIMIT = 500
+export async function listTasks(filters?: { status?: string; workOrderId?: string; employeeId?: string; projectId?: string; limit?: number }) {
   const where: Prisma.ProductionTaskWhereInput = {}
   if (filters?.status === 'active') where.status = { in: [...TASK_ACTIVE] }
   else if (filters?.status) where.status = filters.status
@@ -864,6 +874,8 @@ export async function listTasks(filters?: { status?: string; workOrderId?: strin
   return db.productionTask.findMany({
     where,
     orderBy: [{ createdAt: 'desc' }],
+    // Newest first, bounded: full history is reached by filtering (status / WO).
+    take: Math.min(1000, Math.max(1, filters?.limit ?? TASK_LIST_LIMIT)),
     include: {
       employee: { select: { id: true, code: true, name: true, machineNo: true, shift: true } },
       materialItem: { select: { id: true, code: true, name: true, uom: true } },

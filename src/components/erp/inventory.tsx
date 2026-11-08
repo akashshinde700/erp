@@ -6,9 +6,9 @@
  * balance), Opening Stock (bulk voucher).
  */
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { Boxes, Loader2, Plus, RefreshCw, Trash2, TrendingDown } from 'lucide-react'
+import { Boxes, Loader2, Plus, RefreshCw, Search, Trash2, TrendingDown } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -61,10 +61,17 @@ export function InventoryView() {
   )
 }
 
-type TraceLot = { id: string; lotNo: string; status: string; manufactureDate: string | null; expiryDate: string | null; sourceType: string; sourceId: string; balance: number; expired: boolean; availableSerials: number; item: { code: string; name: string; uom: string }; warehouse: { code: string; name: string }; parentLinks: { parentLot: { lotNo: string; item: { code: string } }; consumedQty: number }[]; childLinks: { childLot: { lotNo: string; item: { code: string } }; consumedQty: number }[] }
+type TraceLot = { id: string; lotNo: string; status: string; manufactureDate: string | null; expiryDate: string | null; sourceType: string; sourceId: string; balance: number; expired: boolean; availableSerials: number; item: { code: string; name: string; uom: string }; warehouse: { code: string; name: string }; parentLinks: { parentLot: { lotNo: string }; consumedQty: number }[]; childLinks: { childLot: { lotNo: string }; consumedQty: number }[] }
 
 function TraceabilityTab() {
-  const lots = useApi<TraceLot[]>('/api/traceability')
+  const [search, setSearch] = useState('')
+  const [query, setQuery] = useState('')
+  useEffect(() => {
+    const t = setTimeout(() => setQuery(search.trim()), 300)
+    return () => clearTimeout(t)
+  }, [search])
+  // Newest 300 lots; older ones are found by searching (server-side).
+  const lots = useApi<TraceLot[]>(query ? `/api/traceability?q=${encodeURIComponent(query)}` : '/api/traceability')
   const [busy, setBusy] = useState('')
   const recall = async (lot: TraceLot) => {
     const reason = window.prompt(`Recall ${lot.lotNo} and every descendant lot. Enter mandatory reason:`)
@@ -73,9 +80,10 @@ function TraceabilityTab() {
     try { const result = await apiPost<{ affectedLots: number }>('/api/traceability', { action: 'recall', id: lot.id, reason: reason.trim() }); toast.success(`${lot.lotNo} recalled`, { description: `${result.affectedLots} lot(s) affected` }); await lots.reload() }
     catch (error) { toastError(error) } finally { setBusy('') }
   }
-  if (lots.loading) return <TableSkeleton rows={8} cols={9} />
-  if (!lots.data?.length) return <EmptyState title="No tracked lots" hint="QC-accepted GRNs and production receipts with a batch number create traceable lots." icon={Boxes} />
-  return <Card className="p-0"><CardContent className="p-0"><div className="flex items-center border-b px-4 py-3"><p className="text-sm font-medium">Batch, serial and genealogy balances</p><Button variant="ghost" size="sm" className="ml-auto gap-2" onClick={() => void lots.reload()}><RefreshCw className="size-4" />Refresh</Button></div><div className="overflow-auto"><Table><TableHeader><TableRow><TableHead>Lot / Item</TableHead><TableHead>Warehouse</TableHead><TableHead>Dates</TableHead><TableHead className="text-right">Balance</TableHead><TableHead className="text-right">Available Serials</TableHead><TableHead>Source</TableHead><TableHead>Parents</TableHead><TableHead>Children</TableHead><TableHead className="text-right">Status / Action</TableHead></TableRow></TableHeader><TableBody>{lots.data.map((lot) => <TableRow key={lot.id}><TableCell className="font-medium">{lot.lotNo}<p className="text-xs text-muted-foreground">{lot.item.code} · {lot.item.name}</p></TableCell><TableCell>{lot.warehouse.code}</TableCell><TableCell className="text-xs">Mfg: {lot.manufactureDate ? dateStr(lot.manufactureDate) : '—'}<br />Exp: {lot.expiryDate ? dateStr(lot.expiryDate) : '—'}</TableCell><TableCell className="text-right tabular-nums">{qtyFmt(lot.balance)} {lot.item.uom}</TableCell><TableCell className="text-right">{lot.availableSerials}</TableCell><TableCell className="text-xs">{lot.sourceType}<br /><span className="text-muted-foreground">{lot.sourceId.slice(0, 10)}</span></TableCell><TableCell className="text-xs">{lot.parentLinks.map((link) => `${link.parentLot.lotNo} (${link.consumedQty})`).join(', ') || '—'}</TableCell><TableCell className="text-xs">{lot.childLinks.map((link) => link.childLot.lotNo).join(', ') || '—'}</TableCell><TableCell className="text-right"><Badge variant={lot.status === 'RECALLED' || lot.expired ? 'destructive' : lot.status === 'AVAILABLE' ? 'default' : 'secondary'}>{lot.expired ? 'EXPIRED' : lot.status}</Badge>{lot.status !== 'RECALLED' ? <Button size="sm" variant="destructive" className="ml-2" disabled={busy === lot.id} onClick={() => void recall(lot)}>Recall</Button> : null}</TableCell></TableRow>)}</TableBody></Table></div></CardContent></Card>
+  const searchBox = <div className="relative mb-3 max-w-sm"><Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden /><Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search lot / item…" className="h-11 pl-8" aria-label="Search lots" /></div>
+  if (lots.loading) return <>{searchBox}<TableSkeleton rows={8} cols={9} /></>
+  if (!lots.data?.length) return <>{searchBox}<EmptyState title={query ? 'No matching lots' : 'No tracked lots'} hint={query ? 'Try another lot number or item code.' : 'QC-accepted GRNs and production receipts with a batch number create traceable lots.'} icon={Boxes} /></>
+  return <>{searchBox}<Card className="p-0"><CardContent className="p-0"><div className="flex items-center border-b px-4 py-3"><p className="text-sm font-medium">Batch, serial and genealogy balances</p><Button variant="ghost" size="sm" className="ml-auto gap-2" onClick={() => void lots.reload()}><RefreshCw className="size-4" />Refresh</Button></div><div className="overflow-auto"><Table><TableHeader><TableRow><TableHead>Lot / Item</TableHead><TableHead>Warehouse</TableHead><TableHead>Dates</TableHead><TableHead className="text-right">Balance</TableHead><TableHead className="text-right">Available Serials</TableHead><TableHead>Source</TableHead><TableHead>Parents</TableHead><TableHead>Children</TableHead><TableHead className="text-right">Status / Action</TableHead></TableRow></TableHeader><TableBody>{lots.data.map((lot) => <TableRow key={lot.id}><TableCell className="font-medium">{lot.lotNo}<p className="text-xs text-muted-foreground">{lot.item.code} · {lot.item.name}</p></TableCell><TableCell>{lot.warehouse.code}</TableCell><TableCell className="text-xs">Mfg: {lot.manufactureDate ? dateStr(lot.manufactureDate) : '—'}<br />Exp: {lot.expiryDate ? dateStr(lot.expiryDate) : '—'}</TableCell><TableCell className="text-right tabular-nums">{qtyFmt(lot.balance)} {lot.item.uom}</TableCell><TableCell className="text-right">{lot.availableSerials}</TableCell><TableCell className="text-xs">{lot.sourceType}<br /><span className="text-muted-foreground">{lot.sourceId.slice(0, 10)}</span></TableCell><TableCell className="text-xs">{lot.parentLinks.map((link) => `${link.parentLot.lotNo} (${link.consumedQty})`).join(', ') || '—'}</TableCell><TableCell className="text-xs">{lot.childLinks.map((link) => link.childLot.lotNo).join(', ') || '—'}</TableCell><TableCell className="text-right"><Badge variant={lot.status === 'RECALLED' || lot.expired ? 'destructive' : lot.status === 'AVAILABLE' ? 'default' : 'secondary'}>{lot.expired ? 'EXPIRED' : lot.status}</Badge>{lot.status !== 'RECALLED' ? <Button size="sm" variant="destructive" className="ml-2" disabled={busy === lot.id} onClick={() => void recall(lot)}>Recall</Button> : null}</TableCell></TableRow>)}</TableBody></Table></div></CardContent></Card></>
 }
 
 // ---------- stock summary ----------

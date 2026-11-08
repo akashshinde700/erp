@@ -4,7 +4,15 @@ import { fail, handleError, ok } from '@/lib/api'
 import { assertCompanyAccess, assertMutationAccess } from '@/lib/platform'
 import { recallLot, traceabilityDashboard } from '@/lib/traceability'
 
-export async function GET() { try { await assertCompanyAccess(); return ok(await traceabilityDashboard()) } catch (error) { return handleError(error) } }
+export async function GET(req: Request) {
+  try {
+    await assertCompanyAccess()
+    const sp = new URL(req.url).searchParams
+    const limit = Number(sp.get('limit') ?? '') || undefined
+    const lots = await traceabilityDashboard({ q: sp.get('q') ?? undefined, limit })
+    return new Response(JSON.stringify({ success: true, data: lots }), { headers: { 'Content-Type': 'application/json', 'X-Total-Count': String(lots.total) } })
+  } catch (error) { return handleError(error) }
+}
 async function handlePost(req: Request) {
   try {
     await assertMutationAccess(); const body = await req.json()

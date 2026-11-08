@@ -1,4 +1,4 @@
-import { ok, handleError } from '@/lib/api'
+import { ok, handleError, fail } from '@/lib/api'
 import { db } from '@/lib/db'
 import { cancelSalesInvoice } from '@/lib/services'
 import { assertCompanyAccess, assertMutationAccess } from '@/lib/platform'
@@ -15,6 +15,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
         items: { orderBy: { id: 'asc' } },
       },
     })
+    if (!invoice) return fail('Invoice not found', 404)
     return ok(invoice)
   } catch (e) {
     return handleError(e)

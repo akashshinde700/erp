@@ -19,11 +19,15 @@ import { fyCode } from './erp'
  * start at 001 and collide on the unique invoiceNo as soon as either series exists.
  */
 export async function nextSharedInvoiceNo(tx: Prisma.TransactionClient, prefix: 'INV' | 'PIN', date: Date): Promise<string> {
-  const key = `${prefix}-${fyCode(date)}`
+  const display = `${prefix}-${fyCode(date)}`
+  const company = await tenantCompany(tx)
+  if (!company) throw new BusinessError('Company profile is not set up yet', 409)
+  const key = `${company.id}:${display}` // one series per organisation, shared by direct and controlled invoices
   const counter = await tx.counter.upsert({ where: { key }, create: { key, value: 1 }, update: { value: { increment: 1 } } })
-  return `${key}-${String(counter.value).padStart(3, '0')}`
+  return `${display}-${String(counter.value).padStart(3, '0')}`
 }
 import { r2 } from './erp'
+import { tenantCompany } from './tenant'
 
 export const ACCOUNTS = {
   DEBT: { code: 'DEBT', name: 'Sundry Debtors', group: 'Current Assets' },

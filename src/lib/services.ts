@@ -12,6 +12,8 @@ import { r2, fyCode, computeInvoiceTotals, EPS, DEFAULT_WAREHOUSE_CODE } from '.
 import { isValidDateString } from './validation'
 import { BusinessError, AccountCode, postGl, cancelGlForVoucher } from './accounting'
 import { cancelLotMovementsTx, consumeLotsFefoTx } from './traceability'
+import { recomputeScheduleTx, recomputeSchedulesForInvoicesTx } from './finance-adjustments'
+import { tenantCompany } from './tenant'
 
 type Tx = Prisma.TransactionClient
 
@@ -23,7 +25,7 @@ async function getCompany(tx: Tx) {
   // OPERATING org only (first non-platform company) — never the platform
   // company. A shared resolver with platform.ts keeps interState and seller
   // identity consistent across posting, Tally and e-Invoice.
-  const company = await tx.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } })
+  const company = await tenantCompany(tx)
   if (!company) throw new BusinessError('Company profile is not set up yet. Complete setup in Masters → Company.', 409)
   return company
 }
@@ -48,13 +50,14 @@ async function resolveWarehouseId(tx: Tx, requested?: string | null): Promise<st
 /** Atomic gapless-forward document number: INV-2526-003 */
 async function nextDocNo(tx: Tx, prefix: string, date: Date): Promise<string> {
   const fy = fyCode(date)
-  const key = `${prefix}-${fy}`
+  const display = `${prefix}-${fy}`
+  const key = `${(await getCompany(tx)).id}:${display}` // one gapless series per organisation
   const counter = await tx.counter.upsert({
     where: { key },
     create: { key, value: 1 },
     update: { value: { increment: 1 } },
   })
-  return `${key}-${String(counter.value).padStart(3, '0')}`
+  return `${display}-${String(counter.value).padStart(3, '0')}`
 }
 
 interface StockStats { avail: number; avgCost: number }
@@ -530,7 +533,7 @@ export async function postPayment(input: PostPaymentInput) {
         )
       }
       if (a.invoiceType === 'SALES') {
-        const inv = await tx.salesInvoice.findUnique({ where: { invoiceNo: a.invoiceNo } })
+        const inv = await tx.salesInvoice.findFirst({ where: { invoiceNo: a.invoiceNo } })
         if (!inv) throw new BusinessError(`Sales invoice ${a.invoiceNo} not found`, 404)
         if (inv.partyId !== party.id) throw new BusinessError(`Invoice ${a.invoiceNo} belongs to a different party`)
         if (inv.status !== 'POSTED') throw new BusinessError(`Invoice ${a.invoiceNo} is not active`)
@@ -544,7 +547,7 @@ export async function postPayment(input: PostPaymentInput) {
         })
         if (upd.count !== 1) throw new BusinessError(`Invoice ${a.invoiceNo} was updated by another transaction — refresh and try again`, 409)
       } else {
-        const inv = await tx.purchaseInvoice.findUnique({ where: { invoiceNo: a.invoiceNo } })
+        const inv = await tx.purchaseInvoice.findFirst({ where: { invoiceNo: a.invoiceNo } })
         if (!inv) throw new BusinessError(`Purchase invoice ${a.invoiceNo} not found`, 404)
         if (inv.partyId !== party.id) throw new BusinessError(`Invoice ${a.invoiceNo} belongs to a different party`)
         if (inv.status !== 'POSTED') throw new BusinessError(`Invoice ${a.invoiceNo} is not active`)
@@ -595,6 +598,9 @@ export async function postPayment(input: PostPaymentInput) {
     if (unallocated > EPS) {
       await tx.partyAdvance.create({ data: { companyId: company.id, partyId: party.id, paymentId: payment.id, advanceType: input.type === 'RECEIPT' ? 'CUSTOMER' : 'SUPPLIER', originalAmount: unallocated } })
     }
+    // Collections against dispatch-backed invoices settle their order's milestones.
+    const salesNos = (input.allocations ?? []).filter((a) => a.invoiceType === 'SALES').map((a) => a.invoiceNo)
+    if (salesNos.length) await recomputeSchedulesForInvoicesTx(tx, { invoiceNos: salesNos })
 
     return payment
   })
@@ -623,7 +629,11 @@ export async function cancelPayment(id: string) {
       }
     }
     await cancelGlForVoucher(tx, 'PAYMENT', pay.paymentNo, new Date())
-    return tx.payment.update({ where: { id }, data: { status: 'CANCELLED' }, include: { allocations: true } })
+    const cancelled = await tx.payment.update({ where: { id }, data: { status: 'CANCELLED' }, include: { allocations: true } })
+    const salesNos = pay.allocations.filter((a) => a.invoiceType === 'SALES' && !a.reversedAt).map((a) => a.invoiceNo)
+    if (salesNos.length) await recomputeSchedulesForInvoicesTx(tx, { invoiceNos: salesNos })
+    for (const a of pay.advances) if (a.salesOrderId) await recomputeScheduleTx(tx, a.salesOrderId)
+    return cancelled
   })
 }
 

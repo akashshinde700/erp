@@ -28,6 +28,7 @@ import {
   Users,
   Wrench,
   XCircle,
+  PackageCheck,
 } from 'lucide-react'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
@@ -70,6 +71,7 @@ import { useErpUi } from './store'
 import { dateStr, money, qty as qtyFmt, r2 } from '@/lib/erp'
 import { cn } from '@/lib/utils'
 import { QualityWorkspace } from './quality-workspace'
+import { ProductionReceiptsWorkspace } from './production-receipts'
 
 // ===========================================================================
 // Module shell
@@ -159,6 +161,9 @@ export function ManufacturingView() {
           <TabsTrigger value="employees" className="h-11 gap-1.5 sm:h-9">
             <Users className="size-4" aria-hidden /> Employees
           </TabsTrigger>
+          <TabsTrigger value="receipts" className="h-11 gap-1.5 sm:h-9">
+            <PackageCheck className="size-4" aria-hidden /> FG Receipts
+          </TabsTrigger>
           <TabsTrigger value="quality" className="h-11 gap-1.5 sm:h-9">
             <CheckCircle2 className="size-4" aria-hidden /> Quality
           </TabsTrigger>
@@ -184,6 +189,9 @@ export function ManufacturingView() {
         </TabsContent>
         <TabsContent value="employees" className="mt-4">
           <EmployeesTab onChanged={() => stats.reload()} />
+        </TabsContent>
+        <TabsContent value="receipts" className="mt-4">
+          <ProductionReceiptsWorkspace />
         </TabsContent>
         <TabsContent value="quality" className="mt-4">
           <QualityWorkspace />
@@ -1888,6 +1896,7 @@ function TasksTab({ woFilter, onWoFilterChange, onChanged }: { woFilter: string;
   if (woFilter && woFilter !== 'all') qp.set('workOrderId', woFilter)
   const list = useApi<ProductionTask[]>(`/api/manufacturing/tasks?${qp.toString()}`)
   const rows = list.data ?? []
+  const capped = rows.length >= 500 // server returns the newest 500; narrow by status or work order for older ones
 
   const taskAction = async (t: ProductionTask, action: 'start' | 'cancel') => {
     setBusy(true)
@@ -1946,6 +1955,7 @@ function TasksTab({ woFilter, onWoFilterChange, onChanged }: { woFilter: string;
         </div>
       </div>
 
+      {capped ? <p className="text-xs text-muted-foreground">Showing the newest 500 tasks — filter by status or work order to see older ones.</p> : null}
       <Card className="p-0">
         <CardContent className="p-0">
           {list.loading ? (

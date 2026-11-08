@@ -2,10 +2,11 @@ import { Prisma } from '@prisma/client'
 import { db } from './db'
 import { BusinessError } from './accounting'
 import { fyCode } from './erp'
+import { tenantCompany } from './tenant'
 
 type Tx = Prisma.TransactionClient
 type ParameterInput = { name: string; dataType: 'NUMBER' | 'TEXT' | 'BOOLEAN'; unit?: string; minValue?: number; maxValue?: number; expectedText?: string; required?: boolean; seq?: number }
-async function org(tx: Tx) { const row = await tx.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } }); if (!row) throw new BusinessError('Operating company is not configured', 409); return row }
+async function org(tx: Tx) { const row = await tenantCompany(tx); if (!row) throw new BusinessError('Operating company is not configured', 409); return row }
 async function inspectionNo(tx: Tx, companyId: string) { const key = `QI-${fyCode(new Date())}`; const row = await tx.counter.upsert({ where: { key: `${companyId}:${key}` }, create: { key: `${companyId}:${key}`, value: 1 }, update: { value: { increment: 1 } } }); return `${key}-${String(row.value).padStart(3, '0')}` }
 
 function validateParameter(parameter: ParameterInput) {
@@ -63,7 +64,7 @@ export async function recordQualityInspection(input: { templateId: string; refer
 }
 
 export async function qualityDashboard() {
-  const company = await db.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } }); if (!company) throw new BusinessError('Operating company is not configured', 409)
+  const company = await tenantCompany(db); if (!company) throw new BusinessError('Operating company is not configured', 409)
   const [templates, inspections] = await Promise.all([
     db.qualityTemplate.findMany({ where: { companyId: company.id }, orderBy: [{ code: 'asc' }, { version: 'desc' }], include: { item: true, parameters: { orderBy: { seq: 'asc' } } } }),
     db.qualityInspection.findMany({ where: { companyId: company.id }, orderBy: { createdAt: 'desc' }, take: 200, include: { template: true, item: true, measurements: { include: { parameter: true } } } }),

@@ -35,6 +35,22 @@ prisma/migrations/
                                             become active-only. New indexes are created before
                                             the old unique keys are dropped, so no FK loses its
                                             supporting index.
+  20261108120000_tenant_isolation/
+    migration.sql                           hand-staged: companyId on the 19 legacy root
+                                            tables (Party, Item, Warehouse, invoices, ledgers,
+                                            jobwork, projects, BOM, work orders, tasks,
+                                            payments, AuditLog …), backfilled with the oldest
+                                            operating company, then NOT NULL DEFAULT '' + FK
+                                            (AuditLog stays nullable). Global unique keys become
+                                            (companyId, key); each composite key is created
+                                            before the old one is dropped. Counter keys are
+                                            prefixed "<companyId>:". Fails (error 1138) on a
+                                            database with no operating company, by design.
+  20261108130000_advance_sales_order/
+    migration.sql                           PartyAdvance.salesOrderId (nullable, SET NULL FK)
+  20261108140000_rfq_supplier_quotes/
+    migration.sql                           5 new tables (Rfq, RfqLine, RfqSupplier,
+                                            SupplierQuote, SupplierQuoteLine). Additive only.
 ```
 
 `db:push` is **not** used anywhere any more: `deploy.py` runs
@@ -113,6 +129,18 @@ step 1 (`--no-backup` skips it — do not). Rollback of the code is
 (the migration is additive, so the old code also runs fine on the migrated
 schema — a code rollback alone is normally enough).
 
+Pre-flight for `20261108120000_tenant_isolation` (read-only):
+
+```sql
+SELECT id, name, createdAt FROM Company WHERE isPlatform = 0 ORDER BY createdAt;
+-- at least one row; every legacy row is assigned to the FIRST row.
+-- More than one row: confirm that the oldest company really owns the legacy data.
+```
+
+This migration is **not** additive (NOT NULL columns, re-keyed uniques, renamed
+counters): the old code cannot run on the migrated schema. Rollback after it is
+applied = restore the predeploy dump. Rehearse it first (§8).
+
 ## 5. Backfill
 
 None required for this migration: every new column has a default
@@ -121,11 +149,11 @@ start empty. Legacy orgs seeded before the manufacturing module can add that
 demo chain with `POST /api/seed?manufacturing=1` (additive, refuses when
 employees/projects exist).
 
-Multi-company isolation (adding `companyId` to the 42 legacy tables, scoped
-unique keys, session-company resolver) is **not** part of this migration; it
-needs its own reviewed migration with a deterministic backfill
-(`UPDATE <table> SET companyId = (SELECT id FROM Company WHERE isPlatform = 0 LIMIT 1)`
-is only valid while there is exactly one operating company).
+Multi-company isolation is `20261108120000_tenant_isolation` (§1); its backfill
+is inside the migration and deterministic (oldest operating company by
+`createdAt`). Child tables need no column: they are scoped through their
+required parent. Backups are v5 and platform-wide; restoring a pre-v5 snapshot
+assigns it to its legacy organisation and prefixes its counters.
 
 ## 6. Backup / restore drill (what `tests/backup-drill.mjs` proves)
 
@@ -165,3 +193,24 @@ Runtime bugs found only because the suite ran on the real MySQL client:
 - seed completed tasks without starting them (new lifecycle guard) → `startTask` added;
 - seed closed the tank work order without a production receipt (new WIP guard) → FG item `FG-2001` + `postProductionReceipt`;
 - `?force=1` reseed and `POST /api/backup/restore` wiped only the 33 legacy tables → P2003 on MySQL; backup v3 omitted the 27 workflow tables entirely → backup v4 + shared `WORKFLOW_MODELS_CHILDREN_FIRST`.
+
+## 8. Staging rehearsal on a copy of live data
+
+Before the first deploy that includes `20261108120000_tenant_isolation`, on the
+server (the predeploy dump never leaves it):
+
+```bash
+STAGING_DATABASE_URL=mysql://<user>:<pass>@127.0.0.1:3306/forgeerp_staging_rehearsal   node scripts/staging-rehearsal.mjs ~/backups/predeploy/<latest>.sql.gz
+```
+
+The script refuses names that do not contain staging/rehearsal/tmp/test/audit,
+refuses a database that already exists, and drops only the one it created
+(`--keep` to inspect). It runs the pre-flight above, baselines like `deploy.py`
+when history is missing, applies `migrate deploy`, checks status and drift, and
+then proves: no table lost rows, every business row belongs to an operating
+company, every counter is prefixed, Dr = Cr, no negative stock. Expect
+"staging rehearsal: PASSED" before deploying.
+
+Verified 2026-11-08 on a simulated live dump (schema + data as of `d1ef1f0`,
+history for the first three migrations): PASSED, three migrations in 20 s.
+**Not yet run on the real live dump.**

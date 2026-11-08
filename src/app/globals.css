@@ -182,6 +182,35 @@ the rows actually scroll. */
     box-shadow: none;
     font-size: 11px;
   }
+  /* Printing from a dialog (e.g. the refund acknowledgement): print only
+     that dialog, laid out from the top of the page, so the hidden app page
+     underneath neither offsets it nor adds blank pages. */
+  body:has([data-slot="dialog-content"] .print-area) > :not([data-slot="dialog-content"]) {
+    display: none !important;
+  }
+  [data-slot="dialog-content"]:has(.print-area) {
+    position: static !important;
+    inset: auto !important;
+    /* Tailwind centres dialogs with the `translate` property driven by these
+       variables; zero them (a plain `translate: none` is folded away by the
+       CSS minifier). */
+    --tw-translate-x: 0 !important;
+    --tw-translate-y: 0 !important;
+    --tw-scale-x: 1 !important;
+    --tw-scale-y: 1 !important;
+    transform: none !important;
+    animation: none !important;
+    width: 100% !important;
+    max-width: none !important;
+    max-height: none !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    border: 0 !important;
+    box-shadow: none !important;
+  }
+  [data-slot="dialog-content"] .print-area {
+    position: static;
+  }
   .print-area table {
     font-size: 9.5px;
     min-width: 0 !important;

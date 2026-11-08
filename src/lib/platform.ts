@@ -21,6 +21,7 @@ import { db } from './db'
 import { BusinessError } from './accounting'
 import { currentSession, hashPassword } from './auth'
 import { platformAdminKey, randomPassword } from './secrets'
+import { tenantCompanyWithPlan } from './tenant'
 
 /** The platform admin key (env override, else a persisted per-install random value).
  *  Function — never a module-level constant — so installs without the env var
@@ -170,7 +171,9 @@ export async function requirePlatformAdmin(req: Request): Promise<void> {
 /** First NON-PLATFORM company = the operating org (single-tenant runtime). The
  *  platform company (operator's own) is never the ERP workspace. */
 export function operatingCompany() {
-  return db.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' }, include: { plan: true } })
+  // The organisation of the current request (session), or the single operating
+  // organisation on first boot / single-organisation installs.
+  return tenantCompanyWithPlan(db)
 }
 
 function endOfDay(d: Date): Date {
@@ -254,8 +257,10 @@ export async function assertCompanyAccess(): Promise<{ role: string; email: stri
   if (logins > 0) {
     const session = await currentSession()
     if (!session) throw new BusinessError('Sign in to your organization first', 401)
-    if (session.cid !== org?.id) {
-      throw new BusinessError('Your organization has no ERP workspace on this deployment yet', 403)
+    // org was resolved from this session; a platform-operator session has no
+    // organisation workspace (tenant resolution returns none for it).
+    if (!org || session.cid !== org.id || org.isPlatform) {
+      throw new BusinessError('This login has no organisation workspace — sign in with an organisation account', 403)
     }
     const user = await db.orgUser.findUnique({ where: { id: session.uid }, select: { role: true, email: true, tokenVersion: true } })
     if (!user) throw new BusinessError('Sign in to your organization first', 401)

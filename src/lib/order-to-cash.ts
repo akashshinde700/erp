@@ -3,12 +3,13 @@ import { db } from './db'
 import { BusinessError, postGl, AccountCode, nextSharedInvoiceNo } from './accounting'
 import { computeInvoiceTotals, EPS, fyCode, r2 } from './erp'
 import { cancelLotMovementsTx, consumeLotsFefoTx, issueLotTx } from './traceability'
+import { tenantCompany } from './tenant'
 
 type Tx = Prisma.TransactionClient
 type Line = { itemId: string; qty: number; rate: number; discountPct?: number; remarks?: string }
 
 async function org(tx: Tx) {
-  const row = await tx.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } })
+  const row = await tenantCompany(tx)
   if (!row) throw new BusinessError('Operating company is not configured', 409)
   return row
 }
@@ -219,7 +220,7 @@ export async function cancelDeliveryChallan(id: string) {
 }
 
 export async function orderToCashDashboard() {
-  const company = await db.company.findFirst({ where: { isPlatform: false }, orderBy: { createdAt: 'asc' } }); if (!company) throw new BusinessError('Operating company is not configured', 409)
+  const company = await tenantCompany(db); if (!company) throw new BusinessError('Operating company is not configured', 409)
   const [quotations, orders, challans] = await Promise.all([
     db.salesQuotation.findMany({ where: { companyId: company.id }, orderBy: [{ date: 'desc' }, { revisionNo: 'desc' }], include: { party: true, lines: { include: { item: true } } } }),
     db.salesOrder.findMany({ where: { companyId: company.id }, orderBy: { date: 'desc' }, include: { party: true, lines: { include: { item: true } } } }),

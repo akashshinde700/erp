@@ -189,7 +189,7 @@ function AcknowledgementDialog({ refund, onClose }: { refund: Refund; onClose: (
   const party = { data: parties.data?.find((p) => p.id === refund.payment.partyId) ?? null }
   const customer = refund.returnDocument.returnType === 'SALES_RETURN'
   return <Dialog open onOpenChange={(o) => { if (!o) onClose() }}><DialogContent className="sm:max-w-xl"><DialogHeader className="print:hidden"><DialogTitle>Refund acknowledgement</DialogTitle><DialogDescription>Print or save as PDF.</DialogDescription></DialogHeader>
-    <div id="refund-ack" className="space-y-3 rounded-md border p-5 text-sm print:border-0">
+    <div id="refund-ack" className="print-area space-y-3 rounded-md border p-5 text-sm print:border-0">
       <div className="flex justify-between gap-4"><div><p className="text-base font-semibold">{company.data?.name ?? ''}</p><p className="text-xs text-muted-foreground">{[company.data?.address, company.data?.city].filter(Boolean).join(', ')}</p>{company.data?.gstin ? <p className="text-xs">GSTIN {company.data.gstin}</p> : null}</div><div className="text-right"><p className="font-semibold">REFUND {customer ? 'VOUCHER' : 'RECEIPT'}</p><p>{refund.payment.paymentNo}</p><p>{dateStr(refund.payment.date)}</p></div></div>
       <p>{customer ? 'Paid to' : 'Received from'} <strong>{party.data?.name ?? ''}</strong>{party.data?.gstin ? ` (GSTIN ${party.data.gstin})` : ''} the sum of <strong>₹ {money(refund.amount)}</strong> by {refund.payment.mode} against {customer ? 'credit note' : 'debit note'} <strong>{refund.returnDocument.adjustmentNo}</strong>.</p>
       {refund.payment.status === 'CANCELLED' ? <p className="font-semibold text-destructive">CANCELLED</p> : null}

@@ -259,7 +259,7 @@ function MaterialPlanTab() {
 
       <Card className="border-blue-500/30 bg-blue-500/5 p-4">
         <p className="text-sm font-medium">No duplicate stock ownership</p>
-        <p className="mt-1 text-xs text-muted-foreground">{data.ownershipRule}</p>
+        <p className="mt-1 text-xs text-muted-foreground">{data.ownershipRule} Open approved PO quantity is shown separately as future supply; it reduces the projected shortage only and is never counted as on-hand stock before QC acceptance.</p>
       </Card>
 
       {data.rows.length === 0 ? (
@@ -277,7 +277,9 @@ function MaterialPlanTab() {
                     <TableHead className="text-right">Issued</TableHead>
                     <TableHead className="text-right">Remaining</TableHead>
                     <TableHead className="text-right">Own Stock</TableHead>
-                    <TableHead className="text-right">Shortage</TableHead>
+                    <TableHead className="text-right">Open PO</TableHead>
+                    <TableHead className="text-right">Shortage Now</TableHead>
+                    <TableHead className="text-right">After PO</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -300,8 +302,14 @@ function MaterialPlanTab() {
                       <TableCell className="text-right tabular-nums">{qtyFmt(row.issuedQty)}</TableCell>
                       <TableCell className="text-right tabular-nums">{qtyFmt(row.remainingQty)}</TableCell>
                       <TableCell className="text-right tabular-nums">{qtyFmt(row.availableQty)}</TableCell>
+                      <TableCell className="text-right tabular-nums" title={row.purchaseOrders.map((po) => `${po.poNo}: ${qtyFmt(po.qty)}${po.expectedDate ? ` due ${po.expectedDate.slice(0, 10)}` : ''}`).join('\n')}>
+                        {row.incomingQty > 0 ? qtyFmt(row.incomingQty) : '—'}
+                      </TableCell>
                       <TableCell className={cn('text-right font-semibold tabular-nums', row.shortageQty > 0 && 'text-destructive')}>
                         {row.shortageQty > 0 ? qtyFmt(row.shortageQty) : '—'}
+                      </TableCell>
+                      <TableCell className={cn('text-right font-semibold tabular-nums', row.projectedShortageQty > 0 && 'text-amber-700')}>
+                        {row.projectedShortageQty > 0 ? qtyFmt(row.projectedShortageQty) : '—'}
                       </TableCell>
                     </TableRow>
                   ))}

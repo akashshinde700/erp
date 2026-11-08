@@ -533,6 +533,9 @@ export interface MaterialPlanRow {
   remainingQty: number
   availableQty: number
   shortageQty: number
+  incomingQty: number
+  projectedShortageQty: number
+  purchaseOrders: { poNo: string; expectedDate: string | null; qty: number }[]
   workOrders: { id: string; woNo: string; projectNo: string; projectName: string; dueDate: string | null; requiredQty: number }[]
 }
 

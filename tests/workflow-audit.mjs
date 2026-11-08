@@ -545,6 +545,14 @@ async function phaseMfg() {
   expectOk('approve BOM', await post(`${M}/boms/${F.bom}/actions`, { action: 'approve' }))
   const wo = await post(`${M}/work-orders`, { projectId: F.prj, bomId: F.bom, priority: 'HIGH' })
   expectOk('work order from approved BOM', wo); F.wo = wo.data.id
+  const materialPlan = await get(`${M}/material-plan`)
+  const rmPlan = materialPlan.data?.rows?.find((row) => row.item.id === F.rm)
+  const poSupply = num((await q1(`SELECT COALESCE(SUM(GREATEST(0, pol.qty-pol.receivedQty)),0) qty
+    FROM PurchaseOrderLine pol JOIN PurchaseOrder po ON po.id=pol.purchaseOrderId
+    WHERE pol.itemId=? AND po.status IN ('APPROVED','PART_RECEIVED')`, [F.rm])).qty)
+  const ownedOnHand = num((await q1("SELECT COALESCE(SUM(qtyIn-qtyOut),0) qty FROM StockLedger WHERE itemId=? AND isCancelled=0 AND voucherType<>'JOBWORK_IN'", [F.rm])).qty)
+  check('material plan includes approved PO outstanding supply (not as on-hand)', materialPlan.status === 200 && rmPlan && near(rmPlan.incomingQty, poSupply) && near(rmPlan.availableQty, ownedOnHand), `incoming API=${rmPlan?.incomingQty} DB=${poSupply}; stock API=${rmPlan?.availableQty} DB=${ownedOnHand}`)
+  check('projected shortage nets approved PO supply without hiding immediate shortage', rmPlan && near(rmPlan.projectedShortageQty, Math.max(0, rmPlan.shortageQty-rmPlan.incomingQty)), `now=${rmPlan?.shortageQty} incoming=${rmPlan?.incomingQty} projected=${rmPlan?.projectedShortageQty}`)
   expectReject('1 duplicate active WO from the same BOM is blocked', await post(`${M}/work-orders`, { projectId: F.prj, bomId: F.bom }), /already active|duplicat/i)
   const emp = (await q1('SELECT id FROM Employee LIMIT 1')).id
   const t1 = await post(`${M}/tasks`, { workOrderId: F.wo, operation: 'CUTTING', seq: 1, plannedQty: 10 })

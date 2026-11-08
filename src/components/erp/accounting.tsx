@@ -48,11 +48,14 @@ import { onPreset, takeCreatePreset, type CreatePreset } from './nav'
 import { dateStr, money, PAYMENT_MODES } from '@/lib/erp'
 import { useResetOnChange } from '@/hooks/use-reset-on-change'
 import { FinanceAdjustmentsWorkspace } from './finance-workspace'
+import { JournalsTab, LedgersTab, PeriodCloseTab, TdsTab, useBooks } from './books-workspace'
 
 type AnyInvoice = SalesInvoice | PurchaseInvoice
 
+type AccTab = 'payments' | 'ledger' | 'adjustments' | 'journals' | 'ledgers' | 'tds' | 'close'
+
 export function AccountingView() {
-  const [tab, setTab] = useState<'payments' | 'ledger' | 'adjustments'>('payments')
+  const [tab, setTab] = useState<AccTab>('payments')
   const [paymentPreset, setPaymentPreset] = useState<PaymentPreset | null>(null)
   const [ledgerPartyId, setLedgerPartyId] = useState('')
 
@@ -85,11 +88,15 @@ export function AccountingView() {
         title="Accounting"
         description="Double-entry payments with invoice allocation, and per-party ledgers with running balances."
       />
-      <Tabs value={tab} onValueChange={(v) => setTab(v as 'payments' | 'ledger' | 'adjustments')}>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as AccTab)}>
         <TabsList className="h-11 w-full justify-start overflow-x-auto sm:w-auto">
           <TabsTrigger value="payments" className="h-11 sm:h-9">Payments</TabsTrigger>
           <TabsTrigger value="ledger" className="h-11 sm:h-9">Party Ledger</TabsTrigger>
           <TabsTrigger value="adjustments" className="h-11 sm:h-9">Advances &amp; Refunds</TabsTrigger>
+          <TabsTrigger value="journals" className="h-11 sm:h-9">Journals</TabsTrigger>
+          <TabsTrigger value="ledgers" className="h-11 sm:h-9">Chart of Accounts</TabsTrigger>
+          <TabsTrigger value="tds" className="h-11 sm:h-9">TDS</TabsTrigger>
+          <TabsTrigger value="close" className="h-11 sm:h-9">Period Close</TabsTrigger>
         </TabsList>
         <TabsContent value="payments" className="mt-4">
           <PaymentsTab preset={paymentPreset} onPresetConsumed={() => setPaymentPreset(null)} />
@@ -101,6 +108,10 @@ export function AccountingView() {
         <TabsContent value="adjustments" className="mt-4">
           <FinanceAdjustmentsWorkspace />
         </TabsContent>
+        <TabsContent value="journals" className="mt-4">{tab === 'journals' ? <JournalsTab /> : null}</TabsContent>
+        <TabsContent value="ledgers" className="mt-4">{tab === 'ledgers' ? <LedgersTab /> : null}</TabsContent>
+        <TabsContent value="tds" className="mt-4">{tab === 'tds' ? <TdsTab /> : null}</TabsContent>
+        <TabsContent value="close" className="mt-4">{tab === 'close' ? <PeriodCloseTab /> : null}</TabsContent>
       </Tabs>
     </div>
   )
@@ -300,6 +311,10 @@ function NewPaymentDialog({
   const [notes, setNotes] = useState('')
   const [allocs, setAllocs] = useState<Record<string, string>>({})
   const [saving, setSaving] = useState(false)
+  const books = useBooks()
+  const tdsOptions = (books.data?.tdsSections ?? []).filter((s) => s.active)
+  const [tdsSectionId, setTdsSectionId] = useState('')
+  const [tdsAmount, setTdsAmount] = useState('')
 
   const eligible = parties.filter((p) =>
     p.active && partyTypes(p).includes(type === 'RECEIPT' ? 'CUSTOMER' : 'SUPPLIER')
@@ -317,9 +332,11 @@ function NewPaymentDialog({
     [invoices.data]
   )
 
+  const tdsN = tdsSectionId ? num(tdsAmount) : 0
   const amountN = num(amount)
+  const settledN = amountN + tdsN
   const allocated = openInvoices.reduce((s, inv) => s + num(allocs[inv.invoiceNo] ?? ''), 0)
-  const over = allocated > amountN + 0.004
+  const over = allocated > settledN + 0.004
   const perInvoiceOver = openInvoices.some((inv) => {
     const a = num(allocs[inv.invoiceNo] ?? '')
     return a > inv.grandTotal - inv.paidAmount + 0.004
@@ -374,6 +391,7 @@ function NewPaymentDialog({
         mode,
         refNo: refNo.trim() || undefined,
         notes: notes.trim() || undefined,
+        ...(tdsSectionId && tdsN > 0 ? { tdsSectionId, tdsAmount: tdsN } : {}),
         allocations: openInvoices
           .filter((inv) => num(allocs[inv.invoiceNo] ?? '') > 0)
           .map((inv) => ({
@@ -487,6 +505,21 @@ function NewPaymentDialog({
               <Label htmlFor="pay-notes">Notes</Label>
               <Input id="pay-notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Optional" className="h-11" />
             </div>
+            {tdsOptions.length ? <>
+              <div className="space-y-1.5">
+                <Label>{type === 'PAYMENT' ? 'TDS deducted (section)' : 'TDS deducted by customer'}</Label>
+                <Select value={tdsSectionId || 'none'} onValueChange={(v) => { setTdsSectionId(v === 'none' ? '' : v); if (v === 'none') setTdsAmount('') }}>
+                  <SelectTrigger className="h-11 data-[size=default]:h-11"><SelectValue /></SelectTrigger>
+                  <SelectContent><SelectItem value="none">No TDS</SelectItem>{tdsOptions.map((s) => <SelectItem key={s.id} value={s.id}>{s.section} @ {s.ratePct}%</SelectItem>)}</SelectContent>
+                </Select>
+              </div>
+              {tdsSectionId ? <div className="space-y-1.5">
+                <Label htmlFor="pay-tds">TDS amount ₹</Label>
+                <div className="flex gap-2"><Input id="pay-tds" inputMode="decimal" className="h-11" value={tdsAmount} onChange={(e) => setTdsAmount(e.target.value)} />
+                  <Button type="button" variant="outline" className="h-11" onClick={() => { const s = tdsOptions.find((x) => x.id === tdsSectionId); const base = allocated > 0 ? allocated : amountN / (1 - (s?.ratePct ?? 0) / 100); setTdsAmount(String(Math.round(base * (s?.ratePct ?? 0)) / 100)) }}>Calculate</Button></div>
+                <p className="text-xs text-muted-foreground">Cash / bank moves ₹ {money(amountN)}; the party is settled for ₹ {money(settledN)} ({type === 'PAYMENT' ? 'Cr TDS Payable' : 'Dr TDS Receivable'} ₹ {money(tdsN)}).</p>
+              </div> : null}
+            </> : null}
           </div>
 
           {partyId ? (
@@ -494,7 +527,7 @@ function NewPaymentDialog({
               <div className="flex items-center justify-between">
                 <p className="text-sm font-medium">Allocate against open invoices</p>
                 <p className={`text-xs tabular-nums ${over ? 'font-semibold text-destructive' : 'text-muted-foreground'}`}>
-                  Allocated ₹ {money(allocated)} / ₹ {money(amountN)}
+                  Allocated ₹ {money(allocated)} / ₹ {money(settledN)}
                 </p>
               </div>
               {invoices.loading ? (

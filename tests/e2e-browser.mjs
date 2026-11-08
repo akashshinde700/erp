@@ -26,7 +26,7 @@ const db = process.env.AUDIT_DB_URL ? openAuditDb({ url: process.env.AUDIT_DB_UR
 const EMAIL = process.env.E2E_EMAIL ?? 'owner@shreeforge.example.com'
 const PASSWORD = process.env.E2E_PASSWORD ?? 'forge123'
 const VIEWPORTS = [{ name: 'mobile-390', width: 390, height: 844, mobile: true }, { name: 'tablet-768', width: 768, height: 1024, mobile: false }, { name: 'desktop-1440', width: 1440, height: 900, mobile: false }]
-const MODULES = ['Dashboard', 'Sales', 'Purchase', 'Jobwork', 'Projects & Mfg', 'Inventory', 'Accounting', 'Reports', 'Masters', 'Tally Export', 'Audit Trail']
+const MODULES = ['Dashboard', 'CRM & Service', 'Sales', 'Purchase', 'Jobwork', 'Projects & Mfg', 'Inventory', 'Accounting', 'Reports', 'Masters', 'Tally Export', 'Audit Trail']
 
 const results = []
 let failures = 0
@@ -124,7 +124,7 @@ async function runViewport(browser, vp) {
   if (vp.mobile) check('touch targets in main content are at least 40x40 px', small.size === 0, `${small.size} small: ${[...small].join(' | ')}`)
 
   // workflow workspaces
-  const ws = [['Sales', 'Quote to Cash', /quote/i], ['Purchase', 'Procurement & Returns', /procurement/i], ['Inventory', 'Lots & Serials', /lot|serial|batch/i], ['Projects & Mfg', 'Quality', /quality|inspection/i], ['Projects & Mfg', 'FG Receipts', /work order|receipt/i], ['Accounting', 'Advances & Refunds', /advance|refund|schedule/i], ['Purchase', 'RFQ & Comparison', /RFQ|quotation/i, 'Procurement & Returns']]
+  const ws = [['Sales', 'Quote to Cash', /quote/i], ['Purchase', 'Procurement & Returns', /procurement/i], ['Inventory', 'Lots & Serials', /lot|serial|batch/i], ['Projects & Mfg', 'Quality', /quality|inspection/i], ['Projects & Mfg', 'FG Receipts', /work order|receipt/i], ['Accounting', 'Advances & Refunds', /advance|refund|schedule/i], ['Purchase', 'RFQ & Comparison', /RFQ|quotation/i, 'Procurement & Returns'], ['CRM & Service', 'Leads', /lead|follow-up/i], ['CRM & Service', 'Service Calls', /service call|complaint/i], ['CRM & Service', 'Performance', /salesperson|month/i], ['Inventory', 'Adjustments', /adjust/i], ['Accounting', 'Journals', /journal/i], ['Accounting', 'Chart of Accounts', /ledger|asset/i], ['Accounting', 'TDS', /TDS/], ['Accounting', 'Period Close', /period|financial year|lock/i], ['Reports', 'Aging', /due|outstanding|receivable/i], ['Reports', 'Back Orders', /back order|pending/i], ['Reports', 'P&L by Ledger', /income|expense/i]]
   for (const [mod, tab, re, parent] of ws) {
     await goModule(page, mod)
     if (parent) { await page.getByRole('tab', { name: new RegExp(parent, 'i') }).first().click().catch(() => {}); await settle(page, 700) }
@@ -220,6 +220,31 @@ async function runViewport(browser, vp) {
 
   // new workspaces: guided dialogs refuse incomplete input; print layouts (desktop)
   if (vp.name === 'desktop-1440') {
+    // MapSoft-parity dialogs refuse incomplete input
+    await goModule(page, 'Accounting')
+    await page.getByRole('tab', { name: /^Journals$/ }).first().click().catch(() => {}); await settle(page, 700)
+    await page.getByRole('button', { name: /^New journal$/ }).first().click().catch(() => {}); await settle(page, 500)
+    const jvDlg = page.locator('[role=dialog]').first()
+    const jvText = await jvDlg.innerText().catch(() => '')
+    const postDisabled = await jvDlg.getByRole('button', { name: /^Post journal$/ }).isDisabled().catch(() => false)
+    check('New journal shows Dr/Cr balance and blocks an incomplete entry', /balanced|out by/i.test(jvText) && /narration|ledger/i.test(jvText) && postDisabled, jvText.slice(0, 160).replace(/\s+/g, ' '))
+    await shot(page, 'journal-new')
+    await page.keyboard.press('Escape'); await jvDlg.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {})
+    await goModule(page, 'CRM & Service')
+    await page.getByRole('button', { name: /^New lead$/ }).first().click().catch(() => {}); await settle(page, 500)
+    const ldDlg = page.locator('[role=dialog]').first()
+    const ldText = await ldDlg.innerText().catch(() => '')
+    const leadCreateDisabled = await ldDlg.getByRole('button', { name: /^Create lead$/ }).isDisabled().catch(() => false)
+    check('New lead asks for a contact and a phone/email before saving', /phone or an email/i.test(ldText) && leadCreateDisabled, ldText.slice(0, 160).replace(/\s+/g, ' '))
+    await page.keyboard.press('Escape'); await ldDlg.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {})
+    await goModule(page, 'Inventory')
+    await page.getByRole('tab', { name: /^Adjustments$/ }).first().click().catch(() => {}); await settle(page, 700)
+    await page.getByRole('button', { name: /^Request adjustment$/ }).first().click().catch(() => {}); await settle(page, 500)
+    const adjDlg = page.locator('[role=dialog]').first()
+    const adjText = await adjDlg.innerText().catch(() => '')
+    check('Stock adjustment request says nothing posts until approved and blocks incomplete input', /until approved/i.test(adjText) && (await adjDlg.getByRole('button', { name: /Send for approval/ }).isDisabled().catch(() => false)), adjText.slice(0, 160).replace(/\s+/g, ' '))
+    await page.keyboard.press('Escape'); await adjDlg.waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {})
+
     await goModule(page, 'Purchase')
     await page.getByRole('tab', { name: /Procurement & Returns/i }).first().click().catch(() => {}); await settle(page, 700)
     await page.getByRole('tab', { name: /RFQ & Comparison/i }).first().click().catch(() => {}); await settle(page, 700)

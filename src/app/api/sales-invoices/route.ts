@@ -66,6 +66,7 @@ const postSchema = z.object({
   taxInclusive: z.boolean().optional(),
   warehouseId: z.string().optional().nullable(),
   remarks: z.string().max(500).optional().nullable(),
+  salespersonId: z.string().min(1).optional().nullable(),
   lines: z.array(lineSchema).min(1, 'Add at least one line item').max(200, 'Too many line items'),
 })
 

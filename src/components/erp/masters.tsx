@@ -542,6 +542,7 @@ function PartyDialog({
   const [email, setEmail] = useState('')
   const [openingBal, setOpeningBal] = useState('')
   const [creditLimit, setCreditLimit] = useState('')
+  const [creditDays, setCreditDays] = useState('')
   const [saving, setSaving] = useState(false)
 
   useResetOnChange(open, [party], () => {
@@ -559,6 +560,7 @@ function PartyDialog({
     setEmail(party?.email ?? '')
     setOpeningBal(party ? String(party.openingBal) : '')
     setCreditLimit(party ? String(party.creditLimit ?? 0) : '')
+    setCreditDays(party ? String(party.creditDays ?? 0) : '')
   })
 
   const chosenTypes = PARTY_TYPES.filter((t) => types[t])
@@ -595,6 +597,7 @@ function PartyDialog({
         email: email.trim() || null,
         openingBal: num(openingBal),
         creditLimit: Math.max(0, num(creditLimit)),
+        creditDays: Math.min(365, Math.max(0, Math.round(num(creditDays)))),
       }
       const res = party
         ? await apiPut<Party>(`/api/masters/parties/${party.id}`, body)
@@ -718,6 +721,11 @@ function PartyDialog({
             <Label htmlFor="p-credit-limit">Customer Credit Limit ₹</Label>
             <Input id="p-credit-limit" type="number" min="0" inputMode="decimal" step="any" value={creditLimit} onChange={(e) => setCreditLimit(e.target.value)} placeholder="0" className="h-11 text-right tabular-nums" />
             <p className="text-xs text-muted-foreground">0 = unlimited; checked when approving sales orders.</p>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="p-credit-days">Payment terms (credit days)</Label>
+            <Input id="p-credit-days" type="number" min="0" max="365" inputMode="numeric" step="1" value={creditDays} onChange={(e) => setCreditDays(e.target.value)} placeholder="0" className="h-11 text-right tabular-nums" />
+            <p className="text-xs text-muted-foreground">Invoice due date = invoice date + these days (aging report).</p>
           </div>
           </div>
         </div>

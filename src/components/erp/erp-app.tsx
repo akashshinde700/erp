@@ -15,6 +15,7 @@ import {
   Database,
   Factory,
   FolderKanban,
+  Headset,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -66,6 +67,7 @@ const NAV_GROUPS: { group: string; entries: NavEntry[] }[] = [
   {
     group: 'Transactions',
     entries: [
+      { view: 'crm', label: 'CRM & Service', icon: Headset },
       { view: 'sales', label: 'Sales', icon: ReceiptText },
       { view: 'purchase', label: 'Purchase', icon: ShoppingCart },
     ],
@@ -191,6 +193,7 @@ const ManufacturingView = lazy(() => import('./manufacturing').then((m) => ({ de
 const ProjectDetailView = lazy(() => import('./manufacturing').then((m) => ({ default: m.ProjectDetailView })))
 const AccountingView = lazy(() => import('./accounting').then((m) => ({ default: m.AccountingView })))
 const ReportsView = lazy(() => import('./reports').then((m) => ({ default: m.ReportsView })))
+const CrmView = lazy(() => import('./crm').then((m) => ({ default: m.CrmView })))
 const MastersView = lazy(() => import('./masters').then((m) => ({ default: m.MastersView })))
 const TallyView = lazy(() => import('./tally').then((m) => ({ default: m.TallyView })))
 const PlatformView = lazy(() => import('./platform').then((m) => ({ default: m.PlatformView })))
@@ -498,6 +501,9 @@ export function ErpApp() {
       break
     case 'reports':
       content = <ReportsView />
+      break
+    case 'crm':
+      content = <CrmView />
       break
     case 'masters':
       content = <MastersView />

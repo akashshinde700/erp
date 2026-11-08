@@ -11,6 +11,15 @@
  * with P2003 — and a backup will silently drop its rows.
  */
 export const WORKFLOW_MODELS_CHILDREN_FIRST = [
+  // MapSoft-parity tables (books, stock adjustments, CRM, service calls)
+  'serviceCall',
+  'leadActivity',
+  'lead',
+  'stockAdjustmentLine',
+  'stockAdjustment',
+  'journalLine',
+  'journalVoucher',
+  'ledgerAccount',
   // RFQ comparison (children first; Rfq references PurchaseRequisition)
   'supplierQuoteLine',
   'rfqSupplier',
@@ -44,11 +53,18 @@ export const WORKFLOW_MODELS_CHILDREN_FIRST = [
   'salesQuotation',
   'purchaseOrder',
   'purchaseRequisition',
+  // masters referenced by legacy tables too (SalesInvoice.salespersonId,
+  // Payment.tdsSectionId): restored early, before the legacy invoices/payments
+  'salesperson',
+  'tdsSection',
 ] as const
 
 export type WorkflowModel = (typeof WORKFLOW_MODELS_CHILDREN_FIRST)[number]
 
-export const WORKFLOW_MODELS_PARENTS_FIRST = [...WORKFLOW_MODELS_CHILDREN_FIRST].reverse()
+/** Workflow masters that legacy rows point at: inserted right after parties/items, before invoices and payments. */
+export const EARLY_RESTORE_MODELS = ['salesperson', 'tdsSection'] as const satisfies readonly WorkflowModel[]
+
+export const WORKFLOW_MODELS_PARENTS_FIRST = [...WORKFLOW_MODELS_CHILDREN_FIRST].reverse().filter((m) => !(EARLY_RESTORE_MODELS as readonly string[]).includes(m))
 
 /** Minimal delegate surface the backup/restore/seed code needs, model-agnostic. */
 export interface TableDelegate {

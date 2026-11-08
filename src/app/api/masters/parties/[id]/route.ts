@@ -24,6 +24,7 @@ const partyUpdateSchema = z.object({
   email: z.string().optional().nullable(),
   openingBal: z.number().optional(),
   creditLimit: z.number().nonnegative().optional(),
+  creditDays: z.number().int('Credit days must be whole days').min(0).max(365).optional(),
   active: z.boolean().optional(),
 })
 

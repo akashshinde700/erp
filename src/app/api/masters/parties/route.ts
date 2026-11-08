@@ -45,6 +45,7 @@ const partySchema = z.object({
   email: z.string().optional().nullable(),
   openingBal: z.number().default(0),
   creditLimit: z.number().nonnegative().default(0),
+  creditDays: z.number().int('Credit days must be whole days').min(0).max(365).default(0),
 })
 
 export async function POST(req: Request) {

@@ -28,6 +28,7 @@ import {
   type StockSummaryRow,
 } from './api'
 import { EmptyState, Money, SectionHeading, TableSkeleton, VoucherBadge } from './bits'
+import { StockAdjustmentsTab } from './stock-adjustments'
 import { dateStr, money, qty as qtyFmt, DEFAULT_WAREHOUSE_CODE } from '@/lib/erp'
 
 export function InventoryView() {
@@ -43,6 +44,7 @@ export function InventoryView() {
           <TabsTrigger value="ledger" className="h-11 sm:h-9">Stock Ledger</TabsTrigger>
           <TabsTrigger value="opening" className="h-11 sm:h-9">Opening Stock</TabsTrigger>
           <TabsTrigger value="traceability" className="h-11 sm:h-9">Lots & Serials</TabsTrigger>
+          <TabsTrigger value="adjustments" className="h-11 sm:h-9">Adjustments</TabsTrigger>
         </TabsList>
         <TabsContent value="summary" className="mt-4">
           <StockSummaryTab />
@@ -55,6 +57,9 @@ export function InventoryView() {
         </TabsContent>
         <TabsContent value="traceability" className="mt-4">
           <TraceabilityTab />
+        </TabsContent>
+        <TabsContent value="adjustments" className="mt-4">
+          <StockAdjustmentsTab />
         </TabsContent>
       </Tabs>
     </div>

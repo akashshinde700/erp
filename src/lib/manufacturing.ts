@@ -1237,12 +1237,38 @@ export async function materialPlanReport() {
     }
   }
 
+  // Approved, unreceived PO quantities are future supply, not on-hand stock.
+  // Keep immediate shortage separate from projected shortage so planners never
+  // mistake an open supplier commitment for material already available.
+  const poLines = await db.purchaseOrderLine.findMany({
+    where: {
+      itemId: { in: [...demand.keys()] },
+      purchaseOrder: { status: { in: ['APPROVED', 'PART_RECEIVED'] } },
+      item: { isStockItem: true, isService: false },
+    },
+    include: {
+      purchaseOrder: { select: { poNo: true, expectedDate: true } },
+    },
+  })
+  const incomingByItem = new Map<string, { qty: number; purchaseOrders: { poNo: string; expectedDate: Date | null; qty: number }[] }>()
+  for (const line of poLines) {
+    const outstanding = r2(Math.max(0, line.qty - line.receivedQty))
+    if (outstanding <= EPS) continue
+    const incoming = incomingByItem.get(line.itemId) ?? { qty: 0, purchaseOrders: [] }
+    incoming.qty = r2(incoming.qty + outstanding)
+    incoming.purchaseOrders.push({ poNo: line.purchaseOrder.poNo, expectedDate: line.purchaseOrder.expectedDate, qty: outstanding })
+    incomingByItem.set(line.itemId, incoming)
+  }
+
   const tx = db as unknown as Tx
   const rows = await Promise.all([...demand.values()].map(async (row) => {
     const availableQty = await stockAvail(tx, row.item.id)
     const remainingQty = r2(Math.max(0, row.requiredQty - row.issuedQty))
     const shortageQty = r2(Math.max(0, remainingQty - availableQty))
-    return { ...row, remainingQty, availableQty, shortageQty }
+    const incoming = incomingByItem.get(row.item.id) ?? { qty: 0, purchaseOrders: [] }
+    const incomingQty = r2(incoming.qty)
+    const projectedShortageQty = r2(Math.max(0, shortageQty - incomingQty))
+    return { ...row, remainingQty, availableQty, shortageQty, incomingQty, projectedShortageQty, purchaseOrders: incoming.purchaseOrders }
   }))
   rows.sort((a, b) => (b.shortageQty - a.shortageQty) || a.item.code.localeCompare(b.item.code))
 

@@ -11,6 +11,12 @@
  * with P2003 — and a backup will silently drop its rows.
  */
 export const WORKFLOW_MODELS_CHILDREN_FIRST = [
+  // RFQ comparison (children first; Rfq references PurchaseRequisition)
+  'supplierQuoteLine',
+  'rfqSupplier',
+  'supplierQuote',
+  'rfqLine',
+  'rfq',
   'deliveryChallanLine',
   'itemVendor',
   'lotGenealogy',

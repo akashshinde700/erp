@@ -99,6 +99,8 @@ model Company {
   tenantWorkOrders          WorkOrder[]
   tenantProductionTasks     ProductionTask[]
   tenantPayments            Payment[]
+  rfqs                      Rfq[]
+  supplierQuotes            SupplierQuote[]
 }
 
 // ---------- Organization logins (SaaS) ----------
@@ -230,6 +232,8 @@ model Party {
   salesOrders      SalesOrder[]
   paymentSchedules PaymentSchedule[]
   partyAdvances    PartyAdvance[]
+  rfqSuppliers     RfqSupplier[]
+  supplierQuotes   SupplierQuote[]
 
   @@unique([companyId, code])
   @@index([types])
@@ -274,6 +278,7 @@ model Item {
   inventoryLots      InventoryLot[]
   serialNumbers      SerialNumber[]
   lotMovements       LotMovement[]
+  rfqLines           RfqLine[]
 
   @@unique([companyId, code])
 }
@@ -920,6 +925,7 @@ model PurchaseRequisition {
   createdAt  DateTime                  @default(now())
   lines      PurchaseRequisitionLine[]
   orders     PurchaseOrder[]
+  rfqs       Rfq[]
 
   @@unique([companyId, reqNo])
   @@index([companyId, status, date])
@@ -1486,4 +1492,101 @@ model IdempotencyKey {
   createdAt    DateTime @default(now())
 
   @@index([createdAt])
+}
+
+// ---------- RFQ and supplier quotation comparison ----------
+// Requisition -> RFQ (invited suppliers) -> one quotation per supplier ->
+// commercial comparison (rate, discount, GST, freight, landed total, delivery,
+// validity) -> award with mandatory reason (OWNER approval, audit trail) -> PO.
+
+model Rfq {
+  id              String               @id @default(cuid())
+  companyId       String
+  company         Company              @relation(fields: [companyId], references: [id])
+  rfqNo           String
+  date            DateTime             @default(now())
+  dueDate         DateTime?
+  requisitionId   String?
+  requisition     PurchaseRequisition? @relation(fields: [requisitionId], references: [id])
+  status          String               @default("OPEN") // OPEN | AWARDED | ORDERED | CANCELLED
+  notes           String?              @db.Text
+  createdBy       String?
+  awardedQuoteId  String?
+  awardReason     String?              @db.Text
+  awardedBy       String?
+  awardedAt       DateTime?
+  purchaseOrderId String?
+  cancelReason    String?              @db.Text
+  createdAt       DateTime             @default(now())
+  lines           RfqLine[]
+  suppliers       RfqSupplier[]
+  quotes          SupplierQuote[]
+
+  @@unique([companyId, rfqNo])
+  @@index([companyId, status, date])
+}
+
+model RfqLine {
+  id                String              @id @default(cuid())
+  rfqId             String
+  rfq               Rfq                 @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  itemId            String
+  item              Item                @relation(fields: [itemId], references: [id])
+  qty               Float
+  uom               String
+  requisitionLineId String?
+  quoteLines        SupplierQuoteLine[]
+
+  @@unique([rfqId, itemId])
+}
+
+model RfqSupplier {
+  id         String @id @default(cuid())
+  rfqId      String
+  rfq        Rfq    @relation(fields: [rfqId], references: [id], onDelete: Cascade)
+  supplierId String
+  supplier   Party  @relation(fields: [supplierId], references: [id])
+
+  @@unique([rfqId, supplierId])
+}
+
+model SupplierQuote {
+  id              String              @id @default(cuid())
+  companyId       String
+  company         Company             @relation(fields: [companyId], references: [id])
+  rfqId           String
+  rfq             Rfq                 @relation(fields: [rfqId], references: [id])
+  supplierId      String
+  supplier        Party               @relation(fields: [supplierId], references: [id])
+  supplierRef     String?
+  quoteDate       DateTime
+  validUntil      DateTime
+  deliveryDays    Int
+  freight         Float               @default(0)
+  paymentTerms    String?
+  status          String              @default("RECEIVED") // RECEIVED | SELECTED | REJECTED
+  rejectionReason String?             @db.Text
+  subtotal        Float               @default(0)
+  taxAmount       Float               @default(0)
+  landedTotal     Float               @default(0)
+  createdBy       String?
+  createdAt       DateTime            @default(now())
+  lines           SupplierQuoteLine[]
+
+  @@unique([rfqId, supplierId])
+  @@index([companyId, status])
+}
+
+model SupplierQuoteLine {
+  id          String        @id @default(cuid())
+  quoteId     String
+  quote       SupplierQuote @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  rfqLineId   String
+  rfqLine     RfqLine       @relation(fields: [rfqLineId], references: [id])
+  rate        Float
+  discountPct Float         @default(0)
+  gstRate     Float
+  amount      Float
+
+  @@unique([quoteId, rfqLineId])
 }

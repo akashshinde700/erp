@@ -12,6 +12,7 @@ import { r2, fyCode, computeInvoiceTotals, EPS, DEFAULT_WAREHOUSE_CODE } from '.
 import { isValidDateString } from './validation'
 import { BusinessError, AccountCode, postGl, cancelGlForVoucher } from './accounting'
 import { cancelLotMovementsTx, consumeLotsFefoTx } from './traceability'
+import { recomputeScheduleTx, recomputeSchedulesForInvoicesTx } from './finance-adjustments'
 import { tenantCompany } from './tenant'
 
 type Tx = Prisma.TransactionClient
@@ -597,6 +598,9 @@ export async function postPayment(input: PostPaymentInput) {
     if (unallocated > EPS) {
       await tx.partyAdvance.create({ data: { companyId: company.id, partyId: party.id, paymentId: payment.id, advanceType: input.type === 'RECEIPT' ? 'CUSTOMER' : 'SUPPLIER', originalAmount: unallocated } })
     }
+    // Collections against dispatch-backed invoices settle their order's milestones.
+    const salesNos = (input.allocations ?? []).filter((a) => a.invoiceType === 'SALES').map((a) => a.invoiceNo)
+    if (salesNos.length) await recomputeSchedulesForInvoicesTx(tx, { invoiceNos: salesNos })
 
     return payment
   })
@@ -625,7 +629,11 @@ export async function cancelPayment(id: string) {
       }
     }
     await cancelGlForVoucher(tx, 'PAYMENT', pay.paymentNo, new Date())
-    return tx.payment.update({ where: { id }, data: { status: 'CANCELLED' }, include: { allocations: true } })
+    const cancelled = await tx.payment.update({ where: { id }, data: { status: 'CANCELLED' }, include: { allocations: true } })
+    const salesNos = pay.allocations.filter((a) => a.invoiceType === 'SALES' && !a.reversedAt).map((a) => a.invoiceNo)
+    if (salesNos.length) await recomputeSchedulesForInvoicesTx(tx, { invoiceNos: salesNos })
+    for (const a of pay.advances) if (a.salesOrderId) await recomputeScheduleTx(tx, a.salesOrderId)
+    return cancelled
   })
 }
 

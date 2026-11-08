@@ -1,4 +1,5 @@
 import { ok, fail, handleError } from '@/lib/api'
+import { pageParams } from '@/lib/paging'
 import { withIdempotency } from '@/lib/idempotency'
 import { db } from '@/lib/db'
 import { z } from 'zod'
@@ -22,6 +23,8 @@ export async function GET(req: Request) {
     const to = sp.get('to')
     const rangeErr = dateRangeError(from, to)
     if (rangeErr) return fail(rangeErr)
+    const page = pageParams(sp)
+    if (page.q) where.OR = [{ invoiceNo: { contains: page.q } }, { party: { name: { contains: page.q } } }, { party: { code: { contains: page.q } } }]
     if (from || to) {
       where.date = {}
       // Voucher dates are stored at UTC midnight; use UTC day boundaries so
@@ -29,12 +32,19 @@ export async function GET(req: Request) {
       if (from) where.date.gte = new Date(`${from}T00:00:00.000Z`)
       if (to) where.date.lte = new Date(`${to}T23:59:59.999Z`)
     }
-    const invoices = await db.salesInvoice.findMany({
+    const query = {
       where,
-      orderBy: [{ date: 'desc' }, { invoiceNo: 'desc' }],
+      orderBy: [{ date: 'desc' as const }, { invoiceNo: 'desc' as const }],
       include: { party: { select: { code: true, name: true, gstin: true, stateCode: true } } },
-    })
-    return ok(invoices)
+    }
+    if (!page.paged) return ok(await db.salesInvoice.findMany(query))
+    // Paged list: one page of rows + total + posted summary for the whole filter.
+    const [rows, total, posted] = await Promise.all([
+      db.salesInvoice.findMany({ ...query, skip: page.offset, take: page.limit }),
+      db.salesInvoice.count({ where }),
+      db.salesInvoice.aggregate({ where: { ...where, status: 'POSTED' }, _sum: { grandTotal: true, paidAmount: true }, _count: true }),
+    ])
+    return ok({ rows, total, offset: page.offset, limit: page.limit, summary: { count: posted._count, grand: posted._sum.grandTotal ?? 0, paid: posted._sum.paidAmount ?? 0 } })
   } catch (e) {
     return handleError(e)
   }

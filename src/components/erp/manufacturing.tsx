@@ -1888,6 +1888,7 @@ function TasksTab({ woFilter, onWoFilterChange, onChanged }: { woFilter: string;
   if (woFilter && woFilter !== 'all') qp.set('workOrderId', woFilter)
   const list = useApi<ProductionTask[]>(`/api/manufacturing/tasks?${qp.toString()}`)
   const rows = list.data ?? []
+  const capped = rows.length >= 500 // server returns the newest 500; narrow by status or work order for older ones
 
   const taskAction = async (t: ProductionTask, action: 'start' | 'cancel') => {
     setBusy(true)
@@ -1946,6 +1947,7 @@ function TasksTab({ woFilter, onWoFilterChange, onChanged }: { woFilter: string;
         </div>
       </div>
 
+      {capped ? <p className="text-xs text-muted-foreground">Showing the newest 500 tasks — filter by status or work order to see older ones.</p> : null}
       <Card className="p-0">
         <CardContent className="p-0">
           {list.loading ? (

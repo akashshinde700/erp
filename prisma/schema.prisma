@@ -1227,6 +1227,7 @@ model SalesOrder {
   lines            SalesOrderLine[]
   challans         DeliveryChallan[]
   paymentSchedules PaymentSchedule[]
+  partyAdvances    PartyAdvance[]
 
   @@unique([companyId, orderNo])
   @@index([companyId, status, date])
@@ -1390,21 +1391,26 @@ model PaymentSchedule {
 }
 
 model PartyAdvance {
-  id             String   @id @default(cuid())
+  id             String      @id @default(cuid())
   companyId      String
-  company        Company  @relation(fields: [companyId], references: [id])
+  company        Company     @relation(fields: [companyId], references: [id])
   partyId        String
-  party          Party    @relation(fields: [partyId], references: [id])
+  party          Party       @relation(fields: [partyId], references: [id])
   paymentId      String
-  payment        Payment  @relation(fields: [paymentId], references: [id])
+  payment        Payment     @relation(fields: [paymentId], references: [id])
   advanceType    String // CUSTOMER | SUPPLIER
+  // Optional: the sales order this advance was collected against (counts toward
+  // its payment milestones until it is applied to an invoice).
+  salesOrderId   String?
+  salesOrder     SalesOrder? @relation(fields: [salesOrderId], references: [id], onDelete: SetNull)
   originalAmount Float
-  appliedAmount  Float    @default(0)
-  status         String   @default("OPEN") // OPEN | PART_APPLIED | APPLIED | CANCELLED
-  createdAt      DateTime @default(now())
+  appliedAmount  Float       @default(0)
+  status         String      @default("OPEN") // OPEN | PART_APPLIED | APPLIED | CANCELLED
+  createdAt      DateTime    @default(now())
 
   @@unique([paymentId])
   @@index([companyId, partyId, status])
+  @@index([salesOrderId])
 }
 
 model RefundAllocation {

@@ -729,6 +729,42 @@ async function phaseFinance() {
   // 5 return cancellation stock guard
   const fgMain = await stockNet(F.fg, F.main)
   check('5 sales-return cancellation succeeds while restocked units are on hand', (await post('/api/returns', { action: 'cancel', id: F.cn.id })).status === 200 && near(await stockNet(F.fg, F.main), fgMain - 3))
+  // ---- payment milestones follow collections (FIFO by due date)
+  const OC = '/api/order-to-cash'
+  const mq = await post(OC, { action: 'create-quotation', partyId: F.cust, validUntil: daysFromNow(10), lines: [{ itemId: F.fg, qty: 4, rate: 500 }] })
+  await post(OC, { action: 'transition-quotation', id: mq.data.id, transition: 'SUBMIT' }); await post(OC, { action: 'transition-quotation', id: mq.data.id, transition: 'APPROVE' })
+  const mso = (await post(OC, { action: 'quotation-to-order', id: mq.data.id })).data
+  const mTotal = num(mso.grandTotal), mFirst = Math.round(mTotal * 30) / 100
+  expectOk('schedule: 30% due last week, balance next month', await post(FA, { action: 'set-schedule', salesOrderId: mso.id, rows: [{ milestone: 'Advance', dueDate: daysFromNow(-7), amount: mFirst }, { milestone: 'Balance', dueDate: daysFromNow(30), amount: Math.round((mTotal - mFirst) * 100) / 100 }] }))
+  await post(OC, { action: 'approve-order', id: mso.id })
+  const ms = async () => (await qa('SELECT milestone, paidAmount, status FROM PaymentSchedule WHERE salesOrderId=? ORDER BY dueDate', [mso.id]))
+  check('unpaid past-due milestone is OVERDUE, future one PENDING', (await ms()).map((r) => r.status).join() === 'OVERDUE,PENDING', JSON.stringify(await ms()))
+  const advPay = await post('/api/payments', { type: 'RECEIPT', partyId: F.cust, amount: 1000, mode: 'BANK' })
+  const mAdv = await q1('SELECT id FROM PartyAdvance WHERE paymentId=?', [advPay.data.id])
+  expectReject('an advance cannot be tagged to another customer order', await post(FA, { action: 'tag-advance', advanceId: mAdv.id, salesOrderId: (await q1('SELECT id FROM SalesOrder WHERE partyId=? LIMIT 1', [F.custLow]))?.id ?? 'x' }), /different customers|not found/i)
+  expectOk('tag the 1000 advance to the order', await post(FA, { action: 'tag-advance', advanceId: mAdv.id, salesOrderId: mso.id }))
+  let m1 = await ms()
+  check('tagged advance pays the first milestone in full, rest goes to the next (FIFO)', m1[0].status === 'PAID' && near(m1[0].paidAmount, mFirst) && near(m1[1].paidAmount, 1000 - mFirst) && m1[1].status === 'PART_PAID', JSON.stringify(m1))
+  expectReject('a schedule with collected amounts cannot be replaced', await post(FA, { action: 'set-schedule', salesOrderId: mso.id, rows: [{ milestone: 'All', dueDate: daysFromNow(5), amount: mTotal }] }), /collected/i)
+  const msoLine = (await q1('SELECT id FROM SalesOrderLine WHERE salesOrderId=?', [mso.id])).id
+  const mdc = await post(OC, { action: 'create-challan', salesOrderId: mso.id, warehouseId: F.main, lines: [{ salesOrderLineId: msoLine, qty: 4 }] })
+  const mdl = (await q1('SELECT id FROM DeliveryChallanLine WHERE deliveryChallanId=?', [mdc.data.id])).id
+  await post(OC, { action: 'inspect-dispatch', deliveryChallanId: mdc.data.id, lines: [{ deliveryChallanLineId: mdl, acceptedQty: 4, rejectedQty: 0 }] })
+  const minv = await post(OC, { action: 'invoice-dispatch', deliveryChallanId: mdc.data.id, lines: [{ deliveryChallanLineId: mdl, qty: 4 }] })
+  expectOk('dispatch-backed invoice for the order', minv)
+  expectOk('apply the tagged advance to that invoice', await post(FA, { action: 'apply-advance', advanceId: mAdv.id, invoiceType: 'SALES', invoiceNo: minv.data.invoiceNo, amount: 1000 }))
+  const m2 = await ms()
+  check('applying the advance to the order invoice does not double count', near(m2[0].paidAmount + m2[1].paidAmount, 1000), JSON.stringify(m2))
+  const mRest = Math.round((num(minv.data.grandTotal) - 1000) * 100) / 100
+  const settle = await post('/api/payments', { type: 'RECEIPT', partyId: F.cust, amount: mRest, mode: 'BANK', allocations: [{ invoiceType: 'SALES', invoiceNo: minv.data.invoiceNo, amount: mRest }] })
+  expectOk('receipt for the invoice balance', settle)
+  check('collections that cover the order mark every milestone PAID', (await ms()).every((r) => r.status === 'PAID'), JSON.stringify(await ms()))
+  expectOk('cancel that receipt', await api('DELETE', `/api/payments/${settle.data.id}`))
+  const m3 = await ms()
+  check('cancelling a collection re-opens the milestones', m3[1].status === 'PART_PAID' && near(m3[0].paidAmount + m3[1].paidAmount, 1000), JSON.stringify(m3))
+  const fd = await get(FA)
+  const mRec = (fd.data?.reconciliation ?? []).find((r) => r.salesOrderId === mso.id)
+  check('schedule reconciliation: scheduled = order total, invoiced and collected reported', mRec && near(mRec.scheduled, mTotal) && near(mRec.invoiced, num(minv.data.grandTotal)) && near(mRec.collected, 1000) && mRec.issues.length === 0, JSON.stringify(mRec))
   await reconcile('after finance')
 }
 

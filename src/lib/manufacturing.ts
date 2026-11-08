@@ -863,7 +863,8 @@ export interface TaskInput {
   notes?: string | null
 }
 
-export async function listTasks(filters?: { status?: string; workOrderId?: string; employeeId?: string; projectId?: string }) {
+export const TASK_LIST_LIMIT = 500
+export async function listTasks(filters?: { status?: string; workOrderId?: string; employeeId?: string; projectId?: string; limit?: number }) {
   const where: Prisma.ProductionTaskWhereInput = {}
   if (filters?.status === 'active') where.status = { in: [...TASK_ACTIVE] }
   else if (filters?.status) where.status = filters.status
@@ -873,6 +874,8 @@ export async function listTasks(filters?: { status?: string; workOrderId?: strin
   return db.productionTask.findMany({
     where,
     orderBy: [{ createdAt: 'desc' }],
+    // Newest first, bounded: full history is reached by filtering (status / WO).
+    take: Math.min(1000, Math.max(1, filters?.limit ?? TASK_LIST_LIMIT)),
     include: {
       employee: { select: { id: true, code: true, name: true, machineNo: true, shift: true } },
       materialItem: { select: { id: true, code: true, name: true, uom: true } },

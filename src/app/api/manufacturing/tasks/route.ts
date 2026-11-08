@@ -15,7 +15,8 @@ export async function GET(req: Request) {
     const workOrderId = sp.get('workOrderId') ?? undefined
     const employeeId = sp.get('employeeId') ?? undefined
     const projectId = sp.get('projectId') ?? undefined
-    return ok(await listTasks({ status, workOrderId, employeeId, projectId }))
+    const limit = Number(sp.get('limit') ?? '') || undefined
+    return ok(await listTasks({ status, workOrderId, employeeId, projectId, limit }))
   } catch (e) {
     return handleError(e)
   }

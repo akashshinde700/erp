@@ -235,6 +235,12 @@ export async function seedDatabase(force = false) {
   const fgTank = await db.item.create({
     data: { code: 'FG-2001', name: 'Storage Tank 20KL SS304 (fabricated)', groupName: 'Finished Goods', hsn: '730900', uom: 'KG', gstRate: 18, saleRate: 120, costRate: 70, reorderLevel: 0 },
   })
+  const fgCanopy = await db.item.create({
+    data: { code: 'FG-2002', name: 'Canopy Frame — Level 1 (fabricated)', groupName: 'Finished Goods', hsn: '730890', uom: 'SET', gstRate: 18, saleRate: 850000, costRate: 0, reorderLevel: 0 },
+  })
+  const fgGantry = await db.item.create({
+    data: { code: 'FG-2003', name: 'Gantry Truss Assembly (fabricated)', groupName: 'Finished Goods', hsn: '730890', uom: 'SET', gstRate: 18, saleRate: 2400000, costRate: 0, reorderLevel: 0 },
+  })
 
   // ---------- Party-specific process rates (Mahindra contract) ----------
   await db.partyProcessRate.createMany({
@@ -381,7 +387,7 @@ export async function seedDatabase(force = false) {
 
   // Manufacturing chain lives in seed-manufacturing.ts so it can also be added
   // to an already-seeded demo org (POST /api/seed?manufacturing=1).
-  const mfg = await seedManufacturingDemo({ mahindra, gujarat, bengal, msPlate, msPipe, weldRod, paint, bolts, main, fgTank })
+  const mfg = await seedManufacturingDemo({ mahindra, gujarat, bengal, msPlate, msPipe, weldRod, paint, bolts, main, fgTank, fgCanopy, fgGantry })
 
   // Unallocated advance left on Gujarat shows in outstanding; verify trial balance
   const tb = await db.accountLedger.groupBy({ by: ['account'], _sum: { debit: true, credit: true } })
@@ -444,7 +450,9 @@ export async function seedDatabase(force = false) {
       parties: 6, items: 11, processes: 6, warehouses: 2, // 11 = 3 FG + 2 RM + service + 4 fabrication + FG-2001 tank
       purchaseInvoices: 2, salesInvoices: 4, payments: 3,
       jobworkInwards: 2, jobCards: 2, certificates: 1,
-      employees: 6, projects: 3, boms: 3, workOrders: 2, productionTasks: 12,
+      employees: 6, projects: 3, boms: 3, workOrders: 2, productionTasks: 15, workCenters: 6,
+      // Overhead absorption set by the manufacturing demo (18% of material + labour)
+      overheadRatePct: 18,
       inquiries: 2, blogPosts: 2,
     },
     sample: {

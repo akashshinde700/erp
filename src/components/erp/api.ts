@@ -106,6 +106,8 @@ export interface Company {
   tallySgstLedger: string | null
   tallyIgstLedger: string | null
   tallyRoundOffLedger: string | null
+  /** Factory overhead absorbed on completed operations, % of material + labour. */
+  overheadRatePct: number
   plan: { id: string; name: string; priceMonthly: number } | null
   saasStatus: string
   billingCycle: string
@@ -418,20 +420,57 @@ export interface BomItemRow {
   shortage: number
 }
 
+export interface BomRevisionRef {
+  id: string
+  bomNo: string
+  revision: number
+}
+
 export interface Bom {
   id: string
   bomNo: string
   projectId: string
   project: { id: string; projectNo: string; name: string; status: string }
+  /** Output item — what this BOM makes. MRP explodes demand through it. */
+  itemId: string | null
+  item: { id: string; code: string; name: string; uom: string } | null
+  /** Engineering revision of the output item; one APPROVED revision is live. */
+  revision: number
+  effectiveFrom: string | null
+  effectiveTo: string | null
+  supersedesId: string | null
+  supersedes: BomRevisionRef | null
+  supersededBy: BomRevisionRef | null
   productName: string
   drawingRef: string | null
-  status: string // DRAFT | APPROVED | CANCELLED
+  status: string // DRAFT | APPROVED | SUPERSEDED | CANCELLED
   approvedAt: string | null
   notes: string | null
   createdAt: string
   items: BomItemRow[]
   totalEstCost: number
   _count?: { workOrders: number }
+}
+
+export interface BomWhereUsedRow {
+  bomId: string
+  bomNo: string
+  revision: number
+  status: string
+  effectiveFrom: string | null
+  /** Gross quantity of this item consumed per BOM run (qty + wastage). */
+  qtyPer: number
+  uom: string
+  lines: number
+  /** Work orders already generated from this revision (impact review). */
+  workOrders: number
+  outputItem: { id: string; code: string; name: string } | null
+  project: { projectNo: string; name: string }
+}
+
+export interface BomWhereUsed {
+  item: { id: string; code: string; name: string; uom: string }
+  usedIn: BomWhereUsedRow[]
 }
 
 export interface WorkOrderLineRow {
@@ -452,6 +491,10 @@ export interface ProductionTask {
   employeeId: string | null
   employee?: { id: string; code: string; name: string; machineNo?: string | null; shift?: string } | null
   machineNo: string | null
+  workCenterId: string | null
+  workCenter?: { id: string; code: string; name: string } | null
+  /** Planned duration from the routing snapshot (minutes). */
+  plannedMinutes: number
   plannedQty: number
   actualQty: number
   rejectionQty: number
@@ -476,7 +519,11 @@ export interface WorkOrder {
   projectId: string
   project: { id: string; projectNo: string; name: string; status: string }
   bomId: string | null
-  bom?: { id: string; bomNo: string; productName: string } | null
+  bom?: { id: string; bomNo: string; productName: string; revision?: number; itemId?: string | null } | null
+  /** What this order produces; defaulted from the BOM's output item. */
+  outputItemId?: string | null
+  outputItem?: { id: string; code: string; name: string; uom: string } | null
+  outputQty?: number
   date: string
   startDate: string | null
   endDate: string | null
@@ -544,6 +591,288 @@ export interface MaterialPlanReport {
   summary: { activeWorkOrders: number; materialItems: number; shortageItems: number; totalShortageQty: number; customerMaterialQty: number }
   ownershipRule: string
 }
+
+// ---------- MRP (multi-level, versioned BOM) ----------
+
+export type MrpSuggestion = 'BUY' | 'MAKE' | 'NONE'
+export type MrpRunStatus = 'DRAFT' | 'APPROVED' | 'CLOSED'
+
+export interface MrpRunSummary {
+  id: string
+  runNo: string
+  asOf: string
+  horizonDays: number
+  status: MrpRunStatus
+  salesOrderCount: number
+  workOrderCount: number
+  requirementCount: number
+  suggestionCount: number
+  shortageItems: number
+  createdBy: string | null
+  approvedBy: string | null
+  approvedAt: string | null
+  notes: string | null
+  createdAt: string
+  _count?: { lines: number }
+}
+
+export interface MrpLineRow {
+  id: string
+  runId: string
+  itemId: string
+  item: { id: string; code: string; name: string; uom: string; isStockItem: boolean }
+  level: number
+  needBy: string
+  grossQty: number
+  onHandQty: number
+  incomingQty: number
+  woSupplyQty: number
+  netQty: number
+  suggestion: MrpSuggestion
+  bomNo: string | null
+  /** Newline-separated demand pegging (sales order / work order references). */
+  pegging: string | null
+  createdDocType: string | null
+  createdDocNo: string | null
+}
+
+export interface MrpRunDetail extends MrpRunSummary {
+  lines: MrpLineRow[]
+  /** Warnings captured while planning (missing BOM, cycle, horizon cuts). */
+  warnings: string[]
+  allowDocuments: boolean
+}
+
+export interface MrpDocumentResult {
+  run: MrpRunSummary
+  requisition: { id: string; reqNo: string; grandTotal?: number } | null
+  workOrders: { id: string; woNo: string }[]
+}
+
+// ---------- routing / work centres / capacity / OEE ----------
+
+export interface ShiftRow {
+  id: string
+  name: string
+  startMin: number
+  durationMin: number
+  active: boolean
+}
+
+export interface WorkCenter {
+  id: string
+  code: string
+  name: string
+  type: 'MACHINE' | 'CELL' | 'MANUAL'
+  machineNo: string | null
+  parallelCapacity: number
+  dailyHours: number
+  costPerHour: number
+  active: boolean
+  notes: string | null
+  downNow?: boolean
+  plannedMinutesPerDay?: number
+  calendar?: { id: string; workDays: string; shifts: ShiftRow[]; holidays: { id: string; date: string; reason: string | null }[] } | null
+  _count?: { operations: number; tasks: number; downtimes: number }
+}
+
+export interface WorkCenterCalendar {
+  workCenter: { id: string; code: string; name: string; dailyHours: number; parallelCapacity: number }
+  workDays: string
+  shifts: ShiftRow[]
+  holidays: { id: string; date: string; reason: string | null }[]
+  hasCalendar: boolean
+}
+
+export interface RoutingOperationRow {
+  id: string
+  seq: number
+  operation: string
+  workCenterId: string
+  workCenter: { id: string; code: string; name: string; type: string; costPerHour: number }
+  runMinutesPerUnit: number
+  setupMinutes: number
+  queueMinutes: number
+  moveMinutes: number
+  inspectionMinutes: number
+  parallel: boolean
+  notes: string | null
+}
+
+export interface RoutingDetail {
+  bom: { id: string; bomNo: string; revision: number; status: string; itemId: string | null; productName: string }
+  operations: RoutingOperationRow[]
+}
+
+export interface DowntimeRow {
+  id: string
+  workCenterId: string
+  workCenter: { id: string; code: string; name: string }
+  startedAt: string
+  endedAt: string | null
+  reason: string
+  planned: boolean
+  notes: string | null
+  minutes: number
+  open: boolean
+}
+
+export interface SchedulePlacement {
+  taskId: string
+  taskNo: string
+  woNo: string
+  projectNo: string
+  operation: string
+  seq: number
+  workCenterId: string
+  workCenter: string
+  minutes: number
+  start: string
+  end: string
+}
+
+export interface SchedulePlan {
+  from: string
+  horizonDays: number
+  placements: SchedulePlacement[]
+  unschedulable: { taskNo: string; woNo: string; reason: string }[]
+  lateWorkOrders: { woNo: string; projectNo: string; due: string; plannedFinish: string; lateDays: number }[]
+  load: { workCenterId: string; workCenter: string; tasks: number; plannedMinutes: number; capacityMinutes: number; utilisationPct: number }[]
+  workCentersWithoutCalendar: string[]
+}
+
+export interface OeeRow {
+  workCenterId: string
+  workCenter: string
+  day: string
+  plannedMinutes: number
+  downtimeMinutes: number
+  runMinutes: number
+  availabilityPct: number
+  performancePct: number
+  qualityPct: number
+  oeePct: number
+  idealMinutes: number
+  goodQty: number
+  rejectQty: number
+  tasks: number
+  downtimeByReason: Record<string, number>
+  notes: string[]
+}
+
+/** One operation's cost contribution (costing roll-up). */
+export interface CostingTaskRow {
+  taskNo: string
+  seq: number
+  operation: string
+  workCenter: string | null
+  status: string
+  materialCost: number
+  labourCost: number
+  overheadCost: number
+  overheadRatePct: number
+  total: number
+  overheadShare?: number
+}
+
+/** Expected (standard) vs actual cost of one work order. */
+export interface WorkOrderCostRow {
+  id: string
+  woNo: string
+  date: string
+  status: string
+  project: { projectNo: string; name: string } | null
+  bomNo: string | null
+  revision: number | null
+  outputQty: number
+  acceptedQty: number
+  standardPerUnit: number
+  standardMaterialPerUnit: number
+  standardLabourPerUnit: number
+  standardOverheadPerUnit: number
+  standardCost: number
+  materialCost: number
+  labourCost: number
+  overheadCost: number
+  actualCost: number
+  variance: number | null
+  variancePct: number | null
+  materialVariance: number | null
+  labourVariance: number | null
+  overheadVariance: number | null
+  hasRouting: boolean
+  hours: number
+  receiptVariance: number
+  tasks: CostingTaskRow[]
+}
+
+export interface CostingReport {
+  overheadRatePct: number
+  summary: {
+    workOrderCount: number
+    measuredCount: number
+    unmeasuredCount: number
+    overheadRatePct: number
+    standardCost: number
+    actualCost: number
+    materialCost: number
+    labourCost: number
+    overheadCost: number
+    materialVariance: number
+    labourVariance: number
+    overheadVariance: number
+    variance: number
+    variancePct: number | null
+  }
+  rows: WorkOrderCostRow[]
+  limitations: string[]
+}
+
+/** Standard cost of one BOM revision (material + routed labour + overhead). */
+export interface StandardCost {
+  materialCost: number
+  labourCost: number
+  overheadCost: number
+  standardCost: number
+  minutesPerUnit: number
+  unpricedOperations: string[]
+  noRouting: boolean
+}
+
+export interface OeeReport {
+  from: string
+  to: string
+  days: number
+  rows: OeeRow[]
+  byWorkCenter: OeeRow[]
+  byDay: OeeRow[]
+  summary: {
+    plannedMinutes: number
+    downtimeMinutes: number
+    runMinutes: number
+    availabilityPct: number
+    performancePct: number
+    qualityPct: number
+    oeePct: number
+    workCenters: number
+    days: number
+  }
+  excluded: { tasksWithoutIdealTime: number; tasksWithoutWorkCenter: number; openDowntime: number }
+  notes: string[]
+}
+
+export const DOWNTIME_REASONS = [
+  'BREAKDOWN',
+  'CHANGEOVER',
+  'NO_MATERIAL',
+  'NO_OPERATOR',
+  'POWER',
+  'MAINTENANCE',
+  'QUALITY',
+  'OTHER',
+] as const
+
+export const WORK_CENTER_TYPES = ['MACHINE', 'CELL', 'MANUAL'] as const
 
 export const MANUFACTURING_OPERATIONS: { key: string; label: string }[] = [
   { key: 'CUTTING', label: 'Material Cutting' },
@@ -659,6 +988,8 @@ export interface ProductionCostVarianceReport {
     expectedCost: number
     labourCost: number
     materialCost: number
+    /** Absorbed factory overhead (0 when absorption is off). */
+    overheadCost: number
     actualCost: number
     costVariance: number
     variancePct: number | null
@@ -669,9 +1000,9 @@ export interface ProductionCostVarianceReport {
     rejectionPct: number
     taskTotal: number
     taskDone: number
-    workOrders: { id: string; woNo: string; status: string; bomNo: string | null; productName: string | null; expectedCost: number; labourCost: number; materialCost: number; actualCost: number; variance: number; taskTotal: number; taskDone: number }[]
+    workOrders: { id: string; woNo: string; status: string; bomNo: string | null; productName: string | null; expectedCost: number; labourCost: number; materialCost: number; overheadCost: number; actualCost: number; variance: number; taskTotal: number; taskDone: number }[]
   }[]
-  summary: { projectCount: number; runningProjects: number; totalBudget: number; expectedCost: number; labourCost: number; materialCost: number; actualCost: number; costVariance: number; projectedMargin: number }
+  summary: { projectCount: number; runningProjects: number; totalBudget: number; expectedCost: number; labourCost: number; materialCost: number; overheadCost: number; actualCost: number; costVariance: number; projectedMargin: number }
   note: string
 }
 

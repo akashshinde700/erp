@@ -512,6 +512,17 @@ async function main() {
   })
   check('work order end-before-start rejected (400)', reversedWo.status === 400, `status=${reversedWo.status}`)
 
+  for (const p of ['/api/manufacturing/work-centers', '/api/manufacturing/oee', '/api/manufacturing/schedule?horizonDays=30', '/api/manufacturing/downtime', '/api/manufacturing/costing']) {
+    const r = await req('GET', p)
+    check(`${p} responds`, r.status === 200, `status=${r.status}`)
+  }
+  const mrpPreview = await req('GET', '/api/manufacturing/mrp/preview')
+  check('MRP dry run responds and reports its planning window', mrpPreview.status === 200 && data(mrpPreview)?.horizonDays >= 1, `status=${mrpPreview.status}`)
+  const mrpRuns = await req('GET', '/api/manufacturing/mrp')
+  check('MRP run history responds', mrpRuns.status === 200 && Array.isArray(data(mrpRuns)), `status=${mrpRuns.status}`)
+  const whereUsed = await req('GET', `/api/manufacturing/boms/where-used?itemId=${materialItemId}`)
+  check('BOM where-used responds', whereUsed.status === 200 && Array.isArray(data(whereUsed)), `status=${whereUsed.status}`)
+
   const bomsList = data(await req('GET', '/api/manufacturing/boms')) ?? []
   if (bomsList[0]?.id) {
     const badBom = await req('PUT', `/api/manufacturing/boms/${bomsList[0].id}`, {

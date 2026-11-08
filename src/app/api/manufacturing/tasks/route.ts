@@ -28,6 +28,10 @@ const taskSchema = z.object({
   seq: z.number().int().min(0).max(999).default(0),
   employeeId: z.string().optional().nullable(),
   machineNo: z.string().max(30).optional().nullable(),
+  /** Work centre for capacity/OEE; inherited from the BOM routing when omitted. */
+  workCenterId: z.string().optional().nullable(),
+  /** Explicit planned minutes; inherited from the routing when omitted. */
+  plannedMinutes: z.number().min(0).max(100_000).optional().nullable(),
   plannedQty: z.number().positive('Planned quantity must be > 0').finite().max(10_000_000),
   dueDate: nullableDate,
   notes: z.string().max(1000).optional().nullable(),

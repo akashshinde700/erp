@@ -37,25 +37,40 @@ async function loadItems(tx: Tx, lines: ProcurementLineInput[]) {
   return map
 }
 
-export async function createPurchaseRequisition(input: { date?: Date; requiredBy?: Date; department?: string; purpose?: string; createdBy?: string; lines: ProcurementLineInput[] }) {
-  return db.$transaction(async (tx) => {
-    const company = await contextCompany(tx)
-    const items = await loadItems(tx, input.lines)
-    const date = input.date ?? new Date()
-    return tx.purchaseRequisition.create({
-      data: {
-        companyId: company.id,
-        reqNo: await nextNumber(tx, company.id, 'MR', date),
-        date,
-        requiredBy: input.requiredBy,
-        department: input.department,
-        purpose: input.purpose,
-        createdBy: input.createdBy,
-        lines: { create: input.lines.map((line) => ({ itemId: line.itemId, qty: line.qty, uom: items.get(line.itemId)!.uom, estimatedRate: line.rate ?? items.get(line.itemId)!.costRate, remarks: line.remarks })) },
-      },
-      include: { lines: { include: { item: true } } },
-    })
+export interface RequisitionInput {
+  date?: Date
+  requiredBy?: Date
+  department?: string
+  purpose?: string
+  createdBy?: string
+  lines: ProcurementLineInput[]
+}
+
+/**
+ * Transaction-scoped creation, shared with MRP suggestion approval so a run's
+ * purchase and production documents commit or roll back together.
+ */
+export async function createPurchaseRequisitionTx(tx: Tx, input: RequisitionInput) {
+  const company = await contextCompany(tx)
+  const items = await loadItems(tx, input.lines)
+  const date = input.date ?? new Date()
+  return tx.purchaseRequisition.create({
+    data: {
+      companyId: company.id,
+      reqNo: await nextNumber(tx, company.id, 'MR', date),
+      date,
+      requiredBy: input.requiredBy,
+      department: input.department,
+      purpose: input.purpose,
+      createdBy: input.createdBy,
+      lines: { create: input.lines.map((line) => ({ itemId: line.itemId, qty: line.qty, uom: items.get(line.itemId)!.uom, estimatedRate: line.rate ?? items.get(line.itemId)!.costRate, remarks: line.remarks })) },
+    },
+    include: { lines: { include: { item: true } } },
   })
+}
+
+export async function createPurchaseRequisition(input: RequisitionInput) {
+  return db.$transaction((tx) => createPurchaseRequisitionTx(tx, input))
 }
 
 export async function transitionRequisition(id: string, action: 'SUBMIT' | 'APPROVE' | 'REJECT' | 'CANCEL', actor?: string) {

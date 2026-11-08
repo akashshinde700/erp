@@ -1638,6 +1638,7 @@ function CompanyTab() {
   const [bankIfsc, setBankIfsc] = useState('')
   const [upiId, setUpiId] = useState('')
   const [saving, setSaving] = useState(false)
+  const [overheadRate, setOverheadRate] = useState('0')
   const [initialized, setInitialized] = useState(false)
 
   useResetOnChange(!initialized && !comp.loading, [comp.data], () => {
@@ -1655,6 +1656,7 @@ function CompanyTab() {
     setBankAcct(c?.bankAcct ?? '')
     setBankIfsc(c?.bankIfsc ?? '')
     setUpiId(c?.upiId ?? '')
+    setOverheadRate(String(c?.overheadRatePct ?? 0))
     setInitialized(true)
   })
 
@@ -1683,6 +1685,7 @@ function CompanyTab() {
         bankAcct: bankAcct.trim() || null,
         bankIfsc: bankIfsc.trim() || null,
         upiId: upiId.trim() || null,
+        overheadRatePct: num(overheadRate),
       })
       toast.success(`${res.name} saved`, { description: 'Used on invoice prints and for the inter-state GST split.' })
       comp.reload()
@@ -1779,6 +1782,28 @@ function CompanyTab() {
         <div className="space-y-1.5">
           <Label htmlFor="c-upi">UPI ID</Label>
           <Input id="c-upi" value={upiId} onChange={(e) => setUpiId(e.target.value)} placeholder="shreeforge@upi" className="h-11" />
+        </div>
+
+        <div className="space-y-1.5 sm:col-span-2">
+          <Label htmlFor="c-overhead">Factory overhead absorption (% of material + labour)</Label>
+          <Input
+            id="c-overhead"
+            type="number"
+            min="0"
+            max="100"
+            step="any"
+            inputMode="decimal"
+            value={overheadRate}
+            onChange={(e) => setOverheadRate(e.target.value)}
+            className="h-11 tabular-nums"
+          />
+          <p className="text-xs text-muted-foreground">
+            0% switches absorption off. When set, every completed operation debits WIP and credits
+            the <span className="font-mono">Factory Overhead Absorbed</span> ledger by this percentage of
+            its material + labour cost, and the finished-goods receipt settles it like any other cost.
+            Changing the rate never rewrites past postings — already-completed work orders need a
+            costing true-up to catch up.
+          </p>
         </div>
       </div>
 

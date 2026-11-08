@@ -35,6 +35,29 @@ prisma/migrations/
                                             become active-only. New indexes are created before
                                             the old unique keys are dropped, so no FK loses its
                                             supporting index.
+  20261112100000_manufacturing_cost_rollup/
+    migration.sql                           additive: Company.overheadRatePct (default 0 =
+                                            absorption off), Bom.standardLabourCost /
+                                            standardMinutes, ProductionTask.overheadCost,
+                                            WorkOrder.overheadCost. Nothing changes value
+                                            until a rate is set; then WIP and receipt cost
+                                            rise by the absorbed amount for work completed
+                                            afterwards (docs/MANUFACTURING_COSTING.md).
+  20261111100000_routing_work_centers_oee/
+    migration.sql                           additive: WorkCenter, ShiftCalendar, Shift,
+                                            ShiftHoliday, RoutingOperation, MachineDowntime;
+                                            ProductionTask.workCenterId (nullable) +
+                                            plannedMinutes (default 0). Legacy tasks keep
+                                            reporting throughput/yield, they just have no
+                                            centre (docs/ROUTING_CAPACITY_OEE.md).
+  20261110100000_bom_revisions_and_mrp/
+    migration.sql                           hand-staged, additive only: Bom.itemId +
+                                            revision/effectiveFrom/effectiveTo/supersedesId
+                                            (unique (companyId,itemId,revision)), WorkOrder
+                                            outputItemId/outputQty, new MrpRun + MrpLine.
+                                            Legacy Bom rows keep itemId = NULL — link them with
+                                            scripts/backfill-bom-output-items.mjs and read
+                                            docs/MRP_AND_BOM_REVISIONS.md before deploying.
   20261108120000_tenant_isolation/
     migration.sql                           hand-staged: companyId on the 19 legacy root
                                             tables (Party, Item, Warehouse, invoices, ledgers,
@@ -129,6 +152,20 @@ new keys are strict subsets of the old unique keys. Known limitation: advance
 applications made **before** this migration stay `kind = PAYMENT` and cannot be
 reversed through `reverse-advance-application` (no column distinguished them).
 The live database had no advance applications when this was written.
+
+Pre-flight for `20261110100000_bom_revisions_and_mrp` (read-only):
+
+```sql
+-- legacy BOMs without an output item: they stay readable but MRP will not
+-- explode them until they are linked (scripts/backfill-bom-output-items.mjs)
+SELECT COUNT(*) FROM Bom WHERE itemId IS NULL;
+-- any product with two live (non-cancelled) BOMs would violate the new unique
+-- key once both are linked to the same item — must return no rows
+SELECT itemId, COUNT(*) FROM Bom WHERE itemId IS NOT NULL AND status <> 'CANCELLED'
+ GROUP BY itemId HAVING COUNT(*) > 1;
+-- open work orders that would have outputQty = 1 by default
+SELECT COUNT(*) FROM WorkOrder WHERE status IN ('OPEN','IN_PROGRESS');
+```
 
 `deploy.py` dumps the database to `~/backups/predeploy/<stamp>.sql.gz` before
 step 1 (`--no-backup` skips it — do not). Rollback of the code is

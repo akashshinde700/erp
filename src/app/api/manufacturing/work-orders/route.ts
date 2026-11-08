@@ -32,6 +32,10 @@ const woSchema = z.object({
   priority: z.enum(['LOW', 'NORMAL', 'HIGH', 'URGENT']).default('NORMAL'),
   notes: z.string().max(1000).optional().nullable(),
   lines: z.array(woLineSchema).max(200).optional(),
+  /** What the order makes; defaults to the BOM output item. */
+  outputItemId: z.string().optional().nullable(),
+  /** Batch size — component lines scale by it (default 1). */
+  outputQty: z.number().positive().finite().max(1_000_000).optional(),
 })
 
 export async function POST(req: Request) {

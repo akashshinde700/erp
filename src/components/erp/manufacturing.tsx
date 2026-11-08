@@ -12,9 +12,11 @@ import { toast } from 'sonner'
 import {
   ArrowLeft,
   BadgeCheck,
+  Building2,
   CalendarClock,
   CheckCircle2,
   ClipboardList,
+  Coins,
   FolderKanban,
   ListTodo,
   Loader2,
@@ -22,6 +24,8 @@ import {
   Pencil,
   PlayCircle,
   Plus,
+  Gauge,
+  RefreshCw,
   Trash2,
   UserCog,
   UserPlus,
@@ -56,7 +60,24 @@ import {
   MANUFACTURING_OPERATIONS,
   WO_PRIORITIES,
   type Bom,
+  type BomWhereUsed,
+  type CostingReport,
+  type StandardCost,
+  type WorkOrderCostRow,
+  type DowntimeRow,
   type Employee,
+  type OeeReport,
+  type RoutingDetail,
+  type RoutingOperationRow,
+  type SchedulePlan,
+  type WorkCenter,
+  type WorkCenterCalendar,
+  DOWNTIME_REASONS,
+  WORK_CENTER_TYPES,
+  type MrpDocumentResult,
+  type MrpLineRow,
+  type MrpRunDetail,
+  type MrpRunSummary,
   type ManufacturingStats,
   type MaterialPlanReport,
   type PendingReport,
@@ -77,7 +98,7 @@ import { ProductionReceiptsWorkspace } from './production-receipts'
 // Module shell
 // ===========================================================================
 
-type MfgTab = 'projects' | 'boms' | 'work-orders' | 'material-plan' | 'tasks' | 'pending' | 'employees' | 'quality'
+type MfgTab = 'projects' | 'boms' | 'work-orders' | 'mrp' | 'capacity' | 'material-plan' | 'tasks' | 'pending' | 'employees' | 'centers' | 'oee' | 'costing' | 'quality'
 
 export function ManufacturingView() {
   const [tab, setTab] = useState<MfgTab>('projects')
@@ -149,6 +170,12 @@ export function ManufacturingView() {
           <TabsTrigger value="work-orders" className="h-11 gap-1.5 sm:h-9">
             <ClipboardList className="size-4" aria-hidden /> Work Orders
           </TabsTrigger>
+          <TabsTrigger value="mrp" className="h-11 gap-1.5 sm:h-9">
+            <CalendarClock className="size-4" aria-hidden /> MRP
+          </TabsTrigger>
+          <TabsTrigger value="capacity" className="h-11 gap-1.5 sm:h-9">
+            <Gauge className="size-4" aria-hidden /> Capacity
+          </TabsTrigger>
           <TabsTrigger value="material-plan" className="h-11 gap-1.5 sm:h-9">
             <PackageSearch className="size-4" aria-hidden /> Material Plan
           </TabsTrigger>
@@ -164,6 +191,15 @@ export function ManufacturingView() {
           <TabsTrigger value="receipts" className="h-11 gap-1.5 sm:h-9">
             <PackageCheck className="size-4" aria-hidden /> FG Receipts
           </TabsTrigger>
+          <TabsTrigger value="centers" className="h-11 gap-1.5 sm:h-9">
+            <Building2 className="size-4" aria-hidden /> Work Centers
+          </TabsTrigger>
+          <TabsTrigger value="oee" className="h-11 gap-1.5 sm:h-9">
+            <Gauge className="size-4" aria-hidden /> OEE
+          </TabsTrigger>
+          <TabsTrigger value="costing" className="h-11 gap-1.5 sm:h-9">
+            <Coins className="size-4" aria-hidden /> Costing
+          </TabsTrigger>
           <TabsTrigger value="quality" className="h-11 gap-1.5 sm:h-9">
             <CheckCircle2 className="size-4" aria-hidden /> Quality
           </TabsTrigger>
@@ -177,6 +213,12 @@ export function ManufacturingView() {
         </TabsContent>
         <TabsContent value="work-orders" className="mt-4">
           <WorkOrdersTab onViewTasks={gotoTasks} onChanged={() => stats.reload()} />
+        </TabsContent>
+        <TabsContent value="mrp" className="mt-4">
+          <MrpTab onChanged={() => stats.reload()} />
+        </TabsContent>
+        <TabsContent value="capacity" className="mt-4">
+          <CapacityTab />
         </TabsContent>
         <TabsContent value="material-plan" className="mt-4">
           <MaterialPlanTab />
@@ -192,6 +234,15 @@ export function ManufacturingView() {
         </TabsContent>
         <TabsContent value="receipts" className="mt-4">
           <ProductionReceiptsWorkspace />
+        </TabsContent>
+        <TabsContent value="centers" className="mt-4">
+          <WorkCentersTab />
+        </TabsContent>
+        <TabsContent value="oee" className="mt-4">
+          <OeeTab />
+        </TabsContent>
+        <TabsContent value="costing" className="mt-4">
+          <CostingTab />
         </TabsContent>
         <TabsContent value="quality" className="mt-4">
           <QualityWorkspace />
@@ -235,6 +286,1200 @@ function isOverdue(due: string | null): boolean {
   if (!due) return false
   const day = due.slice(0, 10)
   return day < todayISO()
+}
+
+// ===========================================================================
+// Capacity — finite schedule, load and downtime capture
+// ===========================================================================
+
+function CapacityTab() {
+  const [from, setFrom] = useState(todayISO())
+  const [horizon, setHorizon] = useState('60')
+  const plan = useApi<SchedulePlan | null>(`/api/manufacturing/schedule?from=${from}&horizonDays=${horizon}`)
+  const centers = useApi<WorkCenter[]>('/api/manufacturing/work-centers?all=1')
+  const downtime = useApi<DowntimeRow[]>('/api/manufacturing/downtime?open=1')
+  const [stopOpen, setStopOpen] = useState(false)
+  const data = plan.data
+
+  const closeStop = async (row: DowntimeRow) => {
+    try {
+      await apiPost('/api/manufacturing/downtime', { action: 'close', id: row.id })
+      toast.success(`Downtime closed`, { description: `${row.workCenter.name} · ${row.reason}` })
+      downtime.reload()
+      centers.reload()
+      plan.reload()
+    } catch (e) {
+      toastError(e)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <Card className="border-blue-500/30 bg-blue-500/5 p-4">
+        <p className="text-sm font-medium">Finite plan, not an infinite promise</p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Open operations are placed on each work centre&apos;s shift calendar, respecting parallel capacity and route
+          sequence. This view only reports — it never re-sequences the shop floor by itself.
+        </p>
+      </Card>
+
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="space-y-1.5">
+          <Label htmlFor="cap-from" className="text-xs text-muted-foreground">Plan from</Label>
+          <Input id="cap-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="h-11 w-40" />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="cap-horizon" className="text-xs text-muted-foreground">Horizon (days)</Label>
+          <Input id="cap-horizon" type="number" min="1" max="365" value={horizon} onChange={(e) => setHorizon(e.target.value)} className="h-11 w-28 text-right tabular-nums" />
+        </div>
+        <Button variant="outline" onClick={() => plan.reload()} className="h-11 gap-2">
+          <RefreshCw className="size-4" aria-hidden /> Recalculate
+        </Button>
+        <Button onClick={() => setStopOpen(true)} className="ml-auto h-11 gap-2" variant="outline">
+          <XCircle className="size-4" aria-hidden /> Record downtime
+        </Button>
+      </div>
+
+      {plan.loading ? <TableSkeleton rows={4} cols={5} /> : null}
+      {plan.error ? <ErrorState error={plan.error} onRetry={() => plan.reload()} entity="capacity plan" /> : null}
+
+      {data ? (
+        <>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <KpiCard title="Scheduled Ops" value={String(data.placements.length)} icon={CalendarClock} hint={`${data.horizonDays} day horizon`} />
+            <KpiCard title="Unschedulable" value={String(data.unschedulable.length)} icon={XCircle} tone={data.unschedulable.length ? 'negative' : 'positive'} />
+            <KpiCard title="Late Work Orders" value={String(data.lateWorkOrders.length)} icon={ClipboardList} tone={data.lateWorkOrders.length ? 'negative' : 'positive'} />
+            <KpiCard title="Open Stoppages" value={String(downtime.data?.length ?? 0)} icon={Wrench} tone={(downtime.data?.length ?? 0) > 0 ? 'warning' : 'default'} />
+          </div>
+
+          {data.workCentersWithoutCalendar.length > 0 ? (
+            <Card className="border-amber-500/40 bg-amber-500/5 p-4">
+              <p className="text-sm font-medium">No shift calendar</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {data.workCentersWithoutCalendar.join(', ')} — capacity falls back to daily hours and cannot see holidays.
+              </p>
+            </Card>
+          ) : null}
+
+          {data.unschedulable.length > 0 ? (
+            <Card className="border-destructive/40 bg-destructive/5 p-4">
+              <p className="text-sm font-medium">{data.unschedulable.length} operation(s) could not be placed</p>
+              <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+                {data.unschedulable.slice(0, 8).map((u, i) => (
+                  <li key={i}>• {u.taskNo} ({u.woNo}) — {u.reason}</li>
+                ))}
+              </ul>
+            </Card>
+          ) : null}
+
+          <Card className="p-0">
+            <CardContent className="p-0">
+              <div className="border-b p-3">
+                <SectionHeading title="Load vs capacity" description="Utilisation above 100 % means the horizon cannot hold the work." />
+              </div>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Work Center</TableHead>
+                    <TableHead className="text-right">Ops</TableHead>
+                    <TableHead className="text-right">Planned (h)</TableHead>
+                    <TableHead className="text-right">Capacity (h)</TableHead>
+                    <TableHead className="w-40">Utilisation</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {data.load.map((row) => (
+                    <TableRow key={row.workCenterId}>
+                      <TableCell className="max-w-44 truncate">{row.workCenter}</TableCell>
+                      <TableCell className="text-right tabular-nums">{row.tasks}</TableCell>
+                      <TableCell className="text-right tabular-nums">{qtyFmt(r2(row.plannedMinutes / 60))}</TableCell>
+                      <TableCell className="text-right tabular-nums">{qtyFmt(r2(row.capacityMinutes / 60))}</TableCell>
+                      <TableCell>
+                        <div className="space-y-1">
+                          <ProgressBar value={Math.min(100, row.utilisationPct)} />
+                          <span className={cn('text-xs tabular-nums', row.utilisationPct > 100 && 'font-medium text-destructive')}>
+                            {row.utilisationPct}%
+                          </span>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {data.load.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center text-sm text-muted-foreground">No active work centres.</TableCell>
+                    </TableRow>
+                  ) : null}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+
+          {data.lateWorkOrders.length > 0 ? (
+            <Card className="p-0">
+              <CardContent className="p-0">
+                <div className="border-b p-3">
+                  <SectionHeading title="Late against the committed date" description="Planned finish from the finite run versus the work order end date." />
+                </div>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Work Order</TableHead>
+                      <TableHead>Project</TableHead>
+                      <TableHead>Due</TableHead>
+                      <TableHead>Planned Finish</TableHead>
+                      <TableHead className="text-right">Late</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {data.lateWorkOrders.map((w) => (
+                      <TableRow key={w.woNo}>
+                        <TableCell className="font-medium tabular-nums">{w.woNo}</TableCell>
+                        <TableCell className="tabular-nums">{w.projectNo}</TableCell>
+                        <TableCell className="tabular-nums">{dateStr(w.due)}</TableCell>
+                        <TableCell className="tabular-nums">{dateStr(w.plannedFinish)}</TableCell>
+                        <TableCell className="text-right font-semibold tabular-nums text-destructive">{w.lateDays} d</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          ) : null}
+
+          <Card className="p-0">
+            <CardContent className="p-0">
+              <div className="border-b p-3">
+                <SectionHeading title="Operation schedule" description="One lane per parallel slot; minutes are working minutes from the calendar." />
+              </div>
+              <div className="max-h-[52dvh] overflow-auto erp-scroll">
+                <Table>
+                  <TableHeader className="sticky top-0 z-10 bg-card">
+                    <TableRow>
+                      <TableHead>Task</TableHead>
+                      <TableHead>Op</TableHead>
+                      <TableHead>Work Center</TableHead>
+                      <TableHead>Start</TableHead>
+                      <TableHead>End</TableHead>
+                      <TableHead className="text-right">Minutes</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {data.placements.map((p) => (
+                      <TableRow key={p.taskId}>
+                        <TableCell>
+                          <span className="block font-medium tabular-nums">{p.taskNo}</span>
+                          <span className="block text-xs text-muted-foreground">{p.woNo} · {p.projectNo}</span>
+                        </TableCell>
+                        <TableCell className="whitespace-nowrap">{operationLabel(p.operation)}</TableCell>
+                        <TableCell className="max-w-40 truncate">{p.workCenter}</TableCell>
+                        <TableCell className="whitespace-nowrap tabular-nums">{p.start.slice(0, 16).replace('T', ' ')}</TableCell>
+                        <TableCell className="whitespace-nowrap tabular-nums">{p.end.slice(0, 16).replace('T', ' ')}</TableCell>
+                        <TableCell className="text-right tabular-nums">{qtyFmt(p.minutes)}</TableCell>
+                      </TableRow>
+                    ))}
+                    {data.placements.length === 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={6} className="text-center text-sm text-muted-foreground">
+                          Nothing to schedule — open operations need a work centre (add a routing to the BOM).
+                        </TableCell>
+                      </TableRow>
+                    ) : null}
+                  </TableBody>
+                </Table>
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      ) : null}
+
+      {stopOpen ? <DowntimeDialog centers={centers.data ?? []} open={stopOpen} onOpenChange={setStopOpen} onSaved={() => { downtime.reload(); centers.reload(); plan.reload() }} /> : null}
+    </div>
+  )
+}
+
+function DowntimeDialog({ centers, open, onOpenChange, onSaved }: { centers: WorkCenter[]; open: boolean; onOpenChange: (o: boolean) => void; onSaved: () => void }) {
+  const active = centers.filter((c) => c.active)
+  const [workCenterId, setWorkCenterId] = useState('')
+  const [reason, setReason] = useState<string>('BREAKDOWN')
+  const [startedAt, setStartedAt] = useState(() => new Date(Date.now() - new Date().getTimezoneOffset() * 60_000).toISOString().slice(0, 16))
+  const [endedAt, setEndedAt] = useState('')
+  const [notes, setNotes] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const save = async () => {
+    if (!workCenterId) return toast.error('Pick the work centre')
+    setSaving(true)
+    try {
+      await apiPost('/api/manufacturing/downtime', {
+        action: 'record',
+        workCenterId,
+        reason,
+        startedAt: new Date(startedAt).toISOString(),
+        endedAt: endedAt ? new Date(endedAt).toISOString() : undefined,
+        notes: notes.trim() || undefined,
+      })
+      toast.success('Downtime recorded', { description: endedAt ? 'Counted in availability for its window.' : 'Still open — close it when the machine runs again.' })
+      onSaved()
+      onOpenChange(false)
+      setNotes(''); setEndedAt(''); setWorkCenterId('')
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Record downtime</DialogTitle>
+          <DialogDescription>
+            Unplanned stoppages reduce availability. Leave the end blank while the machine is still down and close it later.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label>Work Center</Label>
+              <Select value={workCenterId || undefined} onValueChange={setWorkCenterId}>
+                <SelectTrigger className="h-11 data-[size=default]:h-11 w-full"><SelectValue placeholder="Select centre…" /></SelectTrigger>
+                <SelectContent className="max-h-64">
+                  {active.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>{c.code} — {c.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Reason</Label>
+              <Select value={reason} onValueChange={setReason}>
+                <SelectTrigger className="h-11 data-[size=default]:h-11 w-full"><SelectValue /></SelectTrigger>
+                <SelectContent className="max-h-64">
+                  {DOWNTIME_REASONS.map((r) => (
+                    <SelectItem key={r} value={r}>{r.replace(/_/g, ' ')}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="dt-start">Started</Label>
+              <Input id="dt-start" type="datetime-local" value={startedAt} onChange={(e) => setStartedAt(e.target.value)} className="h-11" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="dt-end">Ended (blank = still down)</Label>
+              <Input id="dt-end" type="datetime-local" value={endedAt} onChange={(e) => setEndedAt(e.target.value)} className="h-11" />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="dt-notes">Notes</Label>
+            <Textarea id="dt-notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="What stopped the machine?" className="min-h-16" />
+          </div>
+        </div>
+        <DialogFooter className="gap-2 sm:flex-row">
+          <Button variant="outline" onClick={() => onOpenChange(false)} className="h-11">Cancel</Button>
+          <Button onClick={save} disabled={saving} className="h-11 min-w-32">
+            {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <XCircle className="size-4" aria-hidden />}
+            Record
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ===========================================================================
+// Work centres (master + calendar)
+// ===========================================================================
+
+function WorkCentersTab() {
+  const list = useApi<WorkCenter[]>('/api/manufacturing/work-centers?all=1')
+  const [createOpen, setCreateOpen] = useState(false)
+  const [editing, setEditing] = useState<WorkCenter | null>(null)
+  const [calendarFor, setCalendarFor] = useState<WorkCenter | null>(null)
+  const rows = list.data ?? []
+
+  const toggle = async (c: WorkCenter) => {
+    try {
+      await apiPut(`/api/manufacturing/work-centers/${c.id}`, { active: !c.active })
+      toast.success(`${c.code} ${c.active ? 'retired' : 'reactivated'}`)
+      list.reload()
+    } catch (e) {
+      toastError(e)
+    }
+  }
+
+  const remove = async (c: WorkCenter) => {
+    try {
+      await apiDelete(`/api/manufacturing/work-centers/${c.id}`)
+      toast.success(`${c.code} deleted`)
+      list.reload()
+    } catch (e) {
+      toastError(e)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-muted-foreground">
+          {rows.length} work centre{rows.length === 1 ? '' : 's'} — machines and cells that operations, capacity and OEE are measured on.
+        </p>
+        <Button onClick={() => setCreateOpen(true)} className="h-11 shrink-0 gap-2">
+          <Plus className="size-4" aria-hidden /> New Work Center
+        </Button>
+      </div>
+
+      <Card className="p-0">
+        <CardContent className="p-0">
+          {list.loading ? (
+            <TableSkeleton rows={4} cols={6} />
+          ) : list.error ? (
+            <div className="p-6"><ErrorState error={list.error} onRetry={() => list.reload()} entity="work centres" /></div>
+          ) : rows.length === 0 ? (
+            <div className="p-6">
+              <EmptyState title="No work centres yet" hint="Add the machines or cells your operations run on, then attach a shift calendar and a routing." icon={Building2} />
+            </div>
+          ) : (
+            <div className="max-h-[62dvh] overflow-auto erp-scroll">
+              <Table>
+                <TableHeader className="sticky top-0 z-10 bg-card">
+                  <TableRow>
+                    <TableHead>Center</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead className="text-right">Capacity</TableHead>
+                    <TableHead className="text-right hidden sm:table-cell">Shift</TableHead>
+                    <TableHead className="hidden md:table-cell">Routing Ops</TableHead>
+                    <TableHead>State</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {rows.map((c) => (
+                    <TableRow key={c.id}>
+                      <TableCell>
+                        <span className="block font-medium tabular-nums">{c.code}</span>
+                        <span className="block max-w-44 truncate text-xs text-muted-foreground">{c.name}{c.machineNo ? ` · ${c.machineNo}` : ''}</span>
+                      </TableCell>
+                      <TableCell><Badge variant="outline">{c.type}</Badge></TableCell>
+                      <TableCell className="text-right tabular-nums">×{c.parallelCapacity}</TableCell>
+                      <TableCell className="text-right tabular-nums hidden sm:table-cell">
+                        {c.calendar ? `${qtyFmt(r2((c.plannedMinutesPerDay ?? 0) / 60))} h/d` : `${c.dailyHours} h/d (no calendar)`}
+                      </TableCell>
+                      <TableCell className="tabular-nums hidden md:table-cell">{c._count?.operations ?? 0}</TableCell>
+                      <TableCell>
+                        {c.downNow ? (
+                          <Badge variant="destructive" className="gap-1"><XCircle className="size-3" aria-hidden /> down</Badge>
+                        ) : c.active ? (
+                          <Badge variant="outline" className="border-emerald-600/40 text-emerald-700 dark:text-emerald-400">active</Badge>
+                        ) : (
+                          <Badge variant="secondary">retired</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        <div className="flex justify-end gap-1">
+                          <Button variant="ghost" size="sm" className="h-9" onClick={() => setCalendarFor(c)}>
+                            <CalendarClock className="size-3.5" aria-hidden /> Calendar
+                          </Button>
+                          <Button variant="ghost" size="sm" className="h-9" onClick={() => setEditing(c)} aria-label={`Edit ${c.code}`}>
+                            <Pencil className="size-3.5" aria-hidden />
+                          </Button>
+                          <Button variant="ghost" size="sm" className="h-9" onClick={() => toggle(c)}>
+                            {c.active ? 'Retire' : 'Restore'}
+                          </Button>
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button variant="ghost" size="sm" className="h-9 text-destructive hover:text-destructive" aria-label={`Delete ${c.code}`}>
+                                <Trash2 className="size-3.5" aria-hidden />
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Delete {c.code}?</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  Only allowed when no open task and no routing operation references this centre. Prefer retiring it so history keeps its capacity context.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel className="h-11">Keep it</AlertDialogCancel>
+                                <AlertDialogAction onClick={(e) => { e.preventDefault(); void remove(c) }} className="h-11">Delete</AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {createOpen || editing ? (
+        <WorkCenterDialog
+          center={editing}
+          open={createOpen || !!editing}
+          onOpenChange={(o) => { if (!o) { setCreateOpen(false); setEditing(null) } }}
+          onSaved={() => { list.reload(); setCreateOpen(false); setEditing(null) }}
+        />
+      ) : null}
+      {calendarFor ? (
+        <CalendarDialog
+          center={calendarFor}
+          open={!!calendarFor}
+          onOpenChange={(o) => !o && setCalendarFor(null)}
+          onSaved={() => { list.reload(); setCalendarFor(null) }}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+function WorkCenterDialog({ center, open, onOpenChange, onSaved }: { center: WorkCenter | null; open: boolean; onOpenChange: (o: boolean) => void; onSaved: () => void }) {
+  const [code, setCode] = useState(center?.code ?? '')
+  const [name, setName] = useState(center?.name ?? '')
+  const [type, setType] = useState<string>(center?.type ?? 'MACHINE')
+  const [machineNo, setMachineNo] = useState(center?.machineNo ?? '')
+  const [parallel, setParallel] = useState(String(center?.parallelCapacity ?? 1))
+  const [dailyHours, setDailyHours] = useState(String(center?.dailyHours ?? 8))
+  const [costPerHour, setCostPerHour] = useState(String(center?.costPerHour ?? 0))
+  const [saving, setSaving] = useState(false)
+
+  const save = async () => {
+    if (!code.trim() || !name.trim()) return toast.error('Code and name are required')
+    setSaving(true)
+    try {
+      const body = {
+        code: code.trim(),
+        name: name.trim(),
+        type,
+        machineNo: machineNo.trim() || undefined,
+        parallelCapacity: Math.max(1, Math.trunc(num(parallel) || 1)),
+        dailyHours: num(dailyHours),
+        costPerHour: num(costPerHour),
+      }
+      if (center) await apiPut(`/api/manufacturing/work-centers/${center.id}`, body)
+      else await apiPost('/api/manufacturing/work-centers', body)
+      toast.success(center ? `${body.code} updated` : `${body.code} created`)
+      onSaved()
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-xl">
+        <DialogHeader>
+          <DialogTitle>{center ? `Edit ${center.code}` : 'New work center'}</DialogTitle>
+          <DialogDescription>
+            A work centre is a machine or a manned cell. Parallel capacity is how many jobs can run on it at once.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="wc-code">Code</Label>
+            <Input id="wc-code" value={code} onChange={(e) => setCode(e.target.value)} placeholder="WC-CNC" className="h-11" />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="wc-name">Name</Label>
+            <Input id="wc-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="CNC Laser" className="h-11" />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Type</Label>
+            <Select value={type} onValueChange={setType}>
+              <SelectTrigger className="h-11 data-[size=default]:h-11 w-full"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {WORK_CENTER_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="wc-machine">Machine No</Label>
+            <Input id="wc-machine" value={machineNo} onChange={(e) => setMachineNo(e.target.value)} placeholder="Optional" className="h-11" />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="wc-parallel">Parallel capacity</Label>
+            <Input id="wc-parallel" type="number" min="1" max="50" value={parallel} onChange={(e) => setParallel(e.target.value)} className="h-11 text-right tabular-nums" />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="wc-hours">Daily hours (fallback)</Label>
+            <Input id="wc-hours" type="number" min="0" max="24" step="any" value={dailyHours} onChange={(e) => setDailyHours(e.target.value)} className="h-11 text-right tabular-nums" />
+          </div>
+          <div className="space-y-1.5 sm:col-span-2">
+            <Label htmlFor="wc-cost">Cost per hour (₹)</Label>
+            <Input id="wc-cost" type="number" min="0" step="any" value={costPerHour} onChange={(e) => setCostPerHour(e.target.value)} className="h-11 text-right tabular-nums" />
+          </div>
+        </div>
+        <DialogFooter className="gap-2 sm:flex-row">
+          <Button variant="outline" onClick={() => onOpenChange(false)} className="h-11">Cancel</Button>
+          <Button onClick={save} disabled={saving} className="h-11 min-w-32">
+            {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Plus className="size-4" aria-hidden />}
+            {center ? 'Save' : 'Create'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+const DEFAULT_SHIFTS = [{ name: 'GENERAL', startMin: 540, durationMin: 480, active: true }]
+
+function CalendarDialog({ center, open, onOpenChange, onSaved }: { center: WorkCenter; open: boolean; onOpenChange: (o: boolean) => void; onSaved: () => void }) {
+  const cal = useApi<WorkCenterCalendar | null>(`/api/manufacturing/work-centers/${center.id}`)
+  const [loaded, setLoaded] = useState(false)
+  const [workDays, setWorkDays] = useState<number[]>([1, 2, 3, 4, 5, 6])
+  const [shifts, setShifts] = useState(DEFAULT_SHIFTS)
+  const [saving, setSaving] = useState(false)
+
+  // Hydrate once from the server so typing is never overwritten by a refetch.
+  if (!loaded && cal.data) {
+    setWorkDays(cal.data.workDays.split(',').map((d) => Number(d.trim())).filter((d) => Number.isInteger(d)))
+    if (cal.data.shifts.length) setShifts(cal.data.shifts.map((s) => ({ name: s.name, startMin: s.startMin, durationMin: s.durationMin, active: s.active })))
+    setLoaded(true)
+  }
+
+  const hours = (min: number) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      await apiPut(`/api/manufacturing/work-centers/${center.id}/calendar`, {
+        workDays: workDays.join(','),
+        shifts: shifts.filter((s) => s.durationMin > 0),
+      })
+      toast.success(`${center.code} calendar saved`, { description: `${workDays.length} working day(s) · ${shifts.filter((s) => s.durationMin > 0).length} shift(s)` })
+      onSaved()
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[90dvh] flex-col overflow-hidden sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{center.code} — shift calendar</DialogTitle>
+          <DialogDescription>
+            Capacity is the sum of active shift minutes × parallel capacity on a working day. Holidays come out of capacity.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto erp-scroll-y pr-1">
+          <div className="space-y-1.5">
+            <Label>Working days</Label>
+            <div className="flex flex-wrap gap-1">
+              {['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((label, index) => {
+                const on = workDays.includes(index)
+                return (
+                  <Button
+                    key={label}
+                    type="button"
+                    size="sm"
+                    variant={on ? 'default' : 'outline'}
+                    className="h-9"
+                    onClick={() => setWorkDays((d) => (on ? d.filter((x) => x !== index) : [...d, index].sort()))}
+                  >
+                    {label}
+                  </Button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label>Shifts</Label>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-9 gap-1"
+                onClick={() => setShifts((s) => [...s, { name: 'OT', startMin: 1020, durationMin: 60, active: true }])}
+              >
+                <Plus className="size-3.5" aria-hidden /> Add shift
+              </Button>
+            </div>
+            <div className="space-y-2">
+              {shifts.map((shift, index) => (
+                <div key={index} className="grid grid-cols-2 items-end gap-2 rounded-md border p-2 sm:grid-cols-5">
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">Name</Label>
+                    <Input
+                      value={shift.name}
+                      onChange={(e) => setShifts((s) => s.map((x, i) => (i === index ? { ...x, name: e.target.value } : x)))}
+                      className="h-10"
+                      aria-label="Shift name"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">Start</Label>
+                    <Input
+                      type="time"
+                      value={hours(shift.startMin)}
+                      onChange={(e) => {
+                        const [hh, mm] = e.target.value.split(':').map(Number)
+                        setShifts((s) => s.map((x, i) => (i === index ? { ...x, startMin: (hh || 0) * 60 + (mm || 0) } : x)))
+                      }}
+                      className="h-10"
+                      aria-label="Shift start"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">Hours</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      max="24"
+                      step="0.5"
+                      value={String(r2(shift.durationMin / 60))}
+                      onChange={(e) => {
+                        const minutes = Math.round(num(e.target.value) * 60)
+                        setShifts((s) => s.map((x, i) => (i === index ? { ...x, durationMin: Math.max(1, Math.min(1440, minutes)) } : x)))
+                      }}
+                      className="h-10 text-right tabular-nums"
+                      aria-label="Shift duration in hours"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs text-muted-foreground">Ends</Label>
+                    <p className="h-10 py-2.5 text-sm tabular-nums">{hours((shift.startMin + shift.durationMin) % 1440)}</p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-10 justify-self-end text-muted-foreground hover:text-destructive"
+                    onClick={() => setShifts((s) => (s.length > 1 ? s.filter((_, i) => i !== index) : s))}
+                    disabled={shifts.length === 1}
+                    aria-label="Remove shift"
+                  >
+                    <Trash2 className="size-4" aria-hidden />
+                  </Button>
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Daily capacity: {qtyFmt(r2((shifts.filter((s) => s.durationMin > 0).reduce((sum, s) => sum + s.durationMin, 0) / 60) * center.parallelCapacity))} h
+              {' '}({shifts.reduce((sum, s) => sum + s.durationMin, 0)} min × {center.parallelCapacity} parallel)
+            </p>
+          </div>
+
+          {cal.data?.holidays?.length ? (
+            <div className="space-y-1">
+              <Label>Holidays</Label>
+              <div className="flex flex-wrap gap-1">
+                {cal.data.holidays.map((h) => (
+                  <Badge key={h.id} variant="secondary">{dateStr(h.date)}{h.reason ? ` · ${h.reason}` : ''}</Badge>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">Holiday editing ships with the first shop-floor pilot feedback — capacity already excludes these days.</p>
+            </div>
+          ) : null}
+        </div>
+        <DialogFooter className="gap-2 sm:flex-row">
+          <Button variant="outline" onClick={() => onOpenChange(false)} className="h-11">Cancel</Button>
+          <Button onClick={save} disabled={saving || !workDays.length} className="h-11 min-w-32">
+            {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <CheckCircle2 className="size-4" aria-hidden />}
+            Save calendar
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ===========================================================================
+// OEE
+// ===========================================================================
+
+function OeeTab() {
+  const [from, setFrom] = useState(() => {
+    const d = new Date()
+    d.setDate(d.getDate() - 13)
+    return d.toISOString().slice(0, 10)
+  })
+  const [to, setTo] = useState(todayISO())
+  const report = useApi<OeeReport | null>(`/api/manufacturing/oee?from=${from}&to=${to}`)
+  const data = report.data
+
+  if (report.loading) return <TableSkeleton rows={6} cols={7} />
+  if (report.error) return <ErrorState error={report.error} onRetry={() => report.reload()} entity="OEE" />
+  if (!data) return null
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="space-y-1.5">
+          <Label htmlFor="oee-from" className="text-xs text-muted-foreground">From</Label>
+          <Input id="oee-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="h-11 w-40" />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="oee-to" className="text-xs text-muted-foreground">To</Label>
+          <Input id="oee-to" type="date" value={to} onChange={(e) => setTo(e.target.value)} className="h-11 w-40" />
+        </div>
+        <Button variant="outline" onClick={() => report.reload()} className="h-11 gap-2">
+          <RefreshCw className="size-4" aria-hidden /> Refresh
+        </Button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <KpiCard title="OEE" value={`${data.summary.oeePct}%`} icon={Gauge} tone={data.summary.oeePct >= 65 ? 'positive' : data.summary.oeePct >= 40 ? 'warning' : 'negative'} hint={`${data.days} day(s)`} />
+        <KpiCard title="Availability" value={`${data.summary.availabilityPct}%`} icon={CalendarClock} hint={`${qtyFmt(r2(data.summary.downtimeMinutes / 60))} h lost`} />
+        <KpiCard title="Performance" value={`${data.summary.performancePct}%`} icon={PlayCircle} hint="routed cycle time vs run time" />
+        <KpiCard title="Quality" value={`${data.summary.qualityPct}%`} icon={BadgeCheck} hint="good ÷ produced" />
+      </div>
+
+      {data.notes.length > 0 ? (
+        <Card className="border-amber-500/40 bg-amber-500/5 p-4">
+          <p className="text-sm font-medium">Read this before trusting the numbers</p>
+          <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+            {data.notes.map((n, i) => <li key={i}>• {n}</li>)}
+          </ul>
+        </Card>
+      ) : null}
+
+      <Card className="p-0">
+        <CardContent className="p-0">
+          <div className="border-b p-3">
+            <SectionHeading title="By work centre" description="Availability × performance × quality. Sorted worst first — that is where the money is." />
+          </div>
+          <div className="max-h-[46dvh] overflow-auto erp-scroll">
+            <Table>
+              <TableHeader className="sticky top-0 z-10 bg-card">
+                <TableRow>
+                  <TableHead>Work Center</TableHead>
+                  <TableHead className="text-right">Planned (h)</TableHead>
+                  <TableHead className="text-right">Downtime (h)</TableHead>
+                  <TableHead className="text-right">A</TableHead>
+                  <TableHead className="text-right">P</TableHead>
+                  <TableHead className="text-right">Q</TableHead>
+                  <TableHead className="text-right">OEE</TableHead>
+                  <TableHead className="hidden lg:table-cell">Main loss</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.byWorkCenter.map((row) => {
+                  const worst = Object.entries(row.downtimeByReason).sort((a, b) => b[1] - a[1])[0]
+                  return (
+                    <TableRow key={row.workCenter}>
+                      <TableCell className="max-w-44 truncate">{row.workCenter}</TableCell>
+                      <TableCell className="text-right tabular-nums">{qtyFmt(r2(row.plannedMinutes / 60))}</TableCell>
+                      <TableCell className="text-right tabular-nums">{qtyFmt(r2(row.downtimeMinutes / 60))}</TableCell>
+                      <TableCell className="text-right tabular-nums">{row.availabilityPct}%</TableCell>
+                      <TableCell className="text-right tabular-nums">{row.performancePct}%</TableCell>
+                      <TableCell className="text-right tabular-nums">{row.qualityPct}%</TableCell>
+                      <TableCell className={cn('text-right font-semibold tabular-nums', row.oeePct < 40 && 'text-destructive')}>{row.oeePct}%</TableCell>
+                      <TableCell className="hidden text-xs text-muted-foreground lg:table-cell">
+                        {worst ? `${worst[0].replace(/_/g, ' ')} · ${qtyFmt(r2(worst[1] / 60))} h` : '—'}
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
+                {data.byWorkCenter.length === 0 ? (
+                  <TableRow><TableCell colSpan={8} className="text-center text-sm text-muted-foreground">No work centre data in this window.</TableCell></TableRow>
+                ) : null}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="p-0">
+        <CardContent className="p-0">
+          <div className="border-b p-3">
+            <SectionHeading title="Daily trend" description="A day with no completed operation still counts — an idle machine is an availability fact." />
+          </div>
+          <div className="max-h-[40dvh] overflow-auto erp-scroll">
+            <Table>
+              <TableHeader className="sticky top-0 z-10 bg-card">
+                <TableRow>
+                  <TableHead>Day</TableHead>
+                  <TableHead className="text-right">Downtime (h)</TableHead>
+                  <TableHead className="text-right">Good</TableHead>
+                  <TableHead className="text-right">Reject</TableHead>
+                  <TableHead className="text-right">A</TableHead>
+                  <TableHead className="text-right">P</TableHead>
+                  <TableHead className="text-right">Q</TableHead>
+                  <TableHead className="text-right">OEE</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.byDay.map((row) => (
+                  <TableRow key={row.day}>
+                    <TableCell className="tabular-nums">{dateStr(row.day)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{qtyFmt(r2(row.downtimeMinutes / 60))}</TableCell>
+                    <TableCell className="text-right tabular-nums">{qtyFmt(row.goodQty)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{qtyFmt(row.rejectQty)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{row.availabilityPct}%</TableCell>
+                    <TableCell className="text-right tabular-nums">{row.performancePct}%</TableCell>
+                    <TableCell className="text-right tabular-nums">{row.qualityPct}%</TableCell>
+                    <TableCell className="text-right font-medium tabular-nums">{row.oeePct}%</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
+// ===========================================================================
+// MRP — multi-level explosion through versioned BOMs, netting, suggestions
+// ===========================================================================
+
+/**
+ * Planner workspace. A run is a snapshot: it is recomputed on demand, never on
+ * read. Suggestions only become documents (DRAFT PR / OPEN work orders) when a
+ * user selects them and confirms — nothing posts by itself.
+ */
+function MrpTab({ onChanged }: { onChanged?: () => void }) {
+  const runs = useApi<MrpRunSummary[]>('/api/manufacturing/mrp')
+  const projects = useApi<Project[]>('/api/manufacturing/projects')
+  const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [asOf, setAsOf] = useState(todayISO())
+  const [horizon, setHorizon] = useState('30')
+  const [picked, setPicked] = useState<Record<string, boolean>>({})
+  const [projectId, setProjectId] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const runList = runs.data ?? []
+  const activeProjectList = (projects.data ?? []).filter((p) => p.status === 'PENDING' || p.status === 'RUNNING')
+
+  // Default to the newest plan once the list arrives.
+  const detail = useApi<MrpRunDetail | null>(selectedId ? `/api/manufacturing/mrp/${selectedId}` : null)
+  const run = detail.data
+
+  const selectedLines = (run?.lines ?? []).filter((l) => picked[l.id])
+  const selectedMake = selectedLines.filter((l) => l.suggestion === 'MAKE')
+  const selectedBuy = selectedLines.filter((l) => l.suggestion === 'BUY')
+  const selectableLines = (run?.lines ?? []).filter((l) => !l.createdDocNo && l.netQty > 0 && l.suggestion !== 'NONE')
+
+  const createRun = async () => {
+    setBusy(true)
+    try {
+      const created = await apiPost<MrpRunSummary>('/api/manufacturing/mrp', {
+        asOf: asOf || undefined,
+        horizonDays: num(horizon) > 0 ? num(horizon) : undefined,
+      })
+      toast.success(`${created.runNo} planned`, {
+        description: `${created.suggestionCount} suggestion(s) · ${created.shortageItems} item(s) short. Nothing is ordered until you approve.`,
+      })
+      setPicked({})
+      setSelectedId(created.id)
+      runs.reload()
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const openDocuments = async () => {
+    if (!run) return
+    if (selectedLines.length === 0) return toast.error('Select at least one suggestion')
+    if (selectedMake.length > 0 && !projectId) return toast.error('Pick the project that will execute the planned work orders')
+    setBusy(true)
+    try {
+      const res = await apiPost<MrpDocumentResult>(`/api/manufacturing/mrp/${run.id}/actions`, {
+        action: 'create-documents',
+        lineIds: selectedLines.map((l) => l.id),
+        projectId: projectId || undefined,
+      })
+      const parts = [
+        res.requisition ? `PR ${res.requisition.reqNo}` : null,
+        res.workOrders.length ? `${res.workOrders.length} work order(s)` : null,
+      ].filter(Boolean)
+      toast.success(`${run.runNo} approved`, {
+        description: `${parts.join(' + ') || 'no documents'} created — the requisition still needs submit + approve.`,
+      })
+      setPicked({})
+      setSelectedId(run.id)
+      detail.reload()
+      runs.reload()
+      onChanged?.()
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const closeRun = async () => {
+    if (!run) return
+    setBusy(true)
+    try {
+      await apiPost(`/api/manufacturing/mrp/${run.id}/actions`, { action: 'close' })
+      toast.success(`${run.runNo} closed`)
+      detail.reload()
+      runs.reload()
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const toggle = (id: string) => setPicked((p) => ({ ...p, [id]: !p[id] }))
+  const toggleAll = () => {
+    const allOn = selectableLines.length > 0 && selectableLines.every((l) => picked[l.id])
+    const next: Record<string, boolean> = { ...picked }
+    for (const l of selectableLines) next[l.id] = !allOn
+    setPicked(next)
+  }
+
+  return (
+    <div className="space-y-4">
+      <Card className="border-blue-500/30 bg-blue-500/5 p-4">
+        <p className="text-sm font-medium">Plan first, order later</p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Demand comes from approved sales orders and released work orders, exploded through the approved BOM revision of each
+          item. Supply nets own stock → open work orders → approved POs → approved requisitions. Nothing is purchased,
+          produced or reserved until you select suggestions and approve them here.
+        </p>
+      </Card>
+
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="space-y-1.5">
+          <Label htmlFor="mrp-asof" className="text-xs text-muted-foreground">As of</Label>
+          <Input id="mrp-asof" type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} className="h-11 w-40" />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="mrp-horizon" className="text-xs text-muted-foreground">Horizon (days)</Label>
+          <Input
+            id="mrp-horizon"
+            type="number"
+            inputMode="numeric"
+            min="1"
+            max="365"
+            value={horizon}
+            onChange={(e) => setHorizon(e.target.value)}
+            className="h-11 w-28 text-right tabular-nums"
+          />
+        </div>
+        <Button onClick={createRun} disabled={busy} className="h-11 gap-2">
+          {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <RefreshCw className="size-4" aria-hidden />}
+          Run MRP
+        </Button>
+        <div className="ml-auto flex items-end gap-2">
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">Saved plans</Label>
+            <Select value={selectedId ?? runList[0]?.id ?? undefined} onValueChange={(v) => { setSelectedId(v); setPicked({}) }}>
+              <SelectTrigger className="h-11 data-[size=default]:h-11 w-56">
+                <SelectValue placeholder="No plans yet" />
+              </SelectTrigger>
+              <SelectContent className="max-h-72">
+                {runList.map((r) => (
+                  <SelectItem key={r.id} value={r.id}>
+                    {r.runNo} · {r.status} · {dateStr(r.asOf)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {!selectedId && runList[0] ? (
+            <Button variant="outline" className="h-11" onClick={() => setSelectedId(runList[0].id)}>
+              Open latest
+            </Button>
+          ) : null}
+        </div>
+      </div>
+
+      {runs.loading ? <TableSkeleton rows={4} cols={6} /> : null}
+      {runs.error ? <ErrorState error={runs.error} onRetry={() => runs.reload()} entity="MRP runs" /> : null}
+
+      {!runs.loading && !runs.error && runList.length === 0 ? (
+        <EmptyState
+          title="No MRP run yet"
+          hint="Approve a BOM with a linked output item and confirm a sales order, then run MRP to see buy/make suggestions."
+          icon={CalendarClock}
+        />
+      ) : null}
+
+      {run ? (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+            <KpiCard title="Run" value={run.runNo} icon={CalendarClock} hint={`${dateStr(run.asOf)} · ${run.horizonDays}d`} />
+            <KpiCard title="Suggestions" value={String(run.suggestionCount)} icon={PackageSearch} />
+            <KpiCard title="Short Items" value={String(run.shortageItems)} icon={XCircle} tone={run.shortageItems ? 'negative' : 'positive'} />
+            <KpiCard title="Sales Orders" value={String(run.salesOrderCount)} icon={ClipboardList} hint={`${run.workOrderCount} work order(s)`} />
+            <KpiCard
+              title="Status"
+              value={run.status}
+              icon={BadgeCheck}
+              tone={run.status === 'CLOSED' ? 'default' : 'positive'}
+              hint={run.approvedAt ? `approved ${dateStr(run.approvedAt)}` : 'not approved yet'}
+            />
+          </div>
+
+          {run.warnings.length > 0 ? (
+            <Card className="border-amber-500/40 bg-amber-500/5 p-4">
+              <p className="text-sm font-medium">Planner warnings</p>
+              <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+                {run.warnings.map((w, i) => (
+                  <li key={i}>• {w}</li>
+                ))}
+              </ul>
+            </Card>
+          ) : null}
+
+          {run.lines.length === 0 ? (
+            <EmptyState title="No demand in this horizon" hint="Nothing is due inside the planning window — widen the horizon or check sales orders." icon={PackageSearch} />
+          ) : (
+            <>
+              <Card className="p-0">
+                <CardContent className="p-0">
+                  <div className="max-h-[56dvh] overflow-auto erp-scroll">
+                    <Table>
+                      <TableHeader className="sticky top-0 z-10 bg-card">
+                        <TableRow>
+                          <TableHead className="w-10">
+                            <input
+                              type="checkbox"
+                              className="size-4 accent-primary"
+                              aria-label="Select all suggestions"
+                              checked={selectableLines.length > 0 && selectableLines.every((l) => picked[l.id])}
+                              onChange={toggleAll}
+                            />
+                          </TableHead>
+                          <TableHead>Item</TableHead>
+                          <TableHead className="text-right">Lvl</TableHead>
+                          <TableHead className="hidden md:table-cell">Need By</TableHead>
+                          <TableHead className="text-right">Gross</TableHead>
+                          <TableHead className="text-right hidden sm:table-cell">On Hand</TableHead>
+                          <TableHead className="text-right hidden sm:table-cell">Incoming</TableHead>
+                          <TableHead className="text-right hidden lg:table-cell">WO Supply</TableHead>
+                          <TableHead className="text-right">Net</TableHead>
+                          <TableHead>Suggestion</TableHead>
+                          <TableHead className="hidden xl:table-cell">Pegging</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {run.lines.map((l) => {
+                          const selectable = !l.createdDocNo && l.netQty > 0 && l.suggestion !== 'NONE'
+                          return (
+                            <TableRow key={l.id} className={cn(!selectable && 'opacity-60')}>
+                              <TableCell>
+                                <input
+                                  type="checkbox"
+                                  className="size-4 accent-primary"
+                                  aria-label={`Select ${l.item.name}`}
+                                  disabled={!selectable}
+                                  checked={!!picked[l.id]}
+                                  onChange={() => toggle(l.id)}
+                                />
+                              </TableCell>
+                              <TableCell>
+                                <span className="block max-w-48 truncate font-medium">{l.item.name}</span>
+                                <span className="block text-xs text-muted-foreground tabular-nums">{l.item.code} · {l.item.uom}</span>
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums">{l.level}</TableCell>
+                              <TableCell className="hidden whitespace-nowrap tabular-nums md:table-cell">{dateStr(l.needBy)}</TableCell>
+                              <TableCell className="text-right tabular-nums">{qtyFmt(l.grossQty)}</TableCell>
+                              <TableCell className="hidden text-right tabular-nums sm:table-cell">{qtyFmt(l.onHandQty)}</TableCell>
+                              <TableCell className="hidden text-right tabular-nums sm:table-cell">{l.incomingQty > 0 ? qtyFmt(l.incomingQty) : '—'}</TableCell>
+                              <TableCell className="hidden text-right tabular-nums lg:table-cell">{l.woSupplyQty > 0 ? qtyFmt(l.woSupplyQty) : '—'}</TableCell>
+                              <TableCell className={cn('text-right font-semibold tabular-nums', l.netQty > 0 && 'text-destructive')}>
+                                {l.netQty > 0 ? qtyFmt(l.netQty) : '—'}
+                              </TableCell>
+                              <TableCell>
+                                <SuggestionBadge line={l} />
+                              </TableCell>
+                              <TableCell className="hidden max-w-56 xl:table-cell">
+                                <span className="block truncate text-xs text-muted-foreground" title={(l.pegging ?? '').split('\n').join(' · ')}>
+                                  {(l.pegging ?? '').split('\n')[0] ?? '—'}
+                                </span>
+                              </TableCell>
+                            </TableRow>
+                          )
+                        })}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </CardContent>
+              </Card>
+
+              {run.allowDocuments ? (
+                <Card className="p-4">
+                  <div className="flex flex-wrap items-end gap-2">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs text-muted-foreground">Project for planned work orders</Label>
+                      <Select value={projectId || undefined} onValueChange={setProjectId}>
+                        <SelectTrigger className="h-11 data-[size=default]:h-11 w-64">
+                          <SelectValue placeholder={selectedMake.length ? 'Select project…' : 'Not needed for buy lines'} />
+                        </SelectTrigger>
+                        <SelectContent className="max-h-72">
+                          {activeProjectList.map((p) => (
+                            <SelectItem key={p.id} value={p.id}>
+                              {p.projectNo} — {p.name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {selectedLines.length} selected · {selectedMake.length} make · {selectedBuy.length} buy
+                    </div>
+                    <div className="ml-auto flex gap-2">
+                      <AlertDialog>
+                        <AlertDialogTrigger asChild>
+                          <Button variant="ghost" className="h-11 text-muted-foreground" disabled={busy}>
+                            Close plan
+                          </Button>
+                        </AlertDialogTrigger>
+                        <AlertDialogContent>
+                          <AlertDialogHeader>
+                            <AlertDialogTitle>Close {run.runNo}?</AlertDialogTitle>
+                            <AlertDialogDescription>
+                              Closing retires this snapshot. Documents already created from it stay as they are — nothing is cancelled.
+                            </AlertDialogDescription>
+                          </AlertDialogHeader>
+                          <AlertDialogFooter>
+                            <AlertDialogCancel className="h-11">Keep it open</AlertDialogCancel>
+                            <AlertDialogAction onClick={(e) => { e.preventDefault(); void closeRun() }} className="h-11">
+                              Close plan
+                            </AlertDialogAction>
+                          </AlertDialogFooter>
+                        </AlertDialogContent>
+                      </AlertDialog>
+                      <Button onClick={openDocuments} disabled={busy || selectedLines.length === 0} className="h-11 gap-2">
+                        {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <BadgeCheck className="size-4" aria-hidden />}
+                        Create documents
+                      </Button>
+                    </div>
+                  </div>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Buy lines merge into one DRAFT purchase requisition (submit + approve it in Procurement). Make lines become
+                    OPEN work orders with the planned quantity and need-by date.
+                  </p>
+                </Card>
+              ) : null}
+            </>
+          )}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+function SuggestionBadge({ line }: { line: MrpLineRow }) {
+  if (line.createdDocNo) {
+    return (
+      <Badge variant="outline" className="gap-1 border-emerald-600/40 text-emerald-700 dark:text-emerald-400">
+        <CheckCircle2 className="size-3" aria-hidden /> {line.createdDocNo}
+      </Badge>
+    )
+  }
+  if (line.suggestion === 'MAKE') return <Badge variant="secondary">MAKE</Badge>
+  if (line.suggestion === 'BUY') return <Badge variant="default">BUY</Badge>
+  return <Badge variant="outline">NONE</Badge>
 }
 
 // ===========================================================================
@@ -1087,14 +2332,24 @@ function BomsTab({ onChanged }: { onChanged?: () => void }) {
   const [createOpen, setCreateOpen] = useState(false)
   const [viewBom, setViewBom] = useState<Bom | null>(null)
   const [woFromBom, setWoFromBom] = useState<Bom | null>(null)
+  const [reviseFrom, setReviseFrom] = useState<Bom | null>(null)
+  const [routingFor, setRoutingFor] = useState<Bom | null>(null)
+  const [statusFilter, setStatusFilter] = useState('live')
   const [busy, setBusy] = useState(false)
   const rows = list.data ?? []
+
+  const liveRows = rows.filter((b) => b.status !== 'SUPERSEDED' && b.status !== 'CANCELLED')
+  const visibleRows = statusFilter === 'all' ? rows : statusFilter === 'live' ? liveRows : rows.filter((b) => b.status === statusFilter)
 
   const approve = async (b: Bom) => {
     setBusy(true)
     try {
-      await apiPost(`/api/manufacturing/boms/${b.id}/actions`, { action: 'approve' })
-      toast.success(`${b.bomNo} approved`, { description: 'Project estimated cost recalculated.' })
+      const res = await apiPost<Bom & { supersededBomNo?: string | null }>(`/api/manufacturing/boms/${b.id}/actions`, { action: 'approve' })
+      toast.success(`${b.bomNo} rev ${b.revision} approved`, {
+        description: res.supersededBomNo
+          ? `${res.supersededBomNo} was superseded — project cost recalculated, MRP now explodes this revision.`
+          : 'Project estimated cost recalculated — MRP will explode this revision.',
+      })
       list.reload()
       onChanged?.()
     } catch (e) {
@@ -1122,11 +2377,27 @@ function BomsTab({ onChanged }: { onChanged?: () => void }) {
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-sm text-muted-foreground">
-          {rows.length} BOM{rows.length === 1 ? '' : 's'} — approve a BOM to unlock work-order generation.
+          {liveRows.length} live row{liveRows.length === 1 ? '' : 's'} · {rows.length} total — approve to unlock work orders; an
+          approved revision is immutable, revise it to change the design.
         </p>
-        <Button onClick={() => setCreateOpen(true)} className="h-11 shrink-0 gap-2">
-          <Plus className="size-4" aria-hidden /> New BOM
-        </Button>
+        <div className="flex items-center gap-2">
+          <Select value={statusFilter} onValueChange={setStatusFilter}>
+            <SelectTrigger className="h-11 data-[size=default]:h-11 w-40" aria-label="Filter BOM status">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="live">Live only</SelectItem>
+              <SelectItem value="all">All revisions</SelectItem>
+              <SelectItem value="DRAFT">Drafts</SelectItem>
+              <SelectItem value="APPROVED">Approved</SelectItem>
+              <SelectItem value="SUPERSEDED">Superseded</SelectItem>
+              <SelectItem value="CANCELLED">Cancelled</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button onClick={() => setCreateOpen(true)} className="h-11 shrink-0 gap-2">
+            <Plus className="size-4" aria-hidden /> New BOM
+          </Button>
+        </div>
       </div>
 
       <Card className="p-0">
@@ -1137,9 +2408,9 @@ function BomsTab({ onChanged }: { onChanged?: () => void }) {
             <div className="p-6">
               <ErrorState error={list.error} onRetry={() => list.reload()} entity="BOMs" />
             </div>
-          ) : rows.length === 0 ? (
+          ) : visibleRows.length === 0 ? (
             <div className="p-6">
-              <EmptyState title="No BOMs yet" hint="Pick a project and list the materials it needs." icon={PackageSearch} />
+              <EmptyState title="No BOMs yet" hint="Pick a project, choose the output item it makes, then list the materials." icon={PackageSearch} />
             </div>
           ) : (
             <div className="max-h-[62dvh] overflow-auto erp-scroll">
@@ -1147,8 +2418,8 @@ function BomsTab({ onChanged }: { onChanged?: () => void }) {
                 <TableHeader className="sticky top-0 z-10 bg-card">
                   <TableRow>
                     <TableHead>BOM No</TableHead>
+                    <TableHead>Output Item</TableHead>
                     <TableHead>Project</TableHead>
-                    <TableHead>Product / Assembly</TableHead>
                     <TableHead className="text-right">Lines</TableHead>
                     <TableHead className="text-right hidden sm:table-cell">Est Cost</TableHead>
                     <TableHead className="hidden md:table-cell">Stock Check</TableHead>
@@ -1157,17 +2428,29 @@ function BomsTab({ onChanged }: { onChanged?: () => void }) {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {rows.map((b) => {
+                  {visibleRows.map((b) => {
                     const shortages = b.items.filter((i) => i.shortage > 0)
                     return (
                       <TableRow key={b.id} className="cursor-pointer" onClick={() => setViewBom(b)}>
-                        <TableCell className="font-medium tabular-nums">{b.bomNo}</TableCell>
+                        <TableCell>
+                          <span className="block font-medium tabular-nums">{b.bomNo}</span>
+                          <Badge variant="outline" className="mt-0.5 tabular-nums">rev {b.revision}</Badge>
+                        </TableCell>
+                        <TableCell>
+                          {b.item ? (
+                            <>
+                              <span className="block max-w-40 truncate">{b.item.name}</span>
+                              <span className="block text-xs text-muted-foreground tabular-nums">{b.item.code}</span>
+                            </>
+                          ) : (
+                            <Badge variant="destructive" className="gap-1">
+                              <TriangleAlertIcon /> no output item
+                            </Badge>
+                          )}
+                        </TableCell>
                         <TableCell>
                           <span className="block max-w-36 truncate tabular-nums">{b.project?.projectNo}</span>
                           <span className="block max-w-36 truncate text-xs text-muted-foreground">{b.project?.name}</span>
-                        </TableCell>
-                        <TableCell>
-                          <span className="block max-w-44 truncate">{b.productName}</span>
                         </TableCell>
                         <TableCell className="text-right tabular-nums">{b.items.length}</TableCell>
                         <TableCell className="text-right hidden sm:table-cell"><Money value={b.totalEstCost} plain /></TableCell>
@@ -1182,7 +2465,15 @@ function BomsTab({ onChanged }: { onChanged?: () => void }) {
                             </Badge>
                           )}
                         </TableCell>
-                        <TableCell><StatusBadge status={b.status} /></TableCell>
+                        <TableCell>
+                          <StatusBadge status={b.status} />
+                          {b.supersededBy ? (
+                            <span className="mt-0.5 block text-[10px] text-muted-foreground">→ {b.supersededBy.bomNo}</span>
+                          ) : null}
+                          {b.supersedes ? (
+                            <span className="mt-0.5 block text-[10px] text-muted-foreground">from rev {b.supersedes.revision}</span>
+                          ) : null}
+                        </TableCell>
                         <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
                           <div className="flex justify-end gap-1">
                             {b.status === 'DRAFT' ? (
@@ -1191,11 +2482,19 @@ function BomsTab({ onChanged }: { onChanged?: () => void }) {
                               </Button>
                             ) : null}
                             {b.status === 'APPROVED' ? (
-                              <Button variant="outline" size="sm" className="h-9 gap-1" onClick={() => setWoFromBom(b)}>
-                                <ClipboardList className="size-3.5" aria-hidden /> Work Order
-                              </Button>
+                              <>
+                                <Button variant="outline" size="sm" className="h-9 gap-1" onClick={() => setWoFromBom(b)}>
+                                  <ClipboardList className="size-3.5" aria-hidden /> Work Order
+                                </Button>
+                                <Button variant="outline" size="sm" className="h-9 gap-1" onClick={() => setReviseFrom(b)}>
+                                  <Pencil className="size-3.5" aria-hidden /> Revise
+                                </Button>
+                              </>
                             ) : null}
-                            {b.status !== 'CANCELLED' ? (
+                            <Button variant="ghost" size="sm" className="h-9 gap-1" onClick={() => setRoutingFor(b)}>
+                              <Wrench className="size-3.5" aria-hidden /> Route
+                            </Button>
+                            {b.status !== 'CANCELLED' && b.status !== 'SUPERSEDED' ? (
                               <AlertDialog>
                                 <AlertDialogTrigger asChild>
                                   <Button variant="ghost" size="sm" className="h-9 gap-1 text-destructive hover:text-destructive" disabled={busy}>
@@ -1204,9 +2503,10 @@ function BomsTab({ onChanged }: { onChanged?: () => void }) {
                                 </AlertDialogTrigger>
                                 <AlertDialogContent>
                                   <AlertDialogHeader>
-                                    <AlertDialogTitle>Cancel {b.bomNo}?</AlertDialogTitle>
+                                    <AlertDialogTitle>Cancel {b.bomNo} rev {b.revision}?</AlertDialogTitle>
                                     <AlertDialogDescription>
-                                      The BOM will be voided and its estimate removed from the project cost. Active work orders generated from it must be cancelled first. This cannot be undone.
+                                      The BOM will be voided and its estimate removed from the project cost. Active work orders generated
+                                      from it must be cancelled first. This cannot be undone — to change an approved design, revise it instead.
                                     </AlertDialogDescription>
                                   </AlertDialogHeader>
                                   <AlertDialogFooter>
@@ -1245,7 +2545,82 @@ function BomsTab({ onChanged }: { onChanged?: () => void }) {
       {woFromBom ? (
         <GenerateWoDialog bom={woFromBom} open={!!woFromBom} onOpenChange={(o) => !o && setWoFromBom(null)} onCreated={() => { setView('manufacturing'); onChanged?.() }} />
       ) : null}
+      {routingFor ? (
+        <RoutingDialog bom={routingFor} open={!!routingFor} onOpenChange={(o) => !o && setRoutingFor(null)} onSaved={() => list.reload()} />
+      ) : null}
+      {reviseFrom ? (
+        <ReviseBomDialog
+          bom={reviseFrom}
+          open={!!reviseFrom}
+          onOpenChange={(o) => !o && setReviseFrom(null)}
+          onDone={() => { setView('manufacturing'); list.reload(); onChanged?.() }}
+        />
+      ) : null}
     </div>
+  )
+}
+
+function TriangleAlertIcon() {
+  return <XCircle className="size-3" aria-hidden />
+}
+
+// ---------- revise an approved BOM (new DRAFT revision) ----------
+
+function ReviseBomDialog({ bom, open, onOpenChange, onDone }: { bom: Bom; open: boolean; onOpenChange: (o: boolean) => void; onDone: () => void }) {
+  const [notes, setNotes] = useState('')
+  const [effectiveFrom, setEffectiveFrom] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const save = async () => {
+    setSaving(true)
+    try {
+      const rev = await apiPost<Bom>(`/api/manufacturing/boms/${bom.id}/actions`, {
+        action: 'revise',
+        notes: notes.trim() || undefined,
+        effectiveFrom: effectiveFrom || undefined,
+      })
+      toast.success(`${rev.bomNo} rev ${rev.revision} created (DRAFT)`, {
+        description: 'Edit the lines, then approve it — approval supersedes the current revision.',
+      })
+      onDone()
+      onOpenChange(false)
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Revise {bom.bomNo} (rev {bom.revision})</DialogTitle>
+          <DialogDescription>
+            Creates revision {bom.revision + 1} as a DRAFT copy. The current approved revision stays live and keep producing until
+            you approve the new one — then it is superseded automatically. Approved BOMs are never edited in place.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="rev-eff">Effective From</Label>
+            <Input id="rev-eff" type="date" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} className="h-11" />
+            <p className="text-xs text-muted-foreground">Optional. Leave blank to use the approval date.</p>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="rev-notes">Change reason (ECO)</Label>
+            <Textarea id="rev-notes" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="e.g. 8mm gusset instead of 6mm, per customer drawing B" className="min-h-16" />
+          </div>
+        </div>
+        <DialogFooter className="gap-2 sm:flex-row">
+          <Button variant="outline" onClick={() => onOpenChange(false)} className="h-11">Cancel</Button>
+          <Button onClick={save} disabled={saving} className="h-11 min-w-32">
+            {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Pencil className="size-4" aria-hidden />}
+            Create revision
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -1286,8 +2661,10 @@ function NewBomDialog({
   const activeProjects = (projects.data ?? []).filter((p) => p.status === 'PENDING' || p.status === 'RUNNING')
 
   const [pid, setPid] = useState(projectId ?? '')
+  const [outputItemId, setOutputItemId] = useState('')
   const [productName, setProductName] = useState('')
   const [drawingRef, setDrawingRef] = useState('')
+  const [effectiveFrom, setEffectiveFrom] = useState('')
   const [notes, setNotes] = useState('')
   const [rows, setRows] = useState<BomDraftRow[]>([emptyBomRow()])
   const [saving, setSaving] = useState(false)
@@ -1296,6 +2673,10 @@ function NewBomDialog({
     setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)))
 
   const itemMap = useMemo(() => new Map(masters.items.map((i) => [i.id, i])), [masters.items])
+  // The output item is what the BOM makes (FG / sub-assembly). Any active,
+  // non-service catalog item can be made, so the picker is not narrowed to
+  // stock items — fabricated assemblies are often tracked as FG items.
+  const outputItems = masters.items.filter((i) => i.active && !i.isService)
 
   const validRows = rows.filter((r) => r.itemId && num(r.qty) > 0)
   const totalEst = validRows.reduce((s, r) => {
@@ -1306,14 +2687,18 @@ function NewBomDialog({
 
   const save = async () => {
     if (!pid) return toast.error('Pick the project')
+    if (!outputItemId) return toast.error('Pick the output item this BOM makes')
+    if (validRows.some((r) => r.itemId === outputItemId)) return toast.error('The output item cannot also be a component of its own BOM')
     if (!productName.trim()) return toast.error('Product / assembly name is required')
     if (validRows.length === 0) return toast.error('Add at least one material line with quantity')
     setSaving(true)
     try {
       const res = await apiPost<Bom>('/api/manufacturing/boms', {
         projectId: pid,
+        itemId: outputItemId,
         productName: productName.trim(),
         drawingRef: drawingRef.trim() || undefined,
+        effectiveFrom: effectiveFrom || undefined,
         notes: notes.trim() || undefined,
         lines: validRows.map((r) => {
           const it = itemMap.get(r.itemId)!
@@ -1336,7 +2721,7 @@ function NewBomDialog({
       })
       onApproved()
       onOpenChange(false)
-      setProductName(''); setDrawingRef(''); setNotes('')
+      setProductName(''); setDrawingRef(''); setNotes(''); setOutputItemId(''); setEffectiveFrom('')
       setRows([emptyBomRow()])
     } catch (e) {
       toastError(e)
@@ -1374,13 +2759,41 @@ function NewBomDialog({
                 </Select>
               </div>
             ) : null}
-            <div className={`space-y-1.5 ${projectId ? 'sm:col-span-2' : ''}`}>
+            <div className={`space-y-1.5 ${projectId ? 'sm:col-span-2' : 'sm:col-span-2'}`}>
+              <Label>Output Item (what this BOM makes)</Label>
+              <Select
+                value={outputItemId || undefined}
+                onValueChange={(v) => {
+                  setOutputItemId(v)
+                  if (!productName.trim()) setProductName(itemMap.get(v)?.name ?? '')
+                }}
+              >
+                <SelectTrigger className="h-11 data-[size=default]:h-11 w-full">
+                  <SelectValue placeholder="Select finished item…" />
+                </SelectTrigger>
+                <SelectContent className="max-h-64">
+                  {outputItems.map((i) => (
+                    <SelectItem key={i.id} value={i.id}>
+                      {i.code} — {i.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                MRP explodes sales-order demand through this link. A BOM without an output item cannot be approved.
+              </p>
+            </div>
+            <div className="space-y-1.5">
               <Label htmlFor="bom-product">Product / Assembly Name</Label>
               <Input id="bom-product" value={productName} onChange={(e) => setProductName(e.target.value)} placeholder="e.g. Canopy Frame — Level 1" className="h-11" />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="bom-dwg">Drawing Reference</Label>
               <Input id="bom-dwg" value={drawingRef} onChange={(e) => setDrawingRef(e.target.value)} placeholder="Optional" className="h-11" />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="bom-eff">Effective From</Label>
+              <Input id="bom-eff" type="date" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} className="h-11" />
             </div>
           </div>
 
@@ -1551,13 +2964,21 @@ function NewBomDialog({
 // ---------- BOM lines viewer (with MRP stock check) ----------
 
 function BomLinesDialog({ bom, open, onOpenChange }: { bom: Bom; open: boolean; onOpenChange: (o: boolean) => void }) {
+  const [usedItem, setUsedItem] = useState<{ id: string; label: string } | null>(null)
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[92dvh] flex-col overflow-hidden sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>{bom.bomNo} — {bom.productName}</DialogTitle>
+          <DialogTitle>
+            {bom.bomNo} rev {bom.revision} — {bom.productName}
+          </DialogTitle>
           <DialogDescription>
-            {bom.project?.projectNo} · {bom.items.length} line(s) · gross = qty + wastage. Stock check against current inventory.
+            {bom.project?.projectNo} · makes {bom.item ? `${bom.item.code} (${bom.item.name})` : 'an unlinked item'} ·{' '}
+            {bom.items.length} line(s) · gross = qty + wastage. Stock check against current inventory.
+            {bom.effectiveFrom ? ` Effective ${dateStr(bom.effectiveFrom)}${bom.effectiveTo ? ` → ${dateStr(bom.effectiveTo)}` : ' → open'}.` : ''}
+            {bom.supersedes ? ` Supersedes ${bom.supersedes.bomNo} rev ${bom.supersedes.revision}.` : ''}
+            {bom.supersededBy ? ` Superseded by ${bom.supersededBy.bomNo} rev ${bom.supersededBy.revision}.` : ''}
           </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-auto erp-scroll-y">
@@ -1576,7 +2997,14 @@ function BomLinesDialog({ bom, open, onOpenChange }: { bom: Bom; open: boolean; 
               {bom.items.map((i) => (
                 <TableRow key={i.id}>
                   <TableCell>
-                    <span className="block max-w-44 truncate">{i.item.name}</span>
+                    <button
+                      type="button"
+                      className="block max-w-44 truncate text-left hover:underline focus-visible:underline"
+                      title="Show where this material is used"
+                      onClick={() => setUsedItem({ id: i.itemId, label: `${i.item.code} — ${i.item.name}` })}
+                    >
+                      {i.item.name}
+                    </button>
                     <span className="block text-xs tabular-nums text-muted-foreground">{i.item.code}</span>
                   </TableCell>
                   <TableCell className="hidden sm:table-cell">
@@ -1615,6 +3043,541 @@ function BomLinesDialog({ bom, open, onOpenChange }: { bom: Bom; open: boolean; 
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    {usedItem ? (
+      <WhereUsedDialog itemId={usedItem.id} label={usedItem.label} open={!!usedItem} onOpenChange={(o) => !o && setUsedItem(null)} />
+    ) : null}
+    </>
+  )
+}
+
+// ---------- costing: standard vs actual roll-up ----------
+
+function CostStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-md border p-2.5">
+      <p className="text-[11px] uppercase tracking-wide text-muted-foreground">{label}</p>
+      <p className="text-sm font-semibold tabular-nums">{value}</p>
+    </div>
+  )
+}
+
+function CostingTab() {
+  const [from, setFrom] = useState(() => {
+    const d = new Date()
+    d.setDate(d.getDate() - 59)
+    return d.toISOString().slice(0, 10)
+  })
+  const [to, setTo] = useState(todayISO())
+  const report = useApi<CostingReport | null>(`/api/manufacturing/costing?from=${from}&to=${to}`)
+  const [openWo, setOpenWo] = useState<WorkOrderCostRow | null>(null)
+  const [trueUpFor, setTrueUpFor] = useState<WorkOrderCostRow | null>(null)
+  const [busy, setBusy] = useState(false)
+  const data = report.data
+
+  const trueUp = async () => {
+    if (!trueUpFor) return
+    setBusy(true)
+    try {
+      const res = await apiPost<{ woNo: string; posted: number; date: string | null; overheadRatePct: number }>(
+        `/api/manufacturing/costing/${trueUpFor.id}`,
+        { action: 'true-up' }
+      )
+      toast.success(
+        Math.abs(res.posted) < 0.005 ? `${res.woNo} already matches the ${res.overheadRatePct}% rate` : `${res.woNo} overhead restated`,
+        { description: Math.abs(res.posted) < 0.005 ? 'Nothing to post.' : `${res.posted > 0 ? '+' : ''}${money(res.posted)} posted on ${res.date}.` }
+      )
+      setTrueUpFor(null)
+      report.reload()
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  if (report.loading) return <TableSkeleton rows={6} cols={8} />
+  if (report.error) return <ErrorState error={report.error} onRetry={() => report.reload()} entity="costing" />
+  if (!data) return null
+
+  const s = data.summary
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="space-y-1.5">
+          <Label htmlFor="cost-from" className="text-xs text-muted-foreground">From</Label>
+          <Input id="cost-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="h-11 w-40" />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="cost-to" className="text-xs text-muted-foreground">To</Label>
+          <Input id="cost-to" type="date" value={to} onChange={(e) => setTo(e.target.value)} className="h-11 w-40" />
+        </div>
+        <Button variant="outline" onClick={() => report.reload()} className="h-11 gap-2">
+          <RefreshCw className="size-4" aria-hidden /> Refresh
+        </Button>
+        <p className="text-xs text-muted-foreground">
+          Overhead absorption is <span className="font-medium text-foreground">{data.overheadRatePct}%</span> of
+          material + labour — {data.overheadRatePct === 0 ? 'set it in Masters → Company to cost work properly.' : 'change it in Masters → Company.'}
+        </p>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        <KpiCard title="Standard" value={`₹${money(s.standardCost)}`} icon={ClipboardList} hint={`${s.measuredCount} measured order(s)`} />
+        <KpiCard title="Actual" value={`₹${money(s.actualCost)}`} icon={Wrench} hint="material + labour + overhead" />
+        <KpiCard
+          title="Variance"
+          value={`₹${money(s.variance)}`}
+          icon={s.variance > 0 ? XCircle : BadgeCheck}
+          tone={s.variance > 0 ? 'negative' : 'positive'}
+          hint={s.variancePct === null ? 'no standard to compare' : `${s.variancePct}% vs standard`}
+        />
+        <KpiCard
+          title="Overhead absorbed"
+          value={`₹${money(s.overheadCost)}`}
+          icon={Building2}
+          hint={`${data.overheadRatePct}% of prime cost`}
+        />
+      </div>
+
+      <Card className="p-0">
+        <CardContent className="p-0">
+          <div className="border-b p-3">
+            <SectionHeading
+              title="Work orders: standard vs actual"
+              description="Standard is the approved revision's material + routed labour, pro-rated to the units received. Actual is what the floor recorded — click a row for the operation breakdown."
+            />
+          </div>
+          <div className="max-h-[52dvh] overflow-auto erp-scroll">
+            <Table>
+              <TableHeader className="sticky top-0 z-10 bg-card">
+                <TableRow>
+                  <TableHead>Work order</TableHead>
+                  <TableHead className="hidden md:table-cell">BOM</TableHead>
+                  <TableHead className="text-right">Accepted</TableHead>
+                  <TableHead className="text-right">Standard</TableHead>
+                  <TableHead className="text-right">Material</TableHead>
+                  <TableHead className="text-right">Labour</TableHead>
+                  <TableHead className="text-right">Overhead</TableHead>
+                  <TableHead className="text-right">Variance</TableHead>
+                  <TableHead className="w-24 text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {data.rows.map((row) => (
+                  <TableRow key={row.id} className="cursor-pointer" onClick={() => setOpenWo(row)}>
+                    <TableCell>
+                      <div className="font-medium">{row.woNo}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {row.status.toLowerCase()} · {row.project?.name ?? 'no project'}
+                        {!row.hasRouting ? ' · no routing' : ''}
+                      </div>
+                    </TableCell>
+                    <TableCell className="hidden text-xs md:table-cell">
+                      {row.bomNo ? `${row.bomNo} rev ${row.revision}` : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {qtyFmt(row.acceptedQty)}
+                      <span className="text-xs text-muted-foreground"> / {qtyFmt(row.outputQty)}</span>
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {row.variance === null ? <span className="text-muted-foreground">not measured</span> : <Money value={row.standardCost} />}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums"><Money value={row.materialCost} /></TableCell>
+                    <TableCell className="text-right tabular-nums"><Money value={row.labourCost} /></TableCell>
+                    <TableCell className="text-right tabular-nums"><Money value={row.overheadCost} /></TableCell>
+                    <TableCell className={cn('text-right font-medium tabular-nums', row.variance !== null && row.variance > 0 && 'text-destructive', row.variance !== null && row.variance < 0 && 'text-primary')}>
+                      {row.variance === null ? '—' : <Money value={row.variance} />}
+                    </TableCell>
+                    <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-9 gap-1"
+                        onClick={() => setTrueUpFor(row)}
+                        disabled={row.overheadCost === 0 && data.overheadRatePct === 0}
+                        title="Restate absorbed overhead to the current rate"
+                      >
+                        <RefreshCw className="size-3.5" aria-hidden /> True-up
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {data.rows.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={9} className="text-center text-sm text-muted-foreground">No work orders in this window.</TableCell>
+                  </TableRow>
+                ) : null}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-amber-500/40 bg-amber-500/5 p-4">
+        <p className="text-sm font-medium">What these numbers can and cannot tell you</p>
+        <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+          {data.limitations.map((note, i) => <li key={i}>• {note}</li>)}
+          <li>• An order with nothing received yet shows “not measured” — there is no produced quantity to standardise against.</li>
+        </ul>
+      </Card>
+
+      {openWo ? (
+        <Dialog open={!!openWo} onOpenChange={(o) => !o && setOpenWo(null)}>
+          <DialogContent className="flex max-h-[92dvh] flex-col overflow-hidden sm:max-w-4xl">
+            <DialogHeader>
+              <DialogTitle>{openWo.woNo} — cost breakdown</DialogTitle>
+              <DialogDescription>
+                {openWo.bomNo ? `${openWo.bomNo} rev ${openWo.revision}` : 'No BOM'} · {qtyFmt(openWo.acceptedQty)} of{' '}
+                {qtyFmt(openWo.outputQty)} accepted · {qtyFmt(openWo.hours)} hours recorded
+              </DialogDescription>
+            </DialogHeader>
+            <div className="min-h-0 flex-1 space-y-3 overflow-y-auto erp-scroll-y pr-1">
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <CostStat label="Standard / unit" value={`₹${money(openWo.standardPerUnit)}`} />
+                <CostStat label="Material std / unit" value={`₹${money(openWo.standardMaterialPerUnit)}`} />
+                <CostStat label="Labour std / unit" value={`₹${money(openWo.standardLabourPerUnit)}`} />
+                <CostStat label="Overhead std / unit" value={`₹${money(openWo.standardOverheadPerUnit)}`} />
+              </div>
+              <div className="overflow-auto erp-scroll rounded-md border">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Seq</TableHead>
+                      <TableHead>Operation</TableHead>
+                      <TableHead className="hidden sm:table-cell">Work center</TableHead>
+                      <TableHead className="text-right">Material</TableHead>
+                      <TableHead className="text-right">Labour</TableHead>
+                      <TableHead className="text-right">Overhead</TableHead>
+                      <TableHead className="text-right">Total</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {openWo.tasks.map((task) => (
+                      <TableRow key={task.taskNo}>
+                        <TableCell className="tabular-nums">{task.seq}</TableCell>
+                        <TableCell>
+                          {operationLabel(task.operation)}
+                          <span className="ml-1 text-xs text-muted-foreground">({task.status.toLowerCase()})</span>
+                        </TableCell>
+                        <TableCell className="hidden max-w-40 truncate text-xs sm:table-cell">{task.workCenter ?? '—'}</TableCell>
+                        <TableCell className="text-right tabular-nums"><Money value={task.materialCost} /></TableCell>
+                        <TableCell className="text-right tabular-nums"><Money value={task.labourCost} /></TableCell>
+                        <TableCell className="text-right tabular-nums"><Money value={task.overheadCost} /></TableCell>
+                        <TableCell className="text-right font-medium tabular-nums"><Money value={task.total} /></TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+              {openWo.variance !== null ? (
+                <div className="grid grid-cols-3 gap-3">
+                  <CostStat label="Material variance" value={`₹${money(openWo.materialVariance ?? 0)}`} />
+                  <CostStat label="Labour variance" value={`₹${money(openWo.labourVariance ?? 0)}`} />
+                  <CostStat label="Overhead variance" value={`₹${money(openWo.overheadVariance ?? 0)}`} />
+                </div>
+              ) : null}
+              {!openWo.hasRouting ? (
+                <p className="text-xs text-muted-foreground">
+                  This revision has no routing, so no labour standard exists and labour variance is not meaningful.
+                </p>
+              ) : null}
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setOpenWo(null)} className="h-11">Close</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      ) : null}
+
+      <AlertDialog open={!!trueUpFor} onOpenChange={(o) => !o && setTrueUpFor(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Restate absorbed overhead on {trueUpFor?.woNo}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The order absorbed <Money value={trueUpFor?.overheadCost ?? 0} />; the {data.overheadRatePct}% rate says it
+              should absorb ₹{money(r2((trueUpFor?.materialCost ?? 0) + (trueUpFor?.labourCost ?? 0)) * (data.overheadRatePct / 100))}.
+              The difference is posted once to WIP against the Factory Overhead Absorbed ledger, dated on the last completed
+              operation, and the per-operation amounts are restated. Nothing is deleted and running it twice posts nothing.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="h-11">Cancel</AlertDialogCancel>
+            <AlertDialogAction className="h-11" disabled={busy} onClick={(e) => { e.preventDefault(); void trueUp() }}>
+              {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null} Post true-up
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  )
+}
+
+// ---------- routing editor (operations of a BOM revision) ----------
+
+interface RoutingDraftRow {
+  key: number
+  seq: string
+  operation: string
+  workCenterId: string
+  runMinutesPerUnit: string
+  setupMinutes: string
+  queueMinutes: string
+  moveMinutes: string
+  inspectionMinutes: string
+}
+
+let routingSeq = 0
+const emptyRoutingRow = (seq: number): RoutingDraftRow => ({
+  key: ++routingSeq,
+  seq: String(seq),
+  operation: 'CUTTING',
+  workCenterId: '',
+  runMinutesPerUnit: '',
+  setupMinutes: '',
+  queueMinutes: '',
+  moveMinutes: '',
+  inspectionMinutes: '',
+})
+
+function RoutingDialog({ bom, open, onOpenChange, onSaved }: { bom: Bom; open: boolean; onOpenChange: (o: boolean) => void; onSaved: () => void }) {
+  const centers = useApi<WorkCenter[]>('/api/manufacturing/work-centers?all=1')
+  const detail = useApi<RoutingDetail | null>(open ? `/api/manufacturing/routing?bomId=${bom.id}` : null)
+  // Standard cost of the revision as currently saved: material at line rates plus
+  // the labour these routes imply at each centre's cost per hour.
+  const standard = useApi<{ standard: StandardCost; overheadRatePct: number } | null>(
+    open ? `/api/manufacturing/costing?bomId=${bom.id}` : null
+  )
+  const [rows, setRows] = useState<RoutingDraftRow[]>([])
+  const [loaded, setLoaded] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const activeCenters = (centers.data ?? []).filter((c) => c.active)
+  const frozen = bom.status !== 'DRAFT'
+
+  if (!loaded && detail.data) {
+    setRows(
+      detail.data.operations.length
+        ? detail.data.operations.map((op) => ({
+            key: ++routingSeq,
+            seq: String(op.seq),
+            operation: op.operation,
+            workCenterId: op.workCenterId,
+            runMinutesPerUnit: String(op.runMinutesPerUnit),
+            setupMinutes: String(op.setupMinutes),
+            queueMinutes: String(op.queueMinutes),
+            moveMinutes: String(op.moveMinutes),
+            inspectionMinutes: String(op.inspectionMinutes),
+          }))
+        : [emptyRoutingRow(1)]
+    )
+    setLoaded(true)
+  }
+
+  const setRow = (key: number, patch: Partial<RoutingDraftRow>) =>
+    setRows((rs) => rs.map((r) => (r.key === key ? { ...r, ...patch } : r)))
+
+  const totalPerUnit = rows.reduce((sum, r) => sum + num(r.runMinutesPerUnit), 0)
+  const totalBatch = rows.reduce(
+    (sum, r) => sum + num(r.runMinutesPerUnit) + num(r.setupMinutes) + num(r.queueMinutes) + num(r.moveMinutes) + num(r.inspectionMinutes),
+    0
+  )
+
+  const save = async () => {
+    const valid = rows.filter((r) => r.workCenterId)
+    if (!valid.length) return toast.error('Add at least one operation with a work centre')
+    setSaving(true)
+    try {
+      await apiPut('/api/manufacturing/routing', {
+        bomId: bom.id,
+        operations: valid.map((r, index) => ({
+          seq: Math.max(1, Math.trunc(num(r.seq) || index + 1)),
+          operation: r.operation,
+          workCenterId: r.workCenterId,
+          runMinutesPerUnit: num(r.runMinutesPerUnit),
+          setupMinutes: num(r.setupMinutes),
+          queueMinutes: num(r.queueMinutes),
+          moveMinutes: num(r.moveMinutes),
+          inspectionMinutes: num(r.inspectionMinutes),
+        })),
+      })
+      toast.success(`${bom.bomNo} routing saved`, { description: `${valid.length} operation(s) — approve the revision to freeze it.` })
+      onSaved()
+      onOpenChange(false)
+    } catch (e) {
+      toastError(e)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[92dvh] flex-col overflow-hidden sm:max-w-5xl">
+        <DialogHeader>
+          <DialogTitle>Routing — {bom.bomNo} rev {bom.revision}</DialogTitle>
+          <DialogDescription>
+            Ordered operations that make {bom.productName}, each on a work centre with setup and run time. Capacity planning and
+            OEE both read these numbers, so enter the shop-floor times, not targets.
+            {frozen ? ` This revision is ${bom.status}: the route is frozen — create a revision to change it.` : ''}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto erp-scroll-y pr-1">
+          {detail.error ? <ErrorState error={detail.error} onRetry={() => detail.reload()} entity="routing" /> : null}
+          {rows.map((r) => (
+            <div key={r.key} className="rounded-md border p-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <span className="text-xs font-medium text-muted-foreground">Operation {r.seq}</span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-9 text-muted-foreground hover:text-destructive"
+                  onClick={() => setRows((rs) => (rs.length > 1 ? rs.filter((x) => x.key !== r.key) : rs))}
+                  disabled={rows.length === 1 || frozen}
+                  aria-label="Remove operation"
+                >
+                  <Trash2 className="size-4" aria-hidden />
+                </Button>
+              </div>
+              <div className="grid gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Seq</Label>
+                  <Input type="number" min="1" value={r.seq} onChange={(e) => setRow(r.key, { seq: e.target.value })} className="h-10 text-right tabular-nums" disabled={frozen} aria-label="Sequence" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Operation</Label>
+                  <Select value={r.operation} onValueChange={(v) => setRow(r.key, { operation: v })} disabled={frozen}>
+                    <SelectTrigger className="h-10 w-full" aria-label="Operation"><SelectValue /></SelectTrigger>
+                    <SelectContent className="max-h-64">
+                      {MANUFACTURING_OPERATIONS.map((o) => <SelectItem key={o.key} value={o.key}>{o.label}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1 sm:col-span-1 lg:col-span-2">
+                  <Label className="text-xs text-muted-foreground">Work Center</Label>
+                  <Select value={r.workCenterId || undefined} onValueChange={(v) => setRow(r.key, { workCenterId: v })} disabled={frozen}>
+                    <SelectTrigger className="h-10 w-full" aria-label="Work center"><SelectValue placeholder="Select centre…" /></SelectTrigger>
+                    <SelectContent className="max-h-64">
+                      {activeCenters.map((c) => <SelectItem key={c.id} value={c.id}>{c.code} — {c.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Run min / unit</Label>
+                  <Input type="number" min="0" step="any" value={r.runMinutesPerUnit} onChange={(e) => setRow(r.key, { runMinutesPerUnit: e.target.value })} className="h-10 text-right tabular-nums" disabled={frozen} aria-label="Run minutes per unit" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Setup min</Label>
+                  <Input type="number" min="0" step="any" value={r.setupMinutes} onChange={(e) => setRow(r.key, { setupMinutes: e.target.value })} className="h-10 text-right tabular-nums" disabled={frozen} aria-label="Setup minutes" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Queue min</Label>
+                  <Input type="number" min="0" step="any" value={r.queueMinutes} onChange={(e) => setRow(r.key, { queueMinutes: e.target.value })} className="h-10 text-right tabular-nums" disabled={frozen} aria-label="Queue minutes" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Move min</Label>
+                  <Input type="number" min="0" step="any" value={r.moveMinutes} onChange={(e) => setRow(r.key, { moveMinutes: e.target.value })} className="h-10 text-right tabular-nums" disabled={frozen} aria-label="Move minutes" />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs text-muted-foreground">Inspection min</Label>
+                  <Input type="number" min="0" step="any" value={r.inspectionMinutes} onChange={(e) => setRow(r.key, { inspectionMinutes: e.target.value })} className="h-10 text-right tabular-nums" disabled={frozen} aria-label="Inspection minutes" />
+                </div>
+              </div>
+            </div>
+          ))}
+
+          <Button
+            variant="outline"
+            className="h-11 w-full gap-2 border-dashed"
+            onClick={() => setRows((rs) => [...rs, emptyRoutingRow(rs.length + 1)])}
+            disabled={frozen}
+          >
+            <Plus className="size-4" aria-hidden /> Add operation
+          </Button>
+        </div>
+
+        <DialogFooter className="flex-col gap-2 sm:flex-row sm:items-center">
+          <div className="text-xs text-muted-foreground">
+            {rows.length} operation(s) · {qtyFmt(r2(totalPerUnit))} min/unit · {qtyFmt(r2(totalBatch))} min per batch (setup + queue + move + inspection)
+            {standard.data ? (
+              <span className="block">
+                Saved standard: ₹{money(standard.data.standard.materialCost)} material + ₹
+                {money(standard.data.standard.labourCost)} labour
+                {standard.data.overheadRatePct > 0 ? ` + ₹${money(standard.data.standard.overheadCost)} overhead` : ''} ={' '}
+                <span className="font-medium text-foreground">₹{money(standard.data.standard.standardCost)} per unit</span>
+                {standard.data.standard.unpricedOperations.length > 0
+                  ? ` — ${standard.data.standard.unpricedOperations.length} operation(s) have no cost/hour, so labour is understated`
+                  : ''}
+              </span>
+            ) : null}
+          </div>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => onOpenChange(false)} className="h-11">Close</Button>
+            <Button onClick={save} disabled={saving || frozen || !loaded} className="h-11 min-w-32">
+              {saving ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Wrench className="size-4" aria-hidden />}
+              Save routing
+            </Button>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ---------- where-used / impact review ----------
+
+function WhereUsedDialog({ itemId, label, open, onOpenChange }: { itemId: string; label: string; open: boolean; onOpenChange: (o: boolean) => void }) {
+  const res = useApi<BomWhereUsed | null>(open ? `/api/manufacturing/boms/where-used?itemId=${itemId}` : null)
+  const rows = res.data?.usedIn ?? []
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[88dvh] flex-col overflow-hidden sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Where used — {label}</DialogTitle>
+          <DialogDescription>
+            Every live BOM revision that consumes this item. Check this before changing a component: an approved revision that is
+            already consuming it must be superseded, not edited.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="min-h-0 flex-1 overflow-auto erp-scroll-y">
+          {res.loading ? (
+            <TableSkeleton rows={4} cols={4} />
+          ) : res.error ? (
+            <ErrorState error={res.error} onRetry={() => res.reload()} entity="where-used" />
+          ) : rows.length === 0 ? (
+            <EmptyState title="Not used in any BOM" hint="This item is only consumed directly (task issue) or not consumed at all." icon={PackageSearch} />
+          ) : (
+            <Table>
+              <TableHeader className="sticky top-0 z-10 bg-card">
+                <TableRow>
+                  <TableHead>BOM</TableHead>
+                  <TableHead>Makes</TableHead>
+                  <TableHead className="text-right">Qty / unit</TableHead>
+                  <TableHead className="text-right">Work Orders</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {rows.map((r) => (
+                  <TableRow key={r.bomId}>
+                    <TableCell>
+                      <span className="block font-medium tabular-nums">{r.bomNo}</span>
+                      <span className="block text-xs text-muted-foreground">rev {r.revision} · {r.project?.projectNo}</span>
+                    </TableCell>
+                    <TableCell className="max-w-40 truncate">{r.outputItem ? `${r.outputItem.code}` : '—'}</TableCell>
+                    <TableCell className="text-right tabular-nums">{qtyFmt(r.qtyPer)} <span className="text-xs text-muted-foreground">{r.uom}</span></TableCell>
+                    <TableCell className="text-right tabular-nums">{r.workOrders}</TableCell>
+                    <TableCell><StatusBadge status={r.status} /></TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} className="h-11">Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -1624,22 +3587,26 @@ function GenerateWoDialog({ bom, open, onOpenChange, onCreated }: { bom: Bom; op
   const [priority, setPriority] = useState<string>('NORMAL')
   const [startDate, setStartDate] = useState(todayISO())
   const [endDate, setEndDate] = useState('')
+  const [outputQty, setOutputQty] = useState('1')
   const [notes, setNotes] = useState('')
   const [saving, setSaving] = useState(false)
+  const batch = num(outputQty) > 0 ? num(outputQty) : 1
 
   const save = async () => {
+    if (!(num(outputQty) > 0)) return toast.error('Output quantity must be greater than zero')
     setSaving(true)
     try {
       const res = await apiPost<WorkOrder>('/api/manufacturing/work-orders', {
         projectId: bom.projectId,
         bomId: bom.id,
+        outputQty: batch,
         priority,
         startDate: startDate || undefined,
         endDate: endDate || undefined,
         notes: notes.trim() || undefined,
       })
       toast.success(`${res.woNo} generated`, {
-        description: `${bom.items.length} line(s) grossed with wastage — now add operation tasks (cutting → … → finishing).`,
+        description: `${bom.items.length} line(s) grossed with wastage for ${qtyFmt(batch)} × ${bom.item?.code ?? bom.productName} — now add operation tasks (cutting → … → finishing).`,
       })
       onCreated()
       onOpenChange(false)
@@ -1656,7 +3623,7 @@ function GenerateWoDialog({ bom, open, onOpenChange, onCreated }: { bom: Bom; op
         <DialogHeader>
           <DialogTitle>Generate Work Order from {bom.bomNo}</DialogTitle>
           <DialogDescription>
-            Lines are pulled from the approved BOM with wastage gross-up. Schedule and priority below.
+            Lines are pulled from the approved BOM rev {bom.revision} with wastage gross-up, scaled by the batch quantity. Schedule and priority below.
           </DialogDescription>
         </DialogHeader>
         <div className="space-y-4">
@@ -1674,7 +3641,7 @@ function GenerateWoDialog({ bom, open, onOpenChange, onCreated }: { bom: Bom; op
                   <TableRow key={i.id}>
                     <TableCell className="max-w-44 truncate">{i.item.name}</TableCell>
                     <TableCell className="text-right tabular-nums">{qtyFmt(i.qty)}</TableCell>
-                    <TableCell className="text-right font-medium tabular-nums">{qtyFmt(i.grossQty)} <span className="text-xs text-muted-foreground">{i.uom}</span></TableCell>
+                    <TableCell className="text-right font-medium tabular-nums">{qtyFmt(r2(i.grossQty * batch))} <span className="text-xs text-muted-foreground">{i.uom}</span></TableCell>
                   </TableRow>
                 ))}
                 {bom.items.length > 6 ? (
@@ -1687,7 +3654,20 @@ function GenerateWoDialog({ bom, open, onOpenChange, onCreated }: { bom: Bom; op
               </TableBody>
             </Table>
           </div>
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid gap-4 sm:grid-cols-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="wo-qty">Output Qty ({bom.item?.uom ?? 'units'})</Label>
+              <Input
+                id="wo-qty"
+                type="number"
+                inputMode="decimal"
+                min="0"
+                step="any"
+                value={outputQty}
+                onChange={(e) => setOutputQty(e.target.value)}
+                className="h-11 text-right tabular-nums"
+              />
+            </div>
             <div className="space-y-1.5">
               <Label>Priority</Label>
               <Select value={priority} onValueChange={setPriority}>

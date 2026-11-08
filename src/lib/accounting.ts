@@ -36,6 +36,11 @@ export const ACCOUNTS = {
   WIP: { code: 'WIP', name: 'Manufacturing Work in Progress', group: 'Current Assets' },
   LABP: { code: 'LABP', name: 'Labour Cost Payable / Absorbed', group: 'Current Liabilities' },
   MFGV: { code: 'MFGV', name: 'Manufacturing Cost Variance', group: 'Direct Expenses' },
+  // Absorbed factory overhead. A liability because it is an ACCRUAL: WIP is
+  // debited and this account credited when an operation completes, and the
+  // credit is reversed (contram) once an accountant books the real overhead
+  // spend. Nothing is ever paid from it, so it must not be treated as cash.
+  OVHA: { code: 'OVHA', name: 'Factory Overhead Absorbed', group: 'Current Liabilities' },
   SALS: { code: 'SALS', name: 'Sales Account', group: 'Direct Income' },
   JWIN: { code: 'JWIN', name: 'Jobwork Income', group: 'Direct Income' },
   PURC: { code: 'PURC', name: 'Purchase Account', group: 'Direct Expenses' },

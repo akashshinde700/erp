@@ -21,6 +21,7 @@ const bomLineSchema = z.object({
 const bomUpdateSchema = z.object({
   productName: z.string().min(1).max(160).optional(),
   drawingRef: z.string().max(80).optional().nullable(),
+  effectiveFrom: z.string().optional().nullable(),
   notes: z.string().max(1000).optional().nullable(),
   lines: z.array(bomLineSchema).min(1).max(200),
 })
@@ -31,7 +32,7 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
     const actor = await assertMutationAccess()
     const body = bomUpdateSchema.parse(await req.json())
     const bom = await updateBom(id, body)
-    await logAudit('UPDATE', 'Bom', id, `${bom.bomNo} revised (${body.lines.length} lines)`, actor?.email)
+    await logAudit('UPDATE', 'Bom', id, `${bom.bomNo} rev ${bom.revision} draft edited (${body.lines.length} lines)`, actor?.email)
     return ok(bom)
   } catch (e) {
     return handleError(e)

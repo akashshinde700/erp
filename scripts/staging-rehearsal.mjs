@@ -142,6 +142,47 @@ try {
   check('general ledger still balances (Dr = Cr)', Math.abs(Number(gl.dr) - Number(gl.cr)) < 0.011, `Dr=${gl.dr} Cr=${gl.cr}`)
   const neg = await db.all('SELECT itemId, warehouseId, ROUND(SUM(qtyIn - qtyOut), 4) q FROM StockLedger GROUP BY itemId, warehouseId HAVING q < -0.0001')
   check('no negative stock balance', neg.length === 0, JSON.stringify(neg.slice(0, 3)))
+
+  // ---- legacy ownership + BOM/MRP readiness (reporting, not pass/fail) -----
+  // Deleting or re-assigning rows is never part of a migration rehearsal, so
+  // these print what an operator must confirm instead of asserting on it.
+  step('legacy ownership + MRP readiness (review only)')
+  if (ops.length > 1) {
+    console.log(`      ${ops.length} operating companies after the tenant migration:`)
+    for (const c of ops) {
+      const rows = {}
+      for (const t of ['Party', 'Item', 'SalesInvoice', 'Bom', 'WorkOrder', 'StockLedger']) {
+        if (!tables.includes(t)) continue
+        rows[t] = Number((await db.get(`SELECT COUNT(*) c FROM \`${t}\` WHERE companyId = ?`, [c.id])).c)
+      }
+      console.log(`        ${c.name} (${c.id}): ${JSON.stringify(rows)}`)
+    }
+    console.log('      CONFIRM with the business which company owns the legacy rows above before deploying.')
+  } else if (ops.length === 1) {
+    console.log(`      single operating company "${ops[0].name}" — it owns every legacy row.`)
+  }
+
+  const hasItemId = tables.includes('Bom') && Number((await db.get("SELECT COUNT(*) c FROM information_schema.columns WHERE table_schema=DATABASE() AND table_name='Bom' AND column_name='itemId'")).c) > 0
+  if (!hasItemId && tables.includes('Bom')) {
+    console.log('      Bom.itemId is absent — the BOM-revision migration did not run.')
+  } else if (hasItemId) {
+    const total = Number((await db.get('SELECT COUNT(*) c FROM Bom WHERE itemId IS NULL')).c)
+    console.log(`      ${total} BOM(s) still have no output item (MRP will not explode them).`)
+    const sample = await db.all('SELECT bomNo, productName, revision, status FROM Bom WHERE itemId IS NULL ORDER BY bomNo LIMIT 10')
+    for (const b of sample) console.log(`        ${b.bomNo} rev ${b.revision} [${b.status}] "${b.productName}"`)
+    if (total > sample.length) console.log(`        ... ${total - sample.length} more`)
+    if (total > 0) console.log('      Next: node scripts/backfill-bom-output-items.mjs --dry-run (docs/MRP_AND_BOM_REVISIONS.md §3)')
+    const clashes = await db.all("SELECT itemId, COUNT(*) n FROM Bom WHERE itemId IS NOT NULL AND status <> 'CANCELLED' GROUP BY itemId HAVING n > 1")
+    check('no output item has two live BOMs (MRP needs one effective revision per item)', clashes.length === 0, JSON.stringify(clashes.slice(0, 3)))
+    const liveRevisions = await db.all("SELECT itemId, COUNT(*) n FROM Bom WHERE status = 'APPROVED' GROUP BY itemId HAVING n > 1")
+    check('no output item has two APPROVED revisions', liveRevisions.length === 0, JSON.stringify(liveRevisions.slice(0, 3)))
+  }
+  if (tables.includes('WorkOrder')) {
+    const defaulted = Number((await db.get("SELECT COUNT(*) c FROM WorkOrder WHERE outputQty = 1 AND status IN ('OPEN','IN_PROGRESS')")).c)
+    if (defaulted) console.log(`      ${defaulted} open work order(s) default to outputQty = 1 — confirm that is the real batch size before MRP nets their output.`)
+    const unlinked = Number((await db.get("SELECT COUNT(*) c FROM WorkOrder WHERE outputItemId IS NULL AND status IN ('OPEN','IN_PROGRESS')")).c)
+    if (unlinked) console.log(`      ${unlinked} open work order(s) have no output item — MRP cannot net their planned output as supply.`)
+  }
 } catch (e) {
   check('rehearsal completed', false, e.message)
 } finally {

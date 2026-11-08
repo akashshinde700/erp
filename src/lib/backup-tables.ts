@@ -11,6 +11,16 @@
  * with P2003 — and a backup will silently drop its rows.
  */
 export const WORKFLOW_MODELS_CHILDREN_FIRST = [
+  // routing / capacity / OEE (children first: downtime and routing hang off
+  // work centres and BOM revisions; tasks reference work centres)
+  'shiftHoliday',
+  'shift',
+  'machineDowntime',
+  'routingOperation',
+  'shiftCalendar',
+  // MRP snapshots (MrpLine cascades from MrpRun, but children still go first)
+  'mrpLine',
+  'mrpRun',
   // MapSoft-parity tables (books, stock adjustments, CRM, service calls)
   'serviceCall',
   'leadActivity',
@@ -57,6 +67,8 @@ export const WORKFLOW_MODELS_CHILDREN_FIRST = [
   // Payment.tdsSectionId): restored early, before the legacy invoices/payments
   'salesperson',
   'tdsSection',
+  // work centres last: routing operations, tasks and calendars point at them
+  'workCenter',
 ] as const
 
 export type WorkflowModel = (typeof WORKFLOW_MODELS_CHILDREN_FIRST)[number]

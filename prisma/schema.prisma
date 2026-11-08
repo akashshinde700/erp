@@ -63,6 +63,12 @@ model Company {
   booksLockedUntil DateTime?
   booksLockedBy    String?
 
+  // ---- overhead absorption (manufacturing cost roll-up) ----
+  /// Percentage of prime cost (material + labour) absorbed as factory overhead
+  /// on every completed operation. 0 = off. Accrued in OVHA, never in a bank
+  /// account; reversal is a contram posting (src/lib/costing.ts).
+  overheadRatePct Float @default(0)
+
   users OrgUser[]
 
   purchaseRequisitions PurchaseRequisition[]
@@ -112,6 +118,11 @@ model Company {
   serviceCalls              ServiceCall[]
   rfqs                      Rfq[]
   supplierQuotes            SupplierQuote[]
+  mrpRuns                   MrpRun[]
+  workCenters               WorkCenter[]
+  shiftCalendars            ShiftCalendar[]
+  routingOperations         RoutingOperation[]
+  machineDowntimes          MachineDowntime[]
 }
 
 // ---------- Organization logins (SaaS) ----------
@@ -295,6 +306,9 @@ model Item {
   adjustmentLines    StockAdjustmentLine[]
   serviceCalls       ServiceCall[]
   rfqLines           RfqLine[]
+  outputBoms         Bom[]             @relation("BomOutput")
+  woOutputs          WorkOrder[]       @relation("WorkOrderOutput")
+  mrpLines           MrpLine[]
 
   @@unique([companyId, code])
 }
@@ -690,16 +704,37 @@ model Bom {
   project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
   productName String // product / assembly name
   drawingRef  String?
-  status      String    @default("DRAFT") // DRAFT | APPROVED | CANCELLED
+  // Output (made) item. Required on every new BOM; null only on legacy rows
+  // created before item linkage existed (backfill checklist, see
+  // docs/MRP_AND_BOM_REVISIONS.md). MRP explodes demand through this link.
+  itemId       String?
+  item         Item?      @relation("BomOutput", fields: [itemId], references: [id])
+  // Immutable revision chain: a revision is never edited after approval —
+  // changing an approved BOM means creating revision N+1 (see reviseBom()).
+  revision     Int       @default(1)
+  effectiveFrom DateTime?
+  effectiveTo   DateTime?
+  supersedesId  String?   @unique
+  supersedes    Bom?      @relation("BomRevision", fields: [supersedesId], references: [id])
+  supersededBy  Bom?      @relation("BomRevision")
+  status      String    @default("DRAFT") // DRAFT | APPROVED | SUPERSEDED | CANCELLED
   approvedAt  DateTime?
+  /// Standard labour per one output unit, rolled up from the routing when the
+  /// revision is approved (frozen with the revision like the routes themselves).
+  standardLabourCost Float @default(0)
+  /// Minutes per one output unit across all routed operations (setup included).
+  standardMinutes    Float @default(0)
   notes       String?   @db.Text
   createdAt   DateTime  @default(now())
 
   items      BomItem[]
   workOrders WorkOrder[]
+  routing    RoutingOperation[]
 
   @@unique([companyId, bomNo])
+  @@unique([companyId, itemId, revision])
   @@index([projectId])
+  @@index([companyId, itemId, status])
 }
 
 model BomItem {
@@ -723,6 +758,179 @@ model BomItem {
   woLines WorkOrderLine[]
 }
 
+// ---------- Material Requirements Planning ----------
+
+/// A saved MRP snapshot: independent demand (approved sales orders) exploded
+/// through the effective BOM of each output item, netted against own stock,
+/// open work-order supply, approved unreceived POs and approved requisitions.
+/// Lines are a plan, never a posting: only an explicit user action turns a
+/// suggestion into a DRAFT purchase requisition or work order.
+model MrpRun {
+  id               String   @id @default(cuid())
+  companyId        String
+  company          Company  @relation(fields: [companyId], references: [id])
+  runNo            String // MRP-2526-001 (FY-aware)
+  asOf             DateTime
+  horizonDays      Int      @default(30)
+  status           String   @default("DRAFT") // DRAFT | APPROVED | CLOSED
+  salesOrderCount  Int      @default(0)
+  workOrderCount   Int      @default(0)
+  requirementCount Int      @default(0)
+  suggestionCount  Int      @default(0)
+  shortageItems    Int      @default(0)
+  createdBy        String?
+  approvedBy       String?
+  approvedAt       DateTime?
+  notes            String?  @db.Text
+  createdAt        DateTime @default(now())
+
+  lines MrpLine[]
+
+  @@unique([companyId, runNo])
+  @@index([companyId, status, asOf])
+}
+
+model MrpLine {
+  id           String   @id @default(cuid())
+  runId        String
+  run          MrpRun   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  itemId       String
+  item         Item     @relation(fields: [itemId], references: [id])
+  level        Int      @default(0) // 0 = independent demand, 1..n = exploded component
+  needBy       DateTime
+  grossQty     Float    @default(0)
+  onHandQty    Float    @default(0)
+  incomingQty  Float    @default(0) // approved unreceived POs + approved, un-ordered PRs
+  woSupplyQty  Float    @default(0) // open work orders producing this item
+  netQty       Float    @default(0)
+  suggestion   String   @default("NONE") // BUY | MAKE | NONE
+  bomNo        String? // effective BOM used to explode this line (MAKE lines)
+  pegging      String?  @db.Text // human-readable demand trail
+  createdDocType String? // PR | WO
+  createdDocNo   String?
+
+  @@index([runId, level, itemId])
+  @@index([itemId])
+}
+
+// ---------- routing, work centres, shift calendars, downtime (OEE) ----------
+
+/// A work centre: a machine or a manned cell that performs operations. Capacity
+/// is per shift; `calendar` layers shift hours and holidays on top.
+model WorkCenter {
+  id          String   @id @default(cuid())
+  companyId   String   @default("") // filled by the tenant extension; "" fails the FK
+  company     Company  @relation(fields: [companyId], references: [id])
+  code        String
+  name        String
+  /// MACHINE | CELL | MANUAL — a MANUAL centre has no machine-hour capacity cap.
+  type        String   @default("MACHINE")
+  machineNo   String?
+  /** Parallel capacity: how many jobs this centre can run at once. */
+  parallelCapacity Int  @default(1)
+  /** Hours available per working day when no calendar shift covers it. */
+  dailyHours  Float    @default(8)
+  costPerHour Float    @default(0)
+  active      Boolean  @default(true)
+  notes       String?  @db.Text
+  createdAt   DateTime @default(now())
+
+  calendar ShiftCalendar?
+  operations RoutingOperation[]
+  tasks    ProductionTask[]
+  downtimes MachineDowntime[]
+
+  @@unique([companyId, code])
+  @@index([companyId, active])
+}
+
+/// One shift template per work centre (GENERAL / DAY / NIGHT …). Kept as a
+/// separate row from Shift so a centre can run several shifts a day.
+model ShiftCalendar {
+  id          String   @id @default(cuid())
+  companyId   String   @default("") // filled by the tenant extension
+  company     Company  @relation(fields: [companyId], references: [id])
+  workCenterId String @unique
+  workCenter  WorkCenter @relation(fields: [workCenterId], references: [id], onDelete: Cascade)
+  /** Informational working week (0 = Sunday … 6 = Saturday) as CSV. */
+  workDays    String   @default("1,2,3,4,5,6")
+  createdAt   DateTime @default(now())
+
+  shifts   Shift[]
+  holidays ShiftHoliday[]
+
+  @@unique([companyId, workCenterId])
+}
+
+model Shift {
+  id         String        @id @default(cuid())
+  calendarId String
+  calendar   ShiftCalendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+  name       String        @default("GENERAL")
+  /** Minutes from midnight; startMin + durationMin may cross midnight. */
+  startMin    Int          @default(540) // 09:00
+  durationMin Int          @default(480) // 8 h
+  active      Boolean      @default(true)
+
+  @@index([calendarId, startMin])
+}
+
+model ShiftHoliday {
+  id         String        @id @default(cuid())
+  calendarId String
+  calendar   ShiftCalendar @relation(fields: [calendarId], references: [id], onDelete: Cascade)
+  date       DateTime
+  reason     String?
+
+  @@unique([calendarId, date])
+}
+
+/// Routing: the ordered operations a BOM revision is built with, each on a work
+/// centre with setup / run / queue / move / inspection time factors.
+model RoutingOperation {
+  id            String   @id @default(cuid())
+  companyId     String   @default("")
+  company       Company  @relation(fields: [companyId], references: [id])
+  bomId         String
+  bom           Bom      @relation(fields: [bomId], references: [id], onDelete: Cascade)
+  seq           Int      @default(1)
+  operation     String   // must match a manufacturing operation key
+  workCenterId  String
+  workCenter    WorkCenter @relation(fields: [workCenterId], references: [id])
+  /** Per-unit processing time (minutes) and per-batch setup time. */
+  runMinutesPerUnit Float @default(0)
+  setupMinutes      Float @default(0)
+  queueMinutes      Float @default(0)
+  moveMinutes       Float @default(0)
+  inspectionMinutes Float @default(0)
+  /** Operations with the same seq run in parallel; a higher seq waits. */
+  parallel       Boolean  @default(false)
+  notes          String?  @db.Text
+  createdAt      DateTime @default(now())
+
+  @@unique([companyId, bomId, seq])
+  @@index([companyId, bomId])
+}
+
+/// Unplanned/reactive downtime with a reason — the Availability half of OEE.
+/// Planned maintenance windows use the same table with `planned = true`.
+model MachineDowntime {
+  id           String     @id @default(cuid())
+  companyId    String     @default("")
+  company      Company    @relation(fields: [companyId], references: [id])
+  workCenterId String
+  workCenter   WorkCenter @relation(fields: [workCenterId], references: [id], onDelete: Cascade)
+  startedAt    DateTime
+  endedAt      DateTime?
+  reason       String     // BREAKDOWN | CHANGEOVER | NO_MATERIAL | NO_OPERATOR | POWER | MAINTENANCE | QUALITY | OTHER
+  planned      Boolean    @default(false)
+  notes        String?    @db.Text
+  createdBy    String?
+  createdAt    DateTime   @default(now())
+
+  @@index([companyId, workCenterId, startedAt])
+}
+
 model WorkOrder {
   id          String    @id @default(cuid())
   companyId   String    @default("") // filled by the tenant extension; "" fails the FK
@@ -732,12 +940,21 @@ model WorkOrder {
   project     Project   @relation(fields: [projectId], references: [id])
   bomId       String?
   bom         Bom?      @relation(fields: [bomId], references: [id])
+  // What this order produces and how much. bomId supplies the recipe; these
+  // columns make the *quantity* explicit so MRP can net open work orders as
+  // supply instead of assuming "one BOM batch".
+  outputItemId String?
+  outputItem   Item?     @relation("WorkOrderOutput", fields: [outputItemId], references: [id])
+  outputQty    Float     @default(1)
   date        DateTime
   startDate   DateTime?
   endDate     DateTime?
   priority    String    @default("NORMAL") // LOW | NORMAL | HIGH | URGENT
   status      String    @default("OPEN") // OPEN | IN_PROGRESS | COMPLETED | CANCELLED
   completedAt DateTime?
+  /// Factory overhead absorbed by the completed operations of this order.
+  /// Part of WIP, settled into the finished-goods receipt like material/labour.
+  overheadCost Float    @default(0)
   notes       String?   @db.Text
   createdAt   DateTime  @default(now())
 
@@ -775,6 +992,11 @@ model ProductionTask {
   employeeId     String? // assigned worker (task assigning)
   employee       Employee? @relation(fields: [employeeId], references: [id])
   machineNo      String?
+  /** Work centre the operation runs on (routing / capacity / OEE). */
+  workCenterId   String?
+  workCenter     WorkCenter? @relation(fields: [workCenterId], references: [id])
+  /** Planned minutes from the routing snapshot (setup + run + queue/move). */
+  plannedMinutes Float     @default(0)
   plannedQty     Float
   actualQty      Float     @default(0)
   rejectionQty   Float     @default(0)
@@ -785,6 +1007,9 @@ model ProductionTask {
   materialItem   Item?     @relation("TaskMaterial", fields: [materialItemId], references: [id])
   materialQty    Float     @default(0)
   materialCost   Float     @default(0) // at avg cost on issue date
+  /// Absorbed factory overhead for this operation (rate × prime cost). Part of
+  /// the task's WIP contribution and of the work-order cost roll-up.
+  overheadCost   Float     @default(0)
   status         String    @default("PENDING") // PENDING | ASSIGNED | IN_PROGRESS | COMPLETED | CANCELLED
   dueDate        DateTime?
   startedAt      DateTime?

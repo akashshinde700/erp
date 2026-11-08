@@ -41,6 +41,10 @@ export const ACCOUNTS = {
   // credit is reversed (contram) once an accountant books the real overhead
   // spend. Nothing is ever paid from it, so it must not be treated as cash.
   OVHA: { code: 'OVHA', name: 'Factory Overhead Absorbed', group: 'Current Liabilities' },
+  // Contra-expense credited when absorbed overhead is cleared at period end
+  // (Dr OVHA / Cr OVRC). Against the tagged overhead expense ledgers it leaves
+  // exactly the under- (debit) or over-absorbed (credit) amount in P&L.
+  OVRC: { code: 'OVRC', name: 'Factory Overhead Recovered', group: 'Direct Expenses' },
   SALS: { code: 'SALS', name: 'Sales Account', group: 'Direct Income' },
   JWIN: { code: 'JWIN', name: 'Jobwork Income', group: 'Direct Income' },
   PURC: { code: 'PURC', name: 'Purchase Account', group: 'Direct Expenses' },

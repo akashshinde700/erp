@@ -68,6 +68,11 @@ model Company {
   /// on every completed operation. 0 = off. Accrued in OVHA, never in a bank
   /// account; reversal is a contram posting (src/lib/costing.ts).
   overheadRatePct Float @default(0)
+  overheadBudgetAnnual  Float?
+  primeCostBudgetAnnual Float?
+  overheadRateSetAt     DateTime?
+  overheadRateSetBy     String?
+  overheadRateReason    String?
 
   users OrgUser[]
 
@@ -1862,6 +1867,7 @@ model LedgerAccount {
   group     String
   nature    String // ASSET | LIABILITY | EQUITY | INCOME | EXPENSE
   active    Boolean  @default(true)
+  isFactoryOverhead Boolean @default(false)
   createdBy String?
   createdAt DateTime @default(now())
 

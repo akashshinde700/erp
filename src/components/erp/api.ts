@@ -1255,17 +1255,28 @@ export function useApi<T>(path: string | null) {
   return { data, loading, error, reload }
 }
 
-/** All masters in parallel (parties/items/warehouses/processes). */
+/**
+ * All masters in parallel (parties/items/warehouses/processes).
+ * NOTE: the empty fallbacks are module-level constants on purpose — a fresh
+ * `?? []` per render breaks referential equality and can spin
+ * useResetOnChange into an infinite render loop when a dialog mounts before
+ * masters finish loading.
+ */
+const NO_PARTIES: Party[] = []
+const NO_ITEMS: Item[] = []
+const NO_WAREHOUSES: Warehouse[] = []
+const NO_PROCESSES: Process[] = []
+
 export function useMasters() {
   const parties = useApi<Party[]>('/api/masters/parties')
   const items = useApi<Item[]>('/api/masters/items')
   const warehouses = useApi<Warehouse[]>('/api/masters/warehouses')
   const processes = useApi<Process[]>('/api/masters/processes')
   return {
-    parties: parties.data ?? [],
-    items: items.data ?? [],
-    warehouses: warehouses.data ?? [],
-    processes: processes.data ?? [],
+    parties: parties.data ?? NO_PARTIES,
+    items: items.data ?? NO_ITEMS,
+    warehouses: warehouses.data ?? NO_WAREHOUSES,
+    processes: processes.data ?? NO_PROCESSES,
     loading: parties.loading || items.loading || warehouses.loading || processes.loading,
     reloadAll: () => {
       parties.reload()

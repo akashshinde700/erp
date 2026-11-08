@@ -3,7 +3,7 @@ import { db } from '@/lib/db'
 import { logAudit } from '@/lib/audit'
 import { requirePlatformAdmin } from '@/lib/platform'
 import { runAsTenant } from '@/lib/tenant'
-import { WORKFLOW_MODELS_CHILDREN_FIRST, WORKFLOW_MODELS_PARENTS_FIRST, delegate } from '@/lib/backup-tables'
+import { EARLY_RESTORE_MODELS, WORKFLOW_MODELS_CHILDREN_FIRST, WORKFLOW_MODELS_PARENTS_FIRST, delegate } from '@/lib/backup-tables'
 
 /**
  * POST /api/backup/restore — {confirm:'RESTORE', snapshot}
@@ -137,6 +137,10 @@ export async function POST(req: Request) {
         if (d.partyProcessRates?.length) await tx.partyProcessRate.createMany({ data: d.partyProcessRates as never })
         if (d.stockLedger?.length) await tx.stockLedger.createMany({ data: d.stockLedger as never })
         if (d.accountLedger?.length) await tx.accountLedger.createMany({ data: d.accountLedger as never })
+        for (const model of EARLY_RESTORE_MODELS) {
+          const rows = (d.workflow ?? {})[model]
+          if (Array.isArray(rows) && rows.length) await delegate(tx, model).createMany({ data: rows })
+        }
 
         for (const inv of (d.salesInvoices ?? []) as { items?: unknown[] }[]) {
           const { items, ...head } = inv as never as Record<string, unknown>

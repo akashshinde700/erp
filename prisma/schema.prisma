@@ -59,6 +59,10 @@ model Company {
   maxWarehouses Int?
   maxParties    Int?
 
+  // ---- books control: no GL row may be posted or cancelled on/before this date ----
+  booksLockedUntil DateTime?
+  booksLockedBy    String?
+
   users OrgUser[]
 
   purchaseRequisitions PurchaseRequisition[]
@@ -99,6 +103,13 @@ model Company {
   tenantWorkOrders          WorkOrder[]
   tenantProductionTasks     ProductionTask[]
   tenantPayments            Payment[]
+  ledgerAccounts            LedgerAccount[]
+  journalVouchers           JournalVoucher[]
+  tdsSections               TdsSection[]
+  stockAdjustments          StockAdjustment[]
+  salespersons              Salesperson[]
+  leads                     Lead[]
+  serviceCalls              ServiceCall[]
   rfqs                      Rfq[]
   supplierQuotes            SupplierQuote[]
 }
@@ -216,6 +227,7 @@ model Party {
   email       String?
   openingBal  Float    @default(0) // + = receivable / - = payable
   creditLimit Float    @default(0) // 0 = unlimited; enforced when approving sales orders
+  creditDays  Int      @default(0) // payment terms in days; due date = invoice date + creditDays (aging)
   active      Boolean  @default(true)
   createdAt   DateTime @default(now())
 
@@ -232,6 +244,8 @@ model Party {
   salesOrders      SalesOrder[]
   paymentSchedules PaymentSchedule[]
   partyAdvances    PartyAdvance[]
+  leads            Lead[]
+  serviceCalls     ServiceCall[]
   rfqSuppliers     RfqSupplier[]
   supplierQuotes   SupplierQuote[]
 
@@ -278,6 +292,8 @@ model Item {
   inventoryLots      InventoryLot[]
   serialNumbers      SerialNumber[]
   lotMovements       LotMovement[]
+  adjustmentLines    StockAdjustmentLine[]
+  serviceCalls       ServiceCall[]
   rfqLines           RfqLine[]
 
   @@unique([companyId, code])
@@ -300,6 +316,7 @@ model Warehouse {
   productionReceipts ProductionReceipt[]
   inventoryLots      InventoryLot[]
   serialNumbers      SerialNumber[]
+  stockAdjustments   StockAdjustment[]
   lotMovements       LotMovement[]
 
   @@unique([companyId, code])
@@ -390,30 +407,32 @@ model AccountLedger {
 // ---------- Sales ----------
 
 model SalesInvoice {
-  id                String   @id @default(cuid())
-  companyId         String   @default("") // filled by the tenant extension; "" fails the FK
-  company           Company  @relation(fields: [companyId], references: [id])
+  id                String       @id @default(cuid())
+  companyId         String       @default("") // filled by the tenant extension; "" fails the FK
+  company           Company      @relation(fields: [companyId], references: [id])
   invoiceNo         String
   date              DateTime
   partyId           String
-  party             Party    @relation(fields: [partyId], references: [id])
+  party             Party        @relation(fields: [partyId], references: [id])
   poNo              String?
-  pos               String   @default("27") // place of supply (state code)
-  interState        Boolean  @default(false)
-  taxInclusive      Boolean  @default(false)
-  taxable           Float    @default(0)
-  discount          Float    @default(0)
-  cgst              Float    @default(0)
-  sgst              Float    @default(0)
-  igst              Float    @default(0)
-  roundOff          Float    @default(0)
-  grandTotal        Float    @default(0)
-  paidAmount        Float    @default(0)
-  status            String   @default("POSTED") // POSTED | CANCELLED
-  source            String   @default("MANUAL") // MANUAL | JOBWORK | DELIVERY_CHALLAN
+  pos               String       @default("27") // place of supply (state code)
+  interState        Boolean      @default(false)
+  taxInclusive      Boolean      @default(false)
+  taxable           Float        @default(0)
+  discount          Float        @default(0)
+  cgst              Float        @default(0)
+  sgst              Float        @default(0)
+  igst              Float        @default(0)
+  roundOff          Float        @default(0)
+  grandTotal        Float        @default(0)
+  paidAmount        Float        @default(0)
+  status            String       @default("POSTED") // POSTED | CANCELLED
+  source            String       @default("MANUAL") // MANUAL | JOBWORK | DELIVERY_CHALLAN
   deliveryChallanId String? // controlled dispatch source; null for direct/legacy invoices
-  remarks           String?  @db.Text
-  createdAt         DateTime @default(now())
+  salespersonId     String?
+  salesperson       Salesperson? @relation(fields: [salespersonId], references: [id])
+  remarks           String?      @db.Text
+  createdAt         DateTime     @default(now())
 
   // Tally export stamps (records only — never blocks re-export)
   tallyExportedAt DateTime?
@@ -628,7 +647,8 @@ model Employee {
   active     Boolean  @default(true)
   createdAt  DateTime @default(now())
 
-  tasks ProductionTask[]
+  serviceCalls ServiceCall[]
+  tasks        ProductionTask[]
 
   @@unique([companyId, code])
 }
@@ -1161,29 +1181,31 @@ model ItemVendor {
 // ---------- Quote-to-Cash (Quotation → SO → Dispatch/QC → Invoice) ----------
 
 model SalesQuotation {
-  id           String               @id @default(cuid())
-  companyId    String
-  company      Company              @relation(fields: [companyId], references: [id])
-  quotationNo  String
-  revisionNo   Int                  @default(1)
-  supersedesId String?
-  date         DateTime
-  validUntil   DateTime
-  partyId      String
-  party        Party                @relation(fields: [partyId], references: [id])
-  status       String               @default("DRAFT") // DRAFT | SUBMITTED | APPROVED | REJECTED | ACCEPTED | EXPIRED | SUPERSEDED | CANCELLED
-  taxable      Float                @default(0)
-  cgst         Float                @default(0)
-  sgst         Float                @default(0)
-  igst         Float                @default(0)
-  grandTotal   Float                @default(0)
-  terms        String?              @db.Text
-  approvedBy   String?
-  approvedAt   DateTime?
-  createdBy    String?
-  createdAt    DateTime             @default(now())
-  lines        SalesQuotationLine[]
-  salesOrders  SalesOrder[]
+  id            String               @id @default(cuid())
+  companyId     String
+  company       Company              @relation(fields: [companyId], references: [id])
+  quotationNo   String
+  revisionNo    Int                  @default(1)
+  supersedesId  String?
+  date          DateTime
+  validUntil    DateTime
+  partyId       String
+  party         Party                @relation(fields: [partyId], references: [id])
+  status        String               @default("DRAFT") // DRAFT | SUBMITTED | APPROVED | REJECTED | ACCEPTED | EXPIRED | SUPERSEDED | CANCELLED
+  taxable       Float                @default(0)
+  cgst          Float                @default(0)
+  sgst          Float                @default(0)
+  igst          Float                @default(0)
+  grandTotal    Float                @default(0)
+  terms         String?              @db.Text
+  approvedBy    String?
+  approvedAt    DateTime?
+  salespersonId String?
+  salesperson   Salesperson?         @relation(fields: [salespersonId], references: [id])
+  createdBy     String?
+  createdAt     DateTime             @default(now())
+  lines         SalesQuotationLine[]
+  salesOrders   SalesOrder[]
 
   @@unique([companyId, quotationNo, revisionNo])
   @@index([companyId, status, date])
@@ -1228,6 +1250,8 @@ model SalesOrder {
   approvedBy       String?
   approvedAt       DateTime?
   notes            String?           @db.Text
+  salespersonId    String?
+  salesperson      Salesperson?      @relation(fields: [salespersonId], references: [id])
   createdBy        String?
   createdAt        DateTime          @default(now())
   lines            SalesOrderLine[]
@@ -1437,20 +1461,23 @@ model RefundAllocation {
 // ---------- Payments ----------
 
 model Payment {
-  id        String   @id @default(cuid())
-  companyId String   @default("") // filled by the tenant extension; "" fails the FK
-  company   Company  @relation(fields: [companyId], references: [id])
-  paymentNo String
-  date      DateTime
-  type      String // RECEIPT | PAYMENT
-  partyId   String
-  party     Party    @relation(fields: [partyId], references: [id])
-  amount    Float
-  mode      String   @default("CASH") // CASH | BANK | UPI | CHEQUE
-  refNo     String?
-  notes     String?  @db.Text
-  status    String   @default("POSTED") // POSTED | CANCELLED
-  createdAt DateTime @default(now())
+  id           String      @id @default(cuid())
+  companyId    String      @default("") // filled by the tenant extension; "" fails the FK
+  company      Company     @relation(fields: [companyId], references: [id])
+  paymentNo    String
+  date         DateTime
+  type         String // RECEIPT | PAYMENT
+  partyId      String
+  party        Party       @relation(fields: [partyId], references: [id])
+  amount       Float
+  mode         String      @default("CASH") // CASH | BANK | UPI | CHEQUE
+  refNo        String?
+  notes        String?     @db.Text
+  tdsSectionId String? // TDS at source: amount = net cash, settled = amount + tdsAmount
+  tdsSection   TdsSection? @relation(fields: [tdsSectionId], references: [id])
+  tdsAmount    Float       @default(0)
+  status       String      @default("POSTED") // POSTED | CANCELLED
+  createdAt    DateTime    @default(now())
 
   allocations PaymentAllocation[]
   advances    PartyAdvance[]
@@ -1589,4 +1616,226 @@ model SupplierQuoteLine {
   amount      Float
 
   @@unique([quoteId, rfqLineId])
+}
+
+// ---------------------------------------------------------------------------
+// Books: chart of accounts extension, journal vouchers, TDS
+// ---------------------------------------------------------------------------
+
+/// Organisation-defined ledger (expense / income / asset / liability heads).
+/// System accounts (DEBT, CRED, STKV, ...) live in src/lib/accounting.ts.
+model LedgerAccount {
+  id        String   @id @default(cuid())
+  companyId String
+  company   Company  @relation(fields: [companyId], references: [id])
+  code      String
+  name      String
+  group     String
+  nature    String // ASSET | LIABILITY | EQUITY | INCOME | EXPENSE
+  active    Boolean  @default(true)
+  createdBy String?
+  createdAt DateTime @default(now())
+
+  @@unique([companyId, code])
+}
+
+/// Manual double-entry journal (Dr = Cr enforced). Cancel = mirrored reversal.
+model JournalVoucher {
+  id           String        @id @default(cuid())
+  companyId    String
+  company      Company       @relation(fields: [companyId], references: [id])
+  voucherNo    String
+  date         DateTime
+  narration    String        @db.Text
+  status       String        @default("POSTED") // POSTED | CANCELLED
+  total        Float         @default(0)
+  cancelReason String?       @db.Text
+  createdBy    String?
+  cancelledBy  String?
+  createdAt    DateTime      @default(now())
+  lines        JournalLine[]
+
+  @@unique([companyId, voucherNo])
+  @@index([companyId, date])
+}
+
+model JournalLine {
+  id          String         @id @default(cuid())
+  journalId   String
+  journal     JournalVoucher @relation(fields: [journalId], references: [id], onDelete: Cascade)
+  account     String
+  accountName String
+  partyId     String?
+  debit       Float          @default(0)
+  credit      Float          @default(0)
+  remarks     String?
+
+  @@index([journalId])
+}
+
+/// TDS section master (194C, 194J, ...). Deducted on supplier payments
+/// (TDS payable) or suffered on customer receipts (TDS receivable).
+model TdsSection {
+  id              String    @id @default(cuid())
+  companyId       String
+  company         Company   @relation(fields: [companyId], references: [id])
+  section         String
+  description     String
+  ratePct         Float
+  thresholdSingle Float     @default(0)
+  thresholdAnnual Float     @default(0)
+  active          Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  payments        Payment[]
+
+  @@unique([companyId, section])
+}
+
+// ---------------------------------------------------------------------------
+// Inventory: stock adjustment with reason code and maker-checker approval
+// ---------------------------------------------------------------------------
+
+model StockAdjustment {
+  id           String                @id @default(cuid())
+  companyId    String
+  company      Company               @relation(fields: [companyId], references: [id])
+  adjNo        String
+  date         DateTime
+  warehouseId  String
+  warehouse    Warehouse             @relation(fields: [warehouseId], references: [id])
+  reasonCode   String // PHYSICAL_COUNT | DAMAGE | EXPIRY | THEFT_LOSS | FOUND | SCRAP | OTHER
+  notes        String?               @db.Text
+  status       String                @default("PENDING") // PENDING | APPROVED | REJECTED | CANCELLED
+  value        Float                 @default(0) // signed: + increase, - decrease (at posting rates)
+  requestedBy  String?
+  decidedBy    String?
+  decidedAt    DateTime?
+  decisionNote String?               @db.Text
+  cancelReason String?               @db.Text
+  createdAt    DateTime              @default(now())
+  lines        StockAdjustmentLine[]
+
+  @@unique([companyId, adjNo])
+  @@index([companyId, status, date])
+}
+
+model StockAdjustmentLine {
+  id           String          @id @default(cuid())
+  adjustmentId String
+  adjustment   StockAdjustment @relation(fields: [adjustmentId], references: [id], onDelete: Cascade)
+  itemId       String
+  item         Item            @relation(fields: [itemId], references: [id])
+  qtyChange    Float // + found / excess, - shortage / write-off
+  rate         Float           @default(0) // set at approval (avg cost for decreases)
+  value        Float           @default(0)
+
+  @@index([adjustmentId])
+}
+
+// ---------------------------------------------------------------------------
+// CRM: salespersons, leads and follow-up activities
+// ---------------------------------------------------------------------------
+
+model Salesperson {
+  id            String           @id @default(cuid())
+  companyId     String
+  company       Company          @relation(fields: [companyId], references: [id])
+  code          String
+  name          String
+  phone         String?
+  email         String?
+  monthlyTarget Float            @default(0)
+  active        Boolean          @default(true)
+  createdAt     DateTime         @default(now())
+  leads         Lead[]
+  quotations    SalesQuotation[]
+  salesOrders   SalesOrder[]
+  salesInvoices SalesInvoice[]
+
+  @@unique([companyId, code])
+}
+
+model Lead {
+  id                String         @id @default(cuid())
+  companyId         String
+  company           Company        @relation(fields: [companyId], references: [id])
+  leadNo            String
+  date              DateTime
+  contactName       String
+  organisation      String?
+  phone             String?
+  email             String?
+  city              String?
+  stateCode         String?
+  gstin             String?
+  source            String         @default("OTHER") // WEBSITE | REFERRAL | EXHIBITION | COLD_CALL | MARKETPLACE | EXISTING_CUSTOMER | OTHER
+  status            String         @default("NEW") // NEW | CONTACTED | QUALIFIED | PROPOSAL | WON | LOST
+  requirement       String?        @db.Text
+  expectedValue     Float          @default(0)
+  probability       Int            @default(10)
+  expectedCloseDate DateTime?
+  nextFollowUpAt    DateTime?
+  salespersonId     String?
+  salesperson       Salesperson?   @relation(fields: [salespersonId], references: [id])
+  partyId           String?
+  party             Party?         @relation(fields: [partyId], references: [id])
+  lostReason        String?        @db.Text
+  closedAt          DateTime?
+  createdBy         String?
+  createdAt         DateTime       @default(now())
+  activities        LeadActivity[]
+
+  @@unique([companyId, leadNo])
+  @@index([companyId, status])
+  @@index([companyId, nextFollowUpAt])
+}
+
+model LeadActivity {
+  id        String    @id @default(cuid())
+  leadId    String
+  lead      Lead      @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  type      String // CALL | MEETING | EMAIL | VISIT | NOTE
+  notes     String    @db.Text
+  dueAt     DateTime?
+  doneAt    DateTime?
+  createdBy String?
+  createdAt DateTime  @default(now())
+
+  @@index([leadId])
+}
+
+// ---------------------------------------------------------------------------
+// After-sales service calls (complaint -> assignment -> resolution -> invoice)
+// ---------------------------------------------------------------------------
+
+model ServiceCall {
+  id             String    @id @default(cuid())
+  companyId      String
+  company        Company   @relation(fields: [companyId], references: [id])
+  callNo         String
+  date           DateTime
+  partyId        String
+  party          Party     @relation(fields: [partyId], references: [id])
+  itemId         String?
+  item           Item?     @relation(fields: [itemId], references: [id])
+  serialNo       String?
+  complaint      String    @db.Text
+  priority       String    @default("MEDIUM") // LOW | MEDIUM | HIGH | CRITICAL
+  status         String    @default("OPEN") // OPEN | ASSIGNED | RESOLVED | CLOSED | CANCELLED
+  underWarranty  Boolean   @default(false)
+  assignedToId   String?
+  assignedTo     Employee? @relation(fields: [assignedToId], references: [id])
+  dueAt          DateTime?
+  resolution     String?   @db.Text
+  resolvedAt     DateTime?
+  closedAt       DateTime?
+  serviceCharge  Float     @default(0)
+  salesInvoiceId String?
+  cancelReason   String?   @db.Text
+  createdBy      String?
+  createdAt      DateTime  @default(now())
+
+  @@unique([companyId, callNo])
+  @@index([companyId, status])
+  @@index([partyId])
 }

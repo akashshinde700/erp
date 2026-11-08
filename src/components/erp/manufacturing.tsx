@@ -16,7 +16,6 @@ import {
   CalendarClock,
   CheckCircle2,
   ClipboardList,
-  Coins,
   FolderKanban,
   ListTodo,
   Loader2,
@@ -32,7 +31,6 @@ import {
   Users,
   Wrench,
   XCircle,
-  PackageCheck,
 } from 'lucide-react'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
@@ -44,7 +42,7 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+
 import { Textarea } from '@/components/ui/textarea'
 import {
   apiDelete,
@@ -98,10 +96,10 @@ import { ProductionReceiptsWorkspace } from './production-receipts'
 // Module shell
 // ===========================================================================
 
-type MfgTab = 'projects' | 'boms' | 'work-orders' | 'mrp' | 'capacity' | 'material-plan' | 'tasks' | 'pending' | 'employees' | 'centers' | 'oee' | 'costing' | 'quality'
 
 export function ManufacturingView() {
-  const [tab, setTab] = useState<MfgTab>('projects')
+  // Sub-section lives in the global store so the main sidebar tree can drive it.
+  const { mfgTab: tab, setMfgTab: setTab } = useErpUi()
   const [taskWoFilter, setTaskWoFilter] = useState<string>('all')
   const stats = useApi<ManufacturingStats | null>('/api/manufacturing/stats')
   const s = stats.data
@@ -157,97 +155,22 @@ export function ManufacturingView() {
         />
       </div>
 
-      <Tabs value={tab} onValueChange={(v) => setTab(v as MfgTab)}>
-        {/* The tab row scrolls horizontally on phones (6 module tabs don't fit
-            320-360px); globals.css adds a right-edge fade affordance on <sm. */}
-        <TabsList className="h-11 w-full justify-start overflow-x-auto sm:w-auto">
-          <TabsTrigger value="projects" className="h-11 gap-1.5 sm:h-9">
-            <FolderKanban className="size-4" aria-hidden /> Projects
-          </TabsTrigger>
-          <TabsTrigger value="boms" className="h-11 gap-1.5 sm:h-9">
-            <PackageSearch className="size-4" aria-hidden /> BOMs
-          </TabsTrigger>
-          <TabsTrigger value="work-orders" className="h-11 gap-1.5 sm:h-9">
-            <ClipboardList className="size-4" aria-hidden /> Work Orders
-          </TabsTrigger>
-          <TabsTrigger value="mrp" className="h-11 gap-1.5 sm:h-9">
-            <CalendarClock className="size-4" aria-hidden /> MRP
-          </TabsTrigger>
-          <TabsTrigger value="capacity" className="h-11 gap-1.5 sm:h-9">
-            <Gauge className="size-4" aria-hidden /> Capacity
-          </TabsTrigger>
-          <TabsTrigger value="material-plan" className="h-11 gap-1.5 sm:h-9">
-            <PackageSearch className="size-4" aria-hidden /> Material Plan
-          </TabsTrigger>
-          <TabsTrigger value="tasks" className="h-11 gap-1.5 sm:h-9">
-            <Wrench className="size-4" aria-hidden /> Tasks
-          </TabsTrigger>
-          <TabsTrigger value="pending" className="h-11 gap-1.5 sm:h-9">
-            <ListTodo className="size-4" aria-hidden /> Pending
-          </TabsTrigger>
-          <TabsTrigger value="employees" className="h-11 gap-1.5 sm:h-9">
-            <Users className="size-4" aria-hidden /> Employees
-          </TabsTrigger>
-          <TabsTrigger value="receipts" className="h-11 gap-1.5 sm:h-9">
-            <PackageCheck className="size-4" aria-hidden /> FG Receipts
-          </TabsTrigger>
-          <TabsTrigger value="centers" className="h-11 gap-1.5 sm:h-9">
-            <Building2 className="size-4" aria-hidden /> Work Centers
-          </TabsTrigger>
-          <TabsTrigger value="oee" className="h-11 gap-1.5 sm:h-9">
-            <Gauge className="size-4" aria-hidden /> OEE
-          </TabsTrigger>
-          <TabsTrigger value="costing" className="h-11 gap-1.5 sm:h-9">
-            <Coins className="size-4" aria-hidden /> Costing
-          </TabsTrigger>
-          <TabsTrigger value="quality" className="h-11 gap-1.5 sm:h-9">
-            <CheckCircle2 className="size-4" aria-hidden /> Quality
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="projects" className="mt-4">
-          <ProjectsTab onChanged={() => stats.reload()} />
-        </TabsContent>
-        <TabsContent value="boms" className="mt-4">
-          <BomsTab onChanged={() => stats.reload()} />
-        </TabsContent>
-        <TabsContent value="work-orders" className="mt-4">
-          <WorkOrdersTab onViewTasks={gotoTasks} onChanged={() => stats.reload()} />
-        </TabsContent>
-        <TabsContent value="mrp" className="mt-4">
-          <MrpTab onChanged={() => stats.reload()} />
-        </TabsContent>
-        <TabsContent value="capacity" className="mt-4">
-          <CapacityTab />
-        </TabsContent>
-        <TabsContent value="material-plan" className="mt-4">
-          <MaterialPlanTab />
-        </TabsContent>
-        <TabsContent value="tasks" className="mt-4">
-          <TasksTab woFilter={taskWoFilter} onWoFilterChange={setTaskWoFilter} onChanged={() => stats.reload()} />
-        </TabsContent>
-        <TabsContent value="pending" className="mt-4">
-          <PendingTab onGoTasks={gotoTasks} onChanged={() => stats.reload()} />
-        </TabsContent>
-        <TabsContent value="employees" className="mt-4">
-          <EmployeesTab onChanged={() => stats.reload()} />
-        </TabsContent>
-        <TabsContent value="receipts" className="mt-4">
-          <ProductionReceiptsWorkspace />
-        </TabsContent>
-        <TabsContent value="centers" className="mt-4">
-          <WorkCentersTab />
-        </TabsContent>
-        <TabsContent value="oee" className="mt-4">
-          <OeeTab />
-        </TabsContent>
-        <TabsContent value="costing" className="mt-4">
-          <CostingTab />
-        </TabsContent>
-        <TabsContent value="quality" className="mt-4">
-          <QualityWorkspace />
-        </TabsContent>
-      </Tabs>
+      <div className="min-w-0">
+          {tab === 'projects' && <ProjectsTab onChanged={() => stats.reload()} />}
+          {tab === 'boms' && <BomsTab onChanged={() => stats.reload()} />}
+          {tab === 'work-orders' && <WorkOrdersTab onViewTasks={gotoTasks} onChanged={() => stats.reload()} />}
+          {tab === 'mrp' && <MrpTab onChanged={() => stats.reload()} />}
+          {tab === 'capacity' && <CapacityTab />}
+          {tab === 'material-plan' && <MaterialPlanTab />}
+          {tab === 'tasks' && <TasksTab woFilter={taskWoFilter} onWoFilterChange={setTaskWoFilter} onChanged={() => stats.reload()} />}
+          {tab === 'pending' && <PendingTab onGoTasks={gotoTasks} onChanged={() => stats.reload()} />}
+          {tab === 'employees' && <EmployeesTab onChanged={() => stats.reload()} />}
+          {tab === 'receipts' && <ProductionReceiptsWorkspace />}
+          {tab === 'centers' && <WorkCentersTab />}
+          {tab === 'oee' && <OeeTab />}
+          {tab === 'costing' && <CostingTab />}
+          {tab === 'quality' && <QualityWorkspace />}
+        </div>
     </div>
   )
 }

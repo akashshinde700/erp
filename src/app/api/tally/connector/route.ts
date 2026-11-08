@@ -1,6 +1,6 @@
 import { fail, handleError, ok } from '@/lib/api'
 import { logAudit } from '@/lib/audit'
-import { assertCompanyAccess, assertMutationAccess } from '@/lib/platform'
+import { assertCompanyAccess, assertFeature, assertMutationAccess } from '@/lib/platform'
 import { loadInvoiceVoucher, loadPaymentVoucher, vouchersToXml, getCompany, type TallyDocKind } from '@/lib/tally'
 
 /**
@@ -114,6 +114,14 @@ export async function GET(req: Request) {
       return ok({ job: { jobId: job.id, doc: job.doc, docNo: job.docNo, xml: job.xml } })
     }
 
+    // Local CLI status uses the connector bearer; UI status uses the session.
+    if (mode === 'status') {
+      if (!(await bearerOk(req))) return fail('Connector token invalid or revoked', 401)
+      const s = store()
+      const now = Date.now()
+      return ok({ paired: !!s.tokenHash, online: (s.lastSeenAt ?? 0) > now - ONLINE_WINDOW_MS, pending: s.jobs.filter((j) => !j.doneAt).length })
+    }
+
     // UI status
     await assertCompanyAccess()
     const s = store()
@@ -191,6 +199,7 @@ export async function POST(req: Request) {
 
     if (action === 'queue') {
       const actor = await assertMutationAccess()
+      await assertFeature('exportData')
       const doc = (body.doc ?? '').toUpperCase() as TallyDocKind
       const id = body.id ?? ''
       if (!id || !['SALES', 'PURCHASE', 'PAYMENT'].includes(doc)) return fail('doc and id are required', 400)

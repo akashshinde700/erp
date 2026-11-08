@@ -92,27 +92,39 @@ async function serverGet(server, path, token) {
 async function postToTally(tallyUrl, xml) {
   const res = await fetch(tallyUrl, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/xml' },
+    headers: { 'Content-Type': 'application/xml; charset=utf-8' },
     body: xml,
     redirect: 'manual',
     signal: AbortSignal.timeout(30000),
   })
   const text = await res.text()
+  if (!res.ok) throw new Error(`Tally HTTP ${res.status}: ${text.slice(0, 240)}`)
   return text
 }
 
 function parseImportResult(xml) {
+  if (!/<ENVELOPE\b/i.test(xml) || !/<IMPORTRESULT\b/i.test(xml)) {
+    throw new Error(`Tally response is not an import-result envelope: ${xml.slice(0, 240) || '(empty body)'}`)
+  }
   const pick = (tag) => {
     const m = xml.match(new RegExp(`<${tag}>([^<]*)</${tag}>`, 'i'))
-    return m ? Number(m[1]) : 0
+    if (!m || !m[1].trim()) throw new Error(`Tally response is missing ${tag}`)
+    const value = Number(m[1].trim())
+    if (!Number.isSafeInteger(value) || value < 0) throw new Error(`Tally returned an invalid ${tag}`)
+    return value
   }
-  return {
+  const result = {
     created: pick('CREATED'),
     altered: pick('ALTERED'),
     errors: pick('ERRORS'),
     exceptions: pick('EXCEPTIONS'),
     lineErrors: (xml.match(/<LINEERROR>([^<]*)<\/LINEERROR>/gi) ?? []).slice(0, 10),
   }
+  if (result.errors || result.exceptions || result.lineErrors.length) {
+    throw new Error(`Tally import reported errors=${result.errors}, exceptions=${result.exceptions}${result.lineErrors.length ? `: ${result.lineErrors.join(' | ')}` : ''}`)
+  }
+  if (result.created + result.altered === 0) throw new Error('Tally reported no created or altered voucher')
+  return result
 }
 
 // ---------- commands ----------
@@ -175,12 +187,12 @@ async function cmdStatus() {
     return
   }
   try {
-    const s = await serverGet(cfg.server, '/api/tally/connector', null)
+    const s = await serverGet(cfg.server, '/api/tally/connector?mode=status', cfg.token)
     console.log('Server says:', JSON.stringify({ paired: s.paired, online: s.online, pending: s.pending }, null, 2))
-  } catch {
-    console.log('Server unreachable.')
+  } catch (e) {
+    console.log('Server status unavailable:', e.message)
   }
-  console.log('Local config:', { server: cfg.server, tally: cfg.tally, pairedAt: cfg.pairedAt })
+  console.log('Local config: ', { server: cfg.server, tally: cfg.tally, pairedAt: cfg.pairedAt })
 }
 
 // ---------- main ----------

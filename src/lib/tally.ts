@@ -47,6 +47,7 @@ export interface TallyItemLine {
   qty: number
   rate: number
   amount: number
+  isDebit: boolean
   uom: string
   hsn?: string | null
   description: string
@@ -149,6 +150,8 @@ interface InvoiceRow {
     qty: number
     rate: number
     taxable: number
+    discPct?: number
+    discAmt?: number
     item?: { code: string; name: string; hsn?: string | null; uom: string; isService?: boolean } | null
   }[]
 }
@@ -171,17 +174,19 @@ export function buildInvoiceVoucher(inv: InvoiceRow, company: TallyCompany, kind
       const stockItem = l.item?.name || l.item?.code || `Line ${i + 1}`
       const uom = (l.uom || l.item?.uom || 'Nos').toUpperCase()
       const amount = r2(l.taxable)
-      let qty = l.qty
-      let rate = r2(l.rate)
-      // Tally recomputes AMOUNT = RATE × QTY — the billed amount wins;
-      // back-solve qty when the numbers disagree.
-      if (rate > 0 && Math.abs(rate * qty - amount) >= 0.01) qty = amount / rate
+      // Preserve physical quantity: a mismatch is commonly a line discount.
+      // Tally derives inventory value from RATE × QTY, so use the net effective
+      // rate rather than silently changing the quantity/stock movement.
+      const qty = l.qty
+      const rate = qty > 0 ? r2(amount / qty) : r2(l.rate)
+      if (qty <= 0) warnings.push(`"${stockItem}" has a non-positive quantity and needs review`)
       if (!l.hsn && !l.item?.hsn) warnings.push(`"${stockItem}" has no HSN code`)
       return {
         stockItem,
         qty,
         rate,
         amount,
+        isDebit: !isSales,
         uom,
         hsn: l.hsn ?? l.item?.hsn ?? null,
         description: l.item ? `${l.item.code} — ${l.item.name}` : stockItem,
@@ -205,7 +210,6 @@ export function buildInvoiceVoucher(inv: InvoiceRow, company: TallyCompany, kind
   credit(L.sgst, inv.sgst)
   credit(L.igst, inv.igst)
 
-  const stockValue = items.reduce((s, l) => s + l.amount, 0)
   // Ledger-mode vs invoice-mode value routing:
   //  - no stock lines (service-only, e.g. jobwork) → the whole taxable value
   //    rides the sales/purchase ledger line;
@@ -214,14 +218,14 @@ export function buildInvoiceVoucher(inv: InvoiceRow, company: TallyCompany, kind
   if (items.length === 0) credit(isSales ? L.sales : L.purchase, inv.taxable)
   else if (serviceValue > 0.004) credit(isSales ? L.sales : L.purchase, serviceValue)
 
-  // Round-off residual: the party side carries the grand total, so the voucher
-  // must absorb any difference through a Round Off ledger line. In invoice
-  // mode the taxable value rides the inventory lines, so it counts towards
-  // the balancing side too.
-  const credited = entries.filter((e) => e.isDebit !== isSales).reduce((s, e) => s + e.amount, 0)
-  const residual = r2(inv.grandTotal - (credited + stockValue))
+  // Balance from actual signed postings, not assumed taxable/total identities.
+  // Tally import convention: debit amounts are negative; purchase inventory
+  // allocations are debit/negative while sales inventory is credit/positive.
+  const signedEntries = () => entries.reduce((sum, e) => sum + (e.isDebit ? -e.amount : e.amount), 0)
+  const signedInventory = items.reduce((sum, line) => sum + (line.isDebit ? -line.amount : line.amount), 0)
+  const residual = r2(-(signedEntries() + signedInventory))
   if (Math.abs(residual) >= 0.01) {
-    entries.push({ ledger: L.roundOff, amount: Math.abs(residual), isDebit: residual < 0 ? isSales : !isSales, isParty: false })
+    entries.push({ ledger: L.roundOff, amount: Math.abs(residual), isDebit: residual < 0, isParty: false })
     warnings.push(`Round-off residual ₹ ${Math.abs(residual).toFixed(2)} added to balance the voucher`)
   }
 
@@ -282,15 +286,15 @@ export function buildPaymentVoucher(
   const partyName = p.party?.name || p.party?.code || 'Party'
   const entries: TallyEntry[] = isReceipt
     ? [
-        { ledger: partyName, amount: settled, isDebit: true, isParty: true, billRef: p.paymentNo },
-        { ledger: moneyLedger, amount: r2(p.amount), isDebit: false, isParty: false },
-      ]
-    : [
         { ledger: partyName, amount: settled, isDebit: false, isParty: true, billRef: p.paymentNo },
         { ledger: moneyLedger, amount: r2(p.amount), isDebit: true, isParty: false },
       ]
-  // TDS sits on the money side: receivable on receipts, payable on payments
-  if (tds > 0) entries.push({ ledger: isReceipt ? 'TDS Receivable' : 'TDS Payable', amount: tds, isDebit: !isReceipt, isParty: false })
+    : [
+        { ledger: partyName, amount: settled, isDebit: true, isParty: true, billRef: p.paymentNo },
+        { ledger: moneyLedger, amount: r2(p.amount), isDebit: false, isParty: false },
+      ]
+  // Receipt TDS is receivable (debit); payment TDS payable (credit).
+  if (tds > 0) entries.push({ ledger: isReceipt ? 'TDS Receivable' : 'TDS Payable', amount: tds, isDebit: isReceipt, isParty: false })
   const narrationParts = [p.paymentNo, isReceipt ? 'Receipt' : 'Payment']
   if (p.refNo) narrationParts.push(`Ref: ${p.refNo}`)
   if (p.notes) narrationParts.push(String(p.notes).slice(0, 180))
@@ -331,19 +335,20 @@ function ledgerEntryXml(e: TallyEntry): string {
 }
 
 function inventoryLineXml(l: TallyItemLine): string {
+  const signed = l.isDebit ? -Math.abs(l.amount) : Math.abs(l.amount)
   return [
     '    <ALLINVENTORYENTRIES.LIST>',
     `      <STOCKITEMNAME>${tallyText(l.stockItem)}</STOCKITEMNAME>`,
     `      <RATE>${amt(l.rate)}/${tallyText(l.uom)}</RATE>`,
     `      <ACTUALQTY>${qty3(l.qty)} ${tallyText(l.uom)}</ACTUALQTY>`,
     `      <BILLEDQTY>${qty3(l.qty)} ${tallyText(l.uom)}</BILLEDQTY>`,
-    `      <AMOUNT>${amt(l.amount)}</AMOUNT>`,
+    `      <AMOUNT>${amt(signed)}</AMOUNT>`,
     '      <BASICUSERDESCRIPTION.LIST>',
     `        <BASICUSERDESCRIPTION>${tallyText(l.description)}</BASICUSERDESCRIPTION>`,
     '      </BASICUSERDESCRIPTION.LIST>',
     '      <ACCOUNTINGALLOCATIONS.LIST>',
     `        <LEDGERNAME>${tallyText(l.ledger)}</LEDGERNAME>`,
-    `        <AMOUNT>${amt(l.amount)}</AMOUNT>`,
+    `        <AMOUNT>${amt(signed)}</AMOUNT>`,
     '      </ACCOUNTINGALLOCATIONS.LIST>',
     '    </ALLINVENTORYENTRIES.LIST>',
   ].join('\n')

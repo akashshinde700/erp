@@ -104,13 +104,17 @@ function NavList({ onNavigate }: { onNavigate?: () => void }) {
   // The manufacturing sub-section tree expands under its sidebar entry.
   // Auto-opens whenever the manufacturing module is on screen; the user can
   // collapse it manually without leaving the module.
-  const [mfgOpen, setMfgOpen] = useState(false)
-  useEffect(() => {
-    // Accordion behaviour: entering the module opens the tree, leaving it
-    // collapses the tree so the rest of the sidebar stays compact. A manual
-    // toggle while inside the module sticks (view doesn't change).
-    setMfgOpen(view === 'manufacturing' || view === 'project-detail')
-  }, [view])
+  // Accordion behaviour: entering the module opens the tree, leaving it
+  // collapses the tree so the rest of the sidebar stays compact. A manual
+  // toggle while inside the module sticks (view doesn't change). Adjusted
+  // during render when `view` changes (no effect → no cascading render).
+  const inMfg = view === 'manufacturing' || view === 'project-detail'
+  const [mfgOpen, setMfgOpen] = useState(inMfg)
+  const [prevView, setPrevView] = useState(view)
+  if (view !== prevView) {
+    setPrevView(view)
+    setMfgOpen(inMfg)
+  }
   const isActive = (entryView: ErpView) =>
     view === entryView || view === `${entryView}-detail` || (entryView === 'manufacturing' && view === 'project-detail')
   return (
@@ -246,7 +250,7 @@ function MfgSectionTree({ onNavigate }: { onNavigate?: () => void }) {
                   onNavigate?.()
                 }}
                 className={cn(
-                  'flex h-8 w-full items-center gap-2 rounded-md px-2 text-[12.5px] text-sidebar-foreground/75 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring',
+                  'flex h-10 w-full items-center gap-2 rounded-md px-2 text-[12.5px] md:h-8 text-sidebar-foreground/75 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring',
                   active && 'bg-sidebar-accent font-medium text-sidebar-accent-foreground'
                 )}
               >

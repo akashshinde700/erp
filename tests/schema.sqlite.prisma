@@ -721,6 +721,8 @@ model Bom {
   approvedAt  DateTime?
   /// Standard labour per one output unit, rolled up from the routing when the
   /// revision is approved (frozen with the revision like the routes themselves).
+  lineBasis   String    @default("BATCH")
+  batchQty    Float     @default(1)
   standardLabourCost Float @default(0)
   /// Minutes per one output unit across all routed operations (setup included).
   standardMinutes    Float @default(0)

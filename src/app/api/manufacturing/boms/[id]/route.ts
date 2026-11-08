@@ -23,6 +23,9 @@ const bomUpdateSchema = z.object({
   drawingRef: z.string().max(80).optional().nullable(),
   effectiveFrom: z.string().optional().nullable(),
   notes: z.string().max(1000).optional().nullable(),
+  /** UNIT = quantities per output unit; BATCH = quantities for one batch of batchQty units. */
+  lineBasis: z.enum(['BATCH', 'UNIT'], { error: 'Line basis must be BATCH or UNIT' }).optional(),
+  batchQty: z.number().positive('Batch size must be > 0').finite().max(1_000_000).optional(),
   lines: z.array(bomLineSchema).min(1).max(200),
 })
 

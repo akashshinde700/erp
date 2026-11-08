@@ -118,7 +118,8 @@ async function reconcile(label) {
   check(`${label}: completed work orders have WIP fully settled (material + labour + absorbed overhead)`, wip.length === 0, JSON.stringify(wip.slice(0, 3)))
   // Absorbed overhead is an accrual: the credit ledger must equal the absorbed
   // amounts on tasks, and the work-order header must equal its own task rows.
-  const ovh = await q1(`SELECT ROUND(COALESCE(SUM(credit)-SUM(debit),0),2) balance FROM AccountLedger WHERE account='OVHA' AND isCancelled=0`)
+  // (period-end clearing vouchers move the accrual to OVRC on purpose — measure absorption without them)
+  const ovh = await q1(`SELECT ROUND(COALESCE(SUM(credit)-SUM(debit),0),2) balance FROM AccountLedger WHERE account='OVHA' AND isCancelled=0 AND voucherType<>'MFG_OVERHEAD_CLOSE'`)
   const absorbed = await q1(`SELECT ROUND(COALESCE(SUM(overheadCost),0),2) total FROM ProductionTask WHERE status='COMPLETED'`)
   check(`${label}: overhead absorbed in the ledger equals the overhead on completed tasks`, near(num(ovh.balance), num(absorbed.total), 0.05), `ledger=${ovh.balance} tasks=${absorbed.total}`)
   const woOvh = await qa(`SELECT w.woNo, ROUND(w.overheadCost,2) hdr, ROUND((SELECT COALESCE(SUM(t.overheadCost),0) FROM ProductionTask t WHERE t.workOrderId=w.id AND t.status<>'CANCELLED'),2) tasks
@@ -1346,11 +1347,78 @@ async function phaseBomBasis() {
   await reconcile('after BOM basis')
 }
 
+// ---------------------------------------------------------------- Phase 12f: overhead advisor
+async function phaseOverhead() {
+  phase = 'P12f-overhead'
+  const O = '/api/manufacturing/overhead'
+  const original = num((await q1('SELECT overheadRatePct FROM Company WHERE isPlatform=0 ORDER BY createdAt LIMIT 1')).overheadRatePct)
+  const L = async (code, name, nature) => post('/api/books', { action: 'create-ledger', code, name, group: nature === 'EXPENSE' ? 'Manufacturing Expenses' : 'Fixed Assets', nature })
+  const pw = await L('AUDPOWER', 'Audit factory power', 'EXPENSE'), rent = await L('AUDRENT', 'Audit factory rent', 'EXPENSE'), plant = await L('AUDPLANT', 'Audit plant & machinery', 'ASSET')
+  expectOk('overhead: create the power ledger', pw); expectOk('overhead: create the rent ledger', rent)
+  expectOk('overhead: tag power as factory overhead', await post(O, { action: 'tag-ledger', ledgerId: pw.data.id, isFactoryOverhead: true }))
+  expectOk('overhead: tag rent as factory overhead', await post(O, { action: 'tag-ledger', ledgerId: rent.data.id, isFactoryOverhead: true }))
+  expectReject('overhead: an asset ledger cannot join the overhead pool', await post(O, { action: 'tag-ledger', ledgerId: plant.data.id, isFactoryOverhead: true }), /only expense ledgers/i)
+  expectOk('overhead: book a power bill (journal)', await post('/api/books', { action: 'post-journal', date: today, narration: 'Audit power bill', lines: [{ account: 'AUDPOWER', debit: 5000 }, { account: 'BANK', credit: 5000 }] }))
+  expectOk('overhead: book factory rent (journal)', await post('/api/books', { action: 'post-journal', date: today, narration: 'Audit factory rent', lines: [{ account: 'AUDRENT', debit: 3000 }, { account: 'BANK', credit: 3000 }] }))
+
+  const a = await get(`${O}?months=3`)
+  expectOk('overhead: advisor responds', a)
+  const from = a.data?.window?.from
+  check('overhead: incurred = sum of tagged expense ledgers in the window (8,000)', near(a.data?.totals?.incurred, 8000), `incurred=${a.data?.totals?.incurred}`)
+  const prime = num((await q1("SELECT COALESCE(SUM(materialCost+labourCost),0) s FROM ProductionTask WHERE status='COMPLETED' AND completedAt >= ?", [`${from} 00:00:00`])).s)
+  check('overhead: prime cost = material + labour of operations completed in the window', near(a.data?.totals?.primeCost, prime, 0.05), `api=${a.data?.totals?.primeCost} db=${prime}`)
+  const absorbedDb = num((await q1("SELECT COALESCE(SUM(credit-debit),0) s FROM AccountLedger WHERE account='OVHA' AND voucherType IN ('MFG_OVERHEAD','MFG_OVERHEAD_TRUEUP') AND isCancelled=0 AND date >= ?", [`${from} 00:00:00`])).s)
+  check('overhead: absorbed = OVHA absorption postings in the window', near(a.data?.totals?.absorbed, absorbedDb, 0.05), `api=${a.data?.totals?.absorbed} db=${absorbedDb}`)
+  check('overhead: actual rate = incurred / prime x 100', prime > 0 && near(a.data?.rates?.actualRatePct, Math.round((8000 / prime) * 10000) / 100, 0.011), `rate=${a.data?.rates?.actualRatePct}`)
+  check('overhead: over/under = absorbed - incurred', near(a.data?.totals?.overUnder, a.data?.totals?.absorbed - 8000, 0.05), `ou=${a.data?.totals?.overUnder}`)
+  check('overhead: without a budget the recommendation follows the measured trend', a.data?.recommendation?.source === 'TREND' && a.data?.recommendation?.ratePct != null, JSON.stringify(a.data?.recommendation))
+  check('overhead: the pool lists only expense ledgers, the two tagged ones flagged', (a.data?.ledgers ?? []).every((l) => l.code !== 'AUDPLANT') && a.data.ledgers.filter((l) => l.isFactoryOverhead).length === 2, '')
+
+  expectReject('overhead: a one-sided budget is refused', await post(O, { action: 'set-budget', overheadAnnual: 120000, primeCostAnnual: null }), /both/i)
+  expectReject('overhead: a budget implying more than 100% is refused', await post(O, { action: 'set-budget', overheadAnnual: 900000, primeCostAnnual: 600000 }), /above 100/i)
+  expectOk('overhead: save a budget (1.2L overhead on 6L prime cost)', await post(O, { action: 'set-budget', overheadAnnual: 120000, primeCostAnnual: 600000 }))
+  const b = await get(`${O}?months=3&whatIf=25`)
+  check('overhead: budget rate = 20% and the recommendation uses it', near(b.data?.rates?.budgetRatePct, 20) && b.data?.recommendation?.source === 'BUDGET' && near(b.data?.recommendation?.ratePct, 20), JSON.stringify(b.data?.recommendation))
+  const open = await qa("SELECT w.id, w.overheadCost oh, (SELECT COALESCE(SUM(t.materialCost+t.labourCost),0) FROM ProductionTask t WHERE t.workOrderId=w.id AND t.status='COMPLETED') prime FROM WorkOrder w WHERE w.status IN ('OPEN','IN_PROGRESS')")
+  const trueUp = open.filter((w) => num(w.prime) > 0).reduce((s, w) => s + (Math.round(num(w.prime) * 0.25 * 100) / 100 - num(w.oh)), 0)
+  check('overhead: what-if 25% = the true-up open orders would post', near(b.data?.whatIf?.ratePct, 25) && near(b.data?.whatIf?.openOrderTrueUp, trueUp, 0.05), `api=${b.data?.whatIf?.openOrderTrueUp} db=${trueUp.toFixed(2)}`)
+  expectReject('overhead: a what-if above 100% is refused', await get(`${O}?whatIf=150`), /between 0 and 100/i)
+  check('overhead: reading the advisor changes nothing', near(num((await q1('SELECT overheadRatePct r FROM Company WHERE isPlatform=0 ORDER BY createdAt LIMIT 1')).r), original), '')
+
+  expectReject('overhead: applying a rate needs a written reason', await post(O, { action: 'set-rate', ratePct: 20, reason: 'ok' }), /reason/i)
+  expectReject('overhead: a rate above 100% is refused', await post(O, { action: 'set-rate', ratePct: 150, reason: 'typo check for the audit' }), /100|too_big|less than/i)
+  const set = await post(O, { action: 'set-rate', ratePct: 20, reason: 'Audit: FY budget approved by the CA' })
+  expectOk('overhead: the OWNER applies the budget rate with a reason', set)
+  const co = await q1('SELECT overheadRatePct r, overheadRateSetBy by_, overheadRateReason why FROM Company WHERE isPlatform=0 ORDER BY createdAt LIMIT 1')
+  check('overhead: the rate, who set it and why are recorded', near(num(co.r), 20) && /owner@/i.test(co.by_ ?? '') && /CA/.test(co.why ?? ''), JSON.stringify(co))
+  check('overhead: the change is in the audit trail', num((await q1("SELECT COUNT(*) n FROM AuditLog WHERE entity='Company' AND details LIKE '%overhead absorption%20%'")).n) >= 1, '')
+
+  // period-end clearing
+  const ovhaBefore = num((await q1("SELECT COALESCE(SUM(credit-debit),0) b FROM AccountLedger WHERE account='OVHA' AND isCancelled=0")).b)
+  expectReject('overhead: clearing a future date is refused', await post(O, { action: 'close', upTo: '2099-01-01' }), /up to today/i)
+  const close = await post(O, { action: 'close', upTo: today })
+  if (ovhaBefore > 0.004) {
+    expectOk('overhead: clear absorbed overhead up to today', close)
+    check('overhead: the clearing amount = the OVHA balance', near(close.data?.cleared, ovhaBefore, 0.011), `cleared=${close.data?.cleared} balance=${ovhaBefore}`)
+    const v = await q1("SELECT ROUND(SUM(CASE WHEN account='OVHA' THEN debit ELSE 0 END),2) dr, ROUND(SUM(CASE WHEN account='OVRC' THEN credit ELSE 0 END),2) cr FROM AccountLedger WHERE voucherType='MFG_OVERHEAD_CLOSE' AND voucherNo=? AND isCancelled=0", [close.data?.voucherNo])
+    check('overhead: the voucher is Dr OVHA = Cr OVRC', near(v.dr, ovhaBefore, 0.011) && near(v.cr, ovhaBefore, 0.011), JSON.stringify(v))
+    check('overhead: OVHA is cleared to zero', near(num((await q1("SELECT COALESCE(SUM(credit-debit),0) b FROM AccountLedger WHERE account='OVHA' AND isCancelled=0")).b), 0, 0.011), '')
+    expectReject('overhead: clearing the same date twice is refused', await post(O, { action: 'close', upTo: today }), /already closed/i)
+    const after = await get(`${O}?months=3`)
+    check('overhead: the advisor shows the clearing and nothing parked', near(after.data?.ovha?.balance, 0, 0.011) && after.data?.ovha?.lastClose?.voucherNo === close.data?.voucherNo, JSON.stringify(after.data?.ovha))
+    check('overhead: clearing does not change measured absorption', near(after.data?.totals?.absorbed, a.data?.totals?.absorbed, 0.05), `before=${a.data?.totals?.absorbed} after=${after.data?.totals?.absorbed}`)
+  } else check('overhead: there is absorbed overhead to clear', false, `OVHA=${ovhaBefore}`)
+
+  await post(O, { action: 'set-rate', ratePct: original, reason: 'Audit: restore the original absorption rate' })
+  await post(O, { action: 'set-budget', overheadAnnual: null, primeCostAnnual: null })
+  await reconcile('after overhead advisor')
+}
+
 // ---------------------------------------------------------------- main
 async function main() {
   const t0 = Date.now()
   await setup()
-  const phases = [phaseAuth, phaseP2P, phaseRfq, phaseQ2C, phaseMfg, phaseQuality, phaseLots, phaseFinance, phaseGst, phaseMrp, phaseOps, phaseCosting, phaseBomBasis, phaseFuzz]
+  const phases = [phaseAuth, phaseP2P, phaseRfq, phaseQ2C, phaseMfg, phaseQuality, phaseLots, phaseFinance, phaseGst, phaseMrp, phaseOps, phaseCosting, phaseBomBasis, phaseOverhead, phaseFuzz]
   for (const fn of phases) {
     try { await fn() } catch (e) { check(`${fn.name} completed without a harness exception`, false, e?.stack?.split('\n').slice(0, 3).join(' ') ?? String(e)) }
   }

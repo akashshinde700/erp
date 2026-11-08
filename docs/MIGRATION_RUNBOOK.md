@@ -57,6 +57,14 @@ prisma/migrations/
                                             hashes only) and TallyConnectorJob. Both cascade
                                             with Company and are included in backups (token
                                             hashes cannot authenticate).
+  20261116100000_email_log/
+    migration.sql                           additive: EmailLog (every outgoing email, SENT or
+                                            FAILED). SMTP credentials are NOT in the database —
+                                            set SMTP_* in the server environment.
+  20261117100000_overhead_advisor/
+    migration.sql                           additive: Company overhead budget + who/when/why
+                                            of the absorption rate; LedgerAccount
+                                            .isFactoryOverhead. The rate itself is unchanged.
   20261111100000_routing_work_centers_oee/
     migration.sql                           additive: WorkCenter, ShiftCalendar, Shift,
                                             ShiftHoliday, RoutingOperation, MachineDowntime;

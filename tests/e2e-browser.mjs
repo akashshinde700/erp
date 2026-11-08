@@ -160,6 +160,13 @@ async function runViewport(browser, vp) {
     await shot(page, `ws-${tab}`)
   }
 
+  // email settings card (Masters → Company): status only, never credentials
+  await goModule(page, 'Masters')
+  await page.getByRole('tab', { name: /company/i }).first().click().catch(() => {}); await settle(page, 800)
+  const mainText = await page.locator('main').innerText().catch(() => '')
+  check('Masters → Company shows the Email (SMTP) card with its status', /Email \(SMTP\)/.test(mainText) && /Configured|Not configured/.test(mainText), mainText.match(/Email \(SMTP\)[\s\S]{0,120}/)?.[0]?.replace(/\s+/g, ' '))
+  check('Email card never shows an SMTP password', !/SMTP_PASS=|password:/i.test(mainText))
+
   // dialog prefill (render-phase reset hook): party edit
   await goModule(page, 'Masters')
   await page.getByRole('tab', { name: /parties/i }).first().click().catch(() => {}); await settle(page, 600)

@@ -2,7 +2,7 @@
 
 **Review date:** 2026-11-08  
 **Product revision:** `e5230c61560594b2e60cbac8f742a7ef580c6d25`  
-**Scope:** product ka Tally implementation + diye gaye teen GitHub repositories; source review aur isolated runtime checks. Production code is review mein change nahi kiya gaya.
+**Scope:** product ka Tally implementation + diye gaye teen GitHub repositories; source review aur isolated runtime checks. Initial review mein production code change nahi hua; baad mein P0 accounting/agent findings aur queue feature gate par targeted fixes apply kiye gaye. Review observations ko neeche current-status notes ke saath padhein.
 
 ## 1. Short answer
 
@@ -54,9 +54,11 @@ Security basics achhe hain: code/token server par hashed hain, token random hai,
 
 ## 3. Findings — priority order
 
-### P0-1. Purchase inventory voucher ka Dr/Cr sign galat hai
+### P0-1. Purchase inventory voucher ka Dr/Cr sign galat tha — FIXED
 
-**Files:** `src/lib/tally.ts:180-188`, `src/lib/tally.ts:333-347`
+**Files:** `src/lib/tally.ts` (invoice builder + `inventoryLineXml()`). Builder now emits purchase inventory/allocation amounts as debit/negative and computes a round-off residual from the actual signed postings. Isolated XML regression now balances the purchase example to zero.
+
+**Initial finding:** `src/lib/tally.ts:180-188`, `src/lib/tally.ts:333-347`
 
 `TallyItemLine.amount` hamesha positive hai. `inventoryLineXml()` bina Sales/Purchase direction jaane dono cases mein inventory aur accounting-allocation amount positive render karta hai. Purchase mein stock/purchase side debit honi chahiye; current import convention mein uska amount negative hona chahiye.
 
@@ -71,9 +73,11 @@ Sales example balance hota hai; isliye sirf sales test se yeh bug cover nahi hot
 
 **Fix direction:** item line par explicit debit/credit direction rakhein ya renderer ko voucher kind dein; inventory amount, accounting allocation, `ISDEEMEDPOSITIVE`, aur batch/godown allocations ko consistent sign dein. Har invoice mode ka final accounting sum zero assert karein.
 
-### P0-2. Receipt aur Payment dono mein debit/credit ulta hai
+### P0-2. Receipt aur Payment dono mein debit/credit ulta tha — FIXED
 
-**File:** `src/lib/tally.ts:280-293`
+**File:** `src/lib/tally.ts` payment builder. Receipt is now Bank Dr + TDS Receivable Dr + Party Cr; Payment is Party Dr + Bank Cr + TDS Payable Cr. Isolated signed-entry checks balance both examples.
+
+**Initial finding location:** `src/lib/tally.ts:280-293`
 
 ₹900 cash/bank + ₹100 TDS, total settlement ₹1,000 ke isolated test mein:
 
@@ -84,9 +88,11 @@ Sales example balance hota hai; isliye sirf sales test se yeh bug cover nahi hot
 
 Donon cases net total zero hai, lekin entries mirror-image hain. **Sirf Dr=Cr test kaafi nahi; har ledger ki expected direction bhi assert karni hogi.** Reference repo ke Receipt/Payment fixtures mein bank receipt par debit aur payment par credit hai.
 
-### P0-3. Empty response aur HTTP 500 ko connector successful bol deta hai
+### P0-3. Empty response aur HTTP 500 ko connector successful bol deta tha — FIXED
 
-**File:** `public/downloads/tally/forge-tally-connector.mjs:92-115,149-153`
+**File:** `public/downloads/tally/forge-tally-connector.mjs`. Agent now checks HTTP success, requires an import-result envelope and valid nonnegative `CREATED`, `ALTERED`, `ERRORS`, `EXCEPTIONS` counters, rejects line errors and rejects zero created+altered. CLI status now uses its bearer token via `mode=status`; API supports that authenticated status mode.
+
+**Initial finding location:** `public/downloads/tally/forge-tally-connector.mjs:92-115,149-153`
 
 `postToTally()` HTTP status check nahi karta. Missing XML counters `0` ban jaate hain; phir `errors === 0 && exceptions === 0` se job successful mark hoti hai.
 
@@ -100,9 +106,11 @@ Donon cases net total zero hai, lekin entries mirror-image hain. **Sirf Dr=Cr te
 
 **Fix direction:** HTTP status, valid response envelope, required counters, `LINEERROR`, errors/exceptions aur expected object count validate karein. Single voucher mein verified existing remote ID ya exactly one created/altered result hona chahiye. Unknown/empty response ko success nahi; failed/needs-reconciliation mark karein.
 
-### P1-1. Discount wali line ki physical quantity badal jaati hai
+### P1-1. Discount wali line ki physical quantity badal jaati thi — FIXED
 
-**File:** `src/lib/tally.ts:173-178`
+**File:** `src/lib/tally.ts` invoice builder. Physical qty is now preserved; exported net effective rate is derived from taxable amount/qty to retain the billed inventory value. Example 10 @ ₹100, 10% discount now exports qty 10, rate ₹90, amount ₹900. TallyPrime rate precision/discount presentation still needs real-instance validation.
+
+**Initial finding location:** `src/lib/tally.ts:173-178`
 
 Builder `taxable != rate × qty` hone par quantity ko `taxable / rate` se replace karta hai. Discount ko normal mismatch samajh leta hai.
 
@@ -140,13 +148,9 @@ Isliye existing Tally company mein sahi masters pehle se hon to import chal sakt
 
 **Fix direction:** complete master sync ya explicit existing-master mapping + preflight. Missing stock item/ledger/GST configuration par voucher queue block karein.
 
-### P1-4. Connector queue plan feature gate bypass karta hai
+### P1-4. Connector queue plan feature gate bypass karta tha — FIXED
 
-**File:** `src/app/api/tally/connector/route.ts:192-218`
-
-Masters/voucher/bulk routes `assertFeature('exportData')` call karte hain; connector `queue` sirf mutation access check karta hai. Jis plan mein export feature off hai, woh bhi connector ke through export queue kar sakta hai.
-
-**Fix:** queue aur relevant connector actions par same feature/subscription policy enforce karein.
+**File:** `src/app/api/tally/connector/route.ts`. Queue action now calls `assertFeature('exportData')` after mutation authorization. Other connector durability/company-scoping risks remain unresolved.
 
 ### P2. Status aur reliability gaps
 
@@ -300,9 +304,11 @@ Temporary isolated harness se; koi real customer/Tally data use nahi hua.
 | CLI status against auth-required mock | **FAIL — reported “Server unreachable”** |
 | Generated Sales/Purchase/Receipt/Payment/Masters XML well-formedness | PASS |
 | Sales ₹1,000 + ₹180 GST accounting sum | PASS, zero |
-| Purchase same example | **FAIL — current XML sum +₹2,000** |
-| Receipt/Payment expected ledger directions | **FAIL — reversed entries** |
-| Discounted qty 10 @ ₹100, 10% off | **FAIL — exported qty 9** |
+| Purchase same example after fix | PASS, XML signed sum zero; inventory allocation negative |
+| Receipt/Payment expected ledger directions after fix | PASS, correct entries and zero signed sum |
+| Discounted qty 10 @ ₹100, 10% off after fix | PASS, exported qty 10 at effective rate ₹90 |
+| Empty HTTP 200 and HTTP 500 after fix | PASS, both reported as failed jobs |
+| Status CLI / bearer status | Agent calls bearer mode; status API mode added. Isolated earlier mock lacks this new endpoint behavior, so route-level status not re-tested |
 | `.bat` line endings | PASS, 123 CRLF, zero bare LF |
 
 Node version: `v22.22.3`. XML builder ko source se isolate karke chalaya gaya; protocol test mein shipped `.mjs` actual subprocess ke रूप mein chala. Mock ERP full Next/Prisma route ka replacement tha, production database test nahi.
@@ -315,5 +321,6 @@ Node version: `v22.22.3`. XML builder ko source se isolate karke chalaya gaya; p
 - **Best reference:** Accounting-Companion for XML/read-back/preflight; optional .NET sidecar.
 - **ODBC repo:** reporting-only, current write connector ka replacement nahi.
 - **Localhost proxy:** simple demo, production security/reliability ke liye recommended nahi.
-- **Current product:** working PoC plumbing, lekin P0 accounting/response bugs ki wajah se live automatic sync abhi safe nahi.
-- **Next step:** P0 fixes + regression tests → durable tenant queue → real TallyPrime demo-company certification → customer installer.
+- **Current product:** P0 accounting signs, discount quantity, false-success handling, CLI bearer status path, aur queue export-feature gate ke targeted fixes applied; isolated local checks pass for voucher balances and agent response handling. No real TallyPrime certification yet, so live books par use se pehle demo-company testing zaroori hai.
+- **Still open:** DB-backed company-scoped durable queue, complete stock/GST masters and preflight, retry/idempotency/reconciliation, plus repeatable in-repo regression tests.
+- **Next step:** add permanent regression tests → durable tenant queue/master preflight → real TallyPrime demo-company certification → customer installer.

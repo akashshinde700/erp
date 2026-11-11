@@ -83,3 +83,8 @@ tests/e2e-artifacts/
 /gen-schema.prisma
 .gen-schema.prisma
 prisma.gen.config.ts
+
+# intermediate frames + render cache (the MP4s themselves are tracked in demo-videos/)
+/video-src/frames/
+/video-src/work/
+/video-src/__pycache__/

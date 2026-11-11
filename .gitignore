@@ -83,3 +83,9 @@ tests/e2e-artifacts/
 /gen-schema.prisma
 .gen-schema.prisma
 prisma.gen.config.ts
+
+# rendered demo videos + intermediate frames (regenerate: see video-src/README.md)
+/demo-videos/*.mp4
+/video-src/frames/
+/video-src/work/
+/video-src/__pycache__/

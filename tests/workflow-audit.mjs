@@ -1419,11 +1419,76 @@ async function phaseOverhead() {
   await reconcile('after overhead advisor')
 }
 
+// ---------------------------------------------------------------- Phase 13: balance sheet + proforma invoices
+async function phaseSalesDocs() {
+  phase = 'P13-docs'
+  // ---- balance sheet
+  const bs = await get(`/api/reports?type=balance-sheet&asOf=${today}`)
+  expectOk('balance sheet: responds', bs)
+  check('balance sheet: assets = liabilities + equity (incl. profit)', bs.data?.balanced === true && near(bs.data.totalAssets, bs.data.totalLiabilitiesAndEquity, 0.011), `A=${bs.data?.totalAssets} L+E=${bs.data?.totalLiabilitiesAndEquity} diff=${bs.data?.difference}`)
+  const chart = (await get('/api/books')).data?.accounts ?? []
+  const nature = new Map(chart.map((a) => [a.code, a.nature]))
+  const gl = await qa('SELECT account, ROUND(SUM(debit)-SUM(credit),2) bal FROM AccountLedger WHERE isCancelled=0 AND date <= ? GROUP BY account', [`${today} 23:59:59.999`])
+  const assetsDb = gl.filter((r) => (nature.get(r.account) ?? 'ASSET') === 'ASSET').reduce((s, r) => s + num(r.bal), 0)
+  const profitDb = gl.filter((r) => ['INCOME', 'EXPENSE'].includes(nature.get(r.account))).reduce((s, r) => s - num(r.bal), 0)
+  check('balance sheet: total assets = Dr balances of asset accounts in the GL', near(bs.data?.totalAssets, assetsDb, 0.05), `api=${bs.data?.totalAssets} db=${assetsDb.toFixed(2)}`)
+  check('balance sheet: profit shown = income − expenses in the GL', near(num(bs.data?.profit?.thisYear) + num(bs.data?.profit?.earlierYears), profitDb, 0.05), `api=${num(bs.data?.profit?.thisYear) + num(bs.data?.profit?.earlierYears)} db=${profitDb.toFixed(2)}`)
+  check('balance sheet: income and expense accounts are not listed as balance-sheet lines', ![...(bs.data?.assets ?? []), ...(bs.data?.liabilities ?? [])].some((g) => g.lines.some((l) => ['SALS', 'PURC', 'JWIN'].includes(l.account))), '')
+  const early = await get('/api/reports?type=balance-sheet&asOf=2000-01-01')
+  check('balance sheet: before any posting everything is zero and balanced', early.status === 200 && near(early.data?.totalAssets, 0) && early.data?.balanced === true, JSON.stringify({ a: early.data?.totalAssets, b: early.data?.balanced }))
+  expectReject('balance sheet: a malformed date is refused', await get('/api/reports?type=balance-sheet&asOf=12-12-2026'), /YYYY-MM-DD/)
+
+  // ---- proforma invoices
+  const PI = '/api/proforma'
+  const glBefore = num((await q1('SELECT COUNT(*) n FROM AccountLedger')).n), stockBefore = num((await q1('SELECT COUNT(*) n FROM StockLedger')).n)
+  expectReject('proforma: validity before the date is refused', await post(PI, { action: 'create', partyId: F.cust, date: today, validUntil: '2020-01-01', lines: [{ itemId: F.fg, qty: 1, rate: 500 }] }), /validity/i)
+  expectReject('proforma: a supplier cannot get a proforma', await post(PI, { action: 'create', partyId: F.sup1, validUntil: daysFromNow(10), lines: [{ itemId: F.fg, qty: 1, rate: 500 }] }), /customer/i)
+  const a = await post(PI, { action: 'create', partyId: F.cust, validUntil: daysFromNow(10), terms: '100% advance', lines: [{ itemId: F.fg, qty: 2, rate: 500 }, { itemId: F.fg, qty: 1, rate: 1000, discPct: 10 }] })
+  expectOk('proforma: issue a standalone proforma', a)
+  const gstRate = num((await q1('SELECT gstRate g FROM Item WHERE id=?', [F.fg])).g)
+  const taxable = 2 * 500 + 900
+  check('proforma: GST computed like a tax invoice (taxable, tax, whole-rupee total)', near(a.data?.taxable, taxable) && near(a.data?.grandTotal, Math.round(taxable * (1 + gstRate / 100))), `taxable=${a.data?.taxable} total=${a.data?.grandTotal} gst=${gstRate}%`)
+  check('proforma: numbered PI-<FY>-nnn and ISSUED', /^PI-\d{4}-\d{3}$/.test(a.data?.piNo ?? '') && a.data?.status === 'ISSUED', a.data?.piNo)
+  check('proforma: posts nothing — no ledger rows, no stock rows', num((await q1('SELECT COUNT(*) n FROM AccountLedger')).n) === glBefore && num((await q1('SELECT COUNT(*) n FROM StockLedger')).n) === stockBefore, '')
+  expectReject('proforma: converting needs a warehouse', await post(PI, { action: 'convert', id: a.data.id }), /warehouse/i)
+  const conv = await post(PI, { action: 'convert', id: a.data.id, warehouseId: F.main })
+  expectOk('proforma: convert into the tax invoice', conv)
+  check('proforma: the invoice total equals the proforma total', near(conv.data?.grandTotal, a.data?.grandTotal), `invoice=${conv.data?.grandTotal} pi=${a.data?.grandTotal}`)
+  const row = await q1('SELECT status, convertedInvoiceId FROM ProformaInvoice WHERE id=?', [a.data.id])
+  check('proforma: marked CONVERTED and linked to the invoice', row.status === 'CONVERTED' && row.convertedInvoiceId === conv.data?.invoiceId, JSON.stringify(row))
+  expectReject('proforma: a converted proforma cannot be converted again', await post(PI, { action: 'convert', id: a.data.id, warehouseId: F.main }), /CONVERTED/)
+  expectReject('proforma: a converted proforma cannot be cancelled', await post(PI, { action: 'cancel', id: a.data.id, reason: 'audit' }), /CONVERTED/)
+  const b = await post(PI, { action: 'create', partyId: F.cust, validUntil: daysFromNow(5), lines: [{ itemId: F.fg, qty: 1, rate: 500 }] })
+  const invBefore = num((await q1('SELECT COUNT(*) n FROM SalesInvoice')).n)
+  const [c1, c2] = await Promise.all([1, 2].map(() => post(PI, { action: 'convert', id: b.data.id, warehouseId: F.main })))
+  check('proforma: a double click converts exactly once', [c1, c2].filter((r) => r.status === 200).length === 1 && num((await q1('SELECT COUNT(*) n FROM SalesInvoice')).n) === invBefore + 1, `statuses=${c1.status}/${c2.status}`)
+  const c = await post(PI, { action: 'create', partyId: F.cust, validUntil: daysFromNow(5), lines: [{ itemId: F.fg, qty: 1, rate: 500 }] })
+  expectReject('proforma: cancelling needs a reason', await post(PI, { action: 'cancel', id: c.data.id, reason: '' }), /reason/i)
+  expectOk('proforma: cancel with a reason', await post(PI, { action: 'cancel', id: c.data.id, reason: 'customer dropped the enquiry' }))
+  expectReject('proforma: a cancelled proforma cannot be invoiced', await post(PI, { action: 'convert', id: c.data.id, warehouseId: F.main }), /CANCELLED/)
+  const d = await post(PI, { action: 'create', partyId: F.cust, validUntil: daysFromNow(5), lines: [{ itemId: F.fg, qty: 1, rate: 500 }] })
+  await db.run('UPDATE ProformaInvoice SET validUntil=? WHERE id=?', ['2020-01-01 00:00:00', d.data.id])
+  expectReject('proforma: an expired proforma is not invoiced at old prices', await post(PI, { action: 'convert', id: d.data.id, warehouseId: F.main }), /expired/i)
+  const so = await q1("SELECT id, orderNo, partyId FROM SalesOrder WHERE status IN ('APPROVED','PART_DISPATCHED') ORDER BY createdAt LIMIT 1")
+  if (so) {
+    const e = await post(PI, { action: 'create', partyId: so.partyId, validUntil: daysFromNow(10), salesOrderId: so.id })
+    expectOk('proforma: issue a proforma from an open sales order', e)
+    const open = num((await q1('SELECT COALESCE(SUM(qty-dispatchedQty),0) q FROM SalesOrderLine WHERE salesOrderId=? AND qty-dispatchedQty>0', [so.id])).q)
+    check('proforma: from an order it bills the undispatched quantity', near((e.data?.lines ?? []).reduce((s, l) => s + num(l.qty), 0), open), `pi=${(e.data?.lines ?? []).reduce((s, l) => s + num(l.qty), 0)} open=${open}`)
+    expectReject('proforma: an order proforma is invoiced through the challan, not converted', await post(PI, { action: 'convert', id: e.data.id, warehouseId: F.main }), /delivery challan/i)
+    const other = await q1("SELECT id FROM Party WHERE types LIKE '%CUSTOMER%' AND id<>? LIMIT 1", [so.partyId])
+    if (other) expectReject('proforma: an order of another customer is refused', await post(PI, { action: 'create', partyId: other.id, validUntil: daysFromNow(10), salesOrderId: so.id }), /different customer/i)
+  } else check('proforma: an open sales order exists to quote from', false, 'none')
+  const list = await get(PI)
+  check('proforma: list shows status and the invoice it became', list.status === 200 && list.data.find((r) => r.id === a.data.id)?.convertedInvoiceNo === (await q1('SELECT invoiceNo FROM SalesInvoice WHERE id=?', [conv.data.invoiceId])).invoiceNo, '')
+  await reconcile('after balance sheet + proforma')
+}
+
 // ---------------------------------------------------------------- main
 async function main() {
   const t0 = Date.now()
   await setup()
-  const phases = [phaseAuth, phaseP2P, phaseRfq, phaseQ2C, phaseMfg, phaseQuality, phaseLots, phaseFinance, phaseGst, phaseMrp, phaseOps, phaseCosting, phaseBomBasis, phaseOverhead, phaseFuzz]
+  const phases = [phaseAuth, phaseP2P, phaseRfq, phaseQ2C, phaseMfg, phaseQuality, phaseLots, phaseFinance, phaseGst, phaseMrp, phaseOps, phaseCosting, phaseBomBasis, phaseOverhead, phaseSalesDocs, phaseFuzz]
   for (const fn of phases) {
     try { await fn() } catch (e) { check(`${fn.name} completed without a harness exception`, false, e?.stack?.split('\n').slice(0, 3).join(' ') ?? String(e)) }
   }

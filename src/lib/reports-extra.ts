@@ -5,7 +5,7 @@
  */
 import { db } from './db'
 import { r2, EPS } from './erp'
-import { natureOf } from './books'
+import { chartOfAccounts, natureOf } from './books'
 
 const DAY = 86_400_000
 const BUCKETS = [
@@ -147,4 +147,89 @@ export async function projectProfitabilityReport() {
       expectedMargin: r2(p.budget - p.estCost), marginToDate: r2(p.budget - actual), workOrders: p.workOrders.length,
     }
   })
+}
+
+// ---------------------------------------------------------------- balance sheet
+
+/** Indian financial year start (1 April) for a date. */
+function fyStartOf(d: Date) {
+  const y = d.getUTCMonth() >= 3 ? d.getUTCFullYear() : d.getUTCFullYear() - 1
+  return new Date(Date.UTC(y, 3, 1))
+}
+
+export interface BalanceSheetLine { account: string; name: string; group: string; amount: number }
+
+/**
+ * Balance sheet as of a date, straight from the general ledger.
+ *
+ * Assets = Dr balances of ASSET accounts; liabilities and equity = Cr balances
+ * of LIABILITY / EQUITY accounts. Income and expense accounts are not shown
+ * line by line: their net is the profit, split into this financial year and
+ * earlier years (no closing journal moves it to reserves, so it is computed).
+ * Because every voucher is Dr = Cr, assets = liabilities + equity + profit;
+ * `balanced` proves it and `difference` shows any gap.
+ */
+export async function balanceSheetReport(asOf = new Date()) {
+  const end = new Date(Date.UTC(asOf.getUTCFullYear(), asOf.getUTCMonth(), asOf.getUTCDate(), 23, 59, 59, 999))
+  const fyStart = fyStartOf(asOf)
+  const nature = await natureOf()
+  const chart = new Map((await chartOfAccounts()).map((a) => [a.code, a]))
+  const rows = await db.accountLedger.groupBy({ by: ['account'], where: { isCancelled: false, date: { lte: end } }, _sum: { debit: true, credit: true } })
+  const thisYear = await db.accountLedger.groupBy({ by: ['account'], where: { isCancelled: false, date: { gte: fyStart, lte: end } }, _sum: { debit: true, credit: true } })
+  const names = await db.accountLedger.findMany({ where: { account: { in: rows.map((r) => r.account) } }, distinct: ['account'], select: { account: true, accountName: true } })
+  const nameOf = new Map(names.map((n) => [n.account, n.accountName]))
+
+  const assets: BalanceSheetLine[] = []
+  const liabilities: BalanceSheetLine[] = []
+  const equity: BalanceSheetLine[] = []
+  let profitTotal = 0
+  for (const r of rows) {
+    const dr = r._sum.debit ?? 0, cr = r._sum.credit ?? 0
+    const kind = nature.get(r.account) ?? 'ASSET'
+    const meta = chart.get(r.account)
+    const line = (amount: number): BalanceSheetLine => ({ account: r.account, name: meta?.name ?? nameOf.get(r.account) ?? r.account, group: meta?.group ?? (kind === 'ASSET' ? 'Current Assets' : kind === 'LIABILITY' ? 'Current Liabilities' : 'Capital'), amount: r2(amount) })
+    if (kind === 'INCOME' || kind === 'EXPENSE') { profitTotal += cr - dr; continue }
+    const bal = r2(dr - cr)
+    if (Math.abs(bal) < 0.005) continue
+    if (kind === 'ASSET') assets.push(line(bal))
+    else if (kind === 'LIABILITY') liabilities.push(line(-bal))
+    else equity.push(line(-bal))
+  }
+  let profitYear = 0
+  for (const r of thisYear) {
+    const kind = nature.get(r.account) ?? 'ASSET'
+    if (kind === 'INCOME' || kind === 'EXPENSE') profitYear += (r._sum.credit ?? 0) - (r._sum.debit ?? 0)
+  }
+  profitYear = r2(profitYear)
+  profitTotal = r2(profitTotal)
+  const profitEarlier = r2(profitTotal - profitYear)
+  if (Math.abs(profitEarlier) >= 0.005) equity.push({ account: 'P&L-PRIOR', name: 'Profit & Loss — earlier years', group: 'Reserves & Surplus', amount: profitEarlier })
+  equity.push({ account: 'P&L-FY', name: `Profit & Loss — FY from ${fyStart.toISOString().slice(0, 10)}`, group: 'Reserves & Surplus', amount: profitYear })
+
+  const group = (lines: BalanceSheetLine[]) => {
+    const m = new Map<string, { group: string; total: number; lines: BalanceSheetLine[] }>()
+    for (const l of lines.sort((a, b) => b.amount - a.amount)) {
+      const g = m.get(l.group) ?? { group: l.group, total: 0, lines: [] }
+      g.total = r2(g.total + l.amount); g.lines.push(l); m.set(l.group, g)
+    }
+    return [...m.values()].sort((a, b) => b.total - a.total)
+  }
+  const totalAssets = r2(assets.reduce((s, l) => s + l.amount, 0))
+  const totalLiabilities = r2(liabilities.reduce((s, l) => s + l.amount, 0))
+  const totalEquity = r2(equity.reduce((s, l) => s + l.amount, 0))
+  const difference = r2(totalAssets - totalLiabilities - totalEquity)
+  return {
+    asOf: end.toISOString().slice(0, 10),
+    fyStart: fyStart.toISOString().slice(0, 10),
+    assets: group(assets),
+    liabilities: group(liabilities),
+    equity: group(equity),
+    totalAssets,
+    totalLiabilities,
+    totalEquity,
+    totalLiabilitiesAndEquity: r2(totalLiabilities + totalEquity),
+    profit: { thisYear: profitYear, earlierYears: profitEarlier },
+    difference,
+    balanced: Math.abs(difference) < 0.01,
+  }
 }

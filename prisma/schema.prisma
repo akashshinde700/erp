@@ -134,6 +134,7 @@ model Company {
   tallyConnector            TallyConnector?
   tallyConnectorJobs        TallyConnectorJob[]
   emailLogs                 EmailLog[]
+  proformaInvoices          ProformaInvoice[]
 }
 
 // ---------- Organization logins (SaaS) ----------
@@ -273,6 +274,7 @@ model Party {
 
   @@unique([companyId, code])
   @@index([types])
+  proformaInvoices ProformaInvoice[]
 }
 
 model Item {
@@ -322,6 +324,7 @@ model Item {
   mrpLines           MrpLine[]
 
   @@unique([companyId, code])
+  proformaLines ProformaInvoiceLine[]
 }
 
 model Warehouse {
@@ -1503,6 +1506,7 @@ model SalesOrder {
   @@unique([companyId, orderNo])
   @@index([companyId, status, date])
   @@index([partyId])
+  proformaInvoices ProformaInvoice[]
 }
 
 model SalesOrderLine {
@@ -2142,4 +2146,64 @@ model EmailLog {
 
   @@index([companyId, createdAt])
   @@index([companyId, kind, entityId, createdAt])
+}
+
+/// Proforma invoice (PI): a priced, GST-computed offer sent before the sale —
+/// for advance payment, customer approval or import/LC paperwork. It posts
+/// nothing (no stock, no GL, no GST liability). Converting it creates the real
+/// tax invoice once; a PI raised against a sales order is invoiced through the
+/// order's delivery challan instead, so it cannot be billed twice.
+model ProformaInvoice {
+  id                 String                @id @default(cuid())
+  companyId          String
+  company            Company               @relation(fields: [companyId], references: [id])
+  piNo               String
+  date               DateTime
+  validUntil         DateTime
+  partyId            String
+  party              Party                 @relation(fields: [partyId], references: [id])
+  salesOrderId       String?
+  salesOrder         SalesOrder?           @relation(fields: [salesOrderId], references: [id])
+  placeOfSupply      String
+  interState         Boolean               @default(false)
+  taxable            Float                 @default(0)
+  discount           Float                 @default(0)
+  cgst               Float                 @default(0)
+  sgst               Float                 @default(0)
+  igst               Float                 @default(0)
+  roundOff           Float                 @default(0)
+  grandTotal         Float                 @default(0)
+  status             String                @default("ISSUED") // ISSUED | CONVERTED | CANCELLED
+  convertedInvoiceId String?
+  terms              String?   @db.Text
+  cancelReason       String?
+  cancelledAt        DateTime?
+  createdBy          String?
+  createdAt          DateTime              @default(now())
+  lines              ProformaInvoiceLine[]
+
+  @@unique([companyId, piNo])
+  @@index([companyId, status, date])
+  @@index([partyId])
+}
+
+model ProformaInvoiceLine {
+  id         String          @id @default(cuid())
+  proformaId String
+  proforma   ProformaInvoice @relation(fields: [proformaId], references: [id], onDelete: Cascade)
+  itemId     String
+  item       Item            @relation(fields: [itemId], references: [id])
+  hsn        String?
+  uom        String
+  qty        Float
+  rate       Float
+  discPct    Float           @default(0)
+  gstRate    Float
+  taxable    Float
+  cgst       Float           @default(0)
+  sgst       Float           @default(0)
+  igst       Float           @default(0)
+  total      Float
+
+  @@index([proformaId])
 }

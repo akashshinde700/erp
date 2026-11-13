@@ -28,6 +28,7 @@ import {
   type StockSummaryRow,
 } from './api'
 import { EmptyState, Money, SectionHeading, TableSkeleton, VoucherBadge } from './bits'
+import { ExportButton } from './actions'
 import { StockAdjustmentsTab } from './stock-adjustments'
 import { dateStr, money, qty as qtyFmt, DEFAULT_WAREHOUSE_CODE } from '@/lib/erp'
 
@@ -142,6 +143,21 @@ function StockSummaryTab() {
               </Button>
             ))}
           </div>
+          <ExportButton
+            className="ml-auto"
+            listenGlobal
+            disabled={rows.length === 0}
+            filename={`stock-summary-${new Date().toISOString().slice(0, 10)}.xls`}
+            sheets={() => [
+              {
+                name: 'Stock Summary',
+                header: ['Item', 'Code', 'HSN', 'UOM', 'In', 'Out', 'Closing', 'Avg Cost', 'Closing Value', 'Below Reorder'],
+                rows: rows.map((r) => [
+                  r.item.name, r.item.code, r.item.hsn ?? '', r.item.uom, r.inQty, r.outQty, r.closing, r.avgCost, r.closingValue, r.lowStock,
+                ]),
+              },
+            ]}
+          />
         </div>
         <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3 text-xs text-muted-foreground">
           <span className="font-medium text-foreground">{rows.length === all.length ? `${all.length} items` : `${rows.length} of ${all.length} items`}</span>

@@ -109,6 +109,8 @@ export const SHORTCUTS_HELP: { keys: string; action: string }[] = [
   { keys: 'g then key', action: 'Go to module — d c s p j b i a r m t u o' },
   { keys: 'Alt + S', action: 'New sales invoice (from anywhere)' },
   { keys: 'Alt + P', action: 'New purchase invoice (from anywhere)' },
+  { keys: 'Alt + E', action: 'Export the current view to Excel' },
+  { keys: 'Alt + R', action: 'Jump to Reports' },
   { keys: '?', action: 'This shortcuts help' },
   { keys: 'Esc', action: 'Close palette / dialog' },
 ]

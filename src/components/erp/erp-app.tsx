@@ -45,6 +45,7 @@ import { OrgPortal } from './portal'
 import { useErpUi, type ErpView } from './store'
 import { MFG_SECTION_GROUPS, type MfgTab } from './mfg-sections'
 import { GOTO_KEYS, isTypingTarget, pushRecent, setCreatePreset } from './nav'
+import { EXPORT_EVENT } from './actions'
 import { CommandPalette, ShortcutsHelpDialog } from './palette'
 import { cn } from '@/lib/utils'
 import { fyCode, dateStr } from '@/lib/erp'
@@ -471,6 +472,18 @@ export function ErpApp() {
       if (e.altKey && e.key.toLowerCase() === 'p') {
         e.preventDefault()
         openPurchaseCreate()
+        return
+      }
+      // Alt+E → export the current view (the visible list's Excel button answers)
+      if (e.altKey && e.key.toLowerCase() === 'e') {
+        e.preventDefault()
+        window.dispatchEvent(new CustomEvent(EXPORT_EVENT))
+        return
+      }
+      // Alt+R → reports
+      if (e.altKey && e.key.toLowerCase() === 'r') {
+        e.preventDefault()
+        setView('reports')
         return
       }
       // "?" → shortcuts help

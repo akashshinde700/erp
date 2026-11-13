@@ -54,6 +54,7 @@ import {
   type Warehouse,
 } from './api'
 import { EmptyState, Money, SectionHeading, TableSkeleton } from './bits'
+import { ExportButton } from './actions'
 import { useErpUi } from './store'
 import { setCreatePreset } from './nav'
 import { INDIAN_STATES, stateName, gstinChecksumValid, dateStr, money, PARTY_TYPES, UOMS } from '@/lib/erp'
@@ -165,6 +166,17 @@ function PartiesTab() {
             aria-label="Search parties"
           />
         </div>
+        <ExportButton
+          disabled={parties.length === 0}
+          filename={`parties-${new Date().toISOString().slice(0, 10)}.xls`}
+          sheets={() => [
+            {
+              name: 'Parties',
+              header: ['Code', 'Name', 'Types', 'GSTIN', 'State', 'Phone', 'Email', 'Active'],
+              rows: parties.map((p) => [p.code, p.name, p.types, p.gstin ?? '', p.stateCode, p.phone ?? '', p.email ?? '', p.active]),
+            },
+          ]}
+        />
         <Button
           onClick={() => {
             setEditing(null)
@@ -783,6 +795,19 @@ function ItemsTab() {
             aria-label="Search items"
           />
         </div>
+        <ExportButton
+          disabled={items.length === 0}
+          filename={`items-${new Date().toISOString().slice(0, 10)}.xls`}
+          sheets={() => [
+            {
+              name: 'Items',
+              header: ['Code', 'Name', 'Group', 'Type', 'HSN', 'UOM', 'GST %', 'Sale Rate', 'Cost Rate', 'Reorder Level', 'Active'],
+              rows: items.map((i) => [
+                i.code, i.name, i.groupName, i.isService ? 'SERVICE' : 'GOODS', i.hsn ?? '', i.uom, i.gstRate, i.saleRate, i.costRate, i.reorderLevel, i.active,
+              ]),
+            },
+          ]}
+        />
         <Button
           onClick={() => {
             setEditing(null)

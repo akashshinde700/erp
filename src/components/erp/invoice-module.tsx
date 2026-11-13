@@ -65,6 +65,7 @@ import { onPreset, setCreatePreset, takeCreatePreset } from './nav'
 import { computeInvoiceTotals, dateStr, INDIAN_STATES, money, r2, stateName } from '@/lib/erp'
 import { InvoicePrint } from './invoice-print'
 import { AttachmentsPanel } from './attachments'
+import { ExportButton } from './actions'
 import { exportEInvoiceJson, exportEWayBillJson, exportTallyVoucher, markTallySent, queueForConnector } from './tally'
 import { useResetOnChange } from '@/hooks/use-reset-on-change'
 
@@ -181,6 +182,32 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
     downloadCsv(`${isSales ? 'sales' : 'purchase'}-invoices-${todayISO()}.csv`, rows)
   }
 
+  /** Open the detail view, then print it once it has rendered. */
+  const viewAndPrint = (inv: AnyInvoice) => {
+    setView(isSales ? 'sales-detail' : 'purchase-detail', { id: inv.id, print: '1' })
+  }
+
+  const exportExcelSheets = async () => {
+    // Export the whole filtered set, not just the loaded page (same as CSV).
+    let all: AnyInvoice[] = invoices
+    try {
+      all = (await apiGet<PagedInvoices>(listQuery(500))).rows
+    } catch (e) {
+      toastError(e)
+      throw e
+    }
+    return [
+      {
+        name: isSales ? 'Sales Invoices' : 'Purchase Invoices',
+        header: ['Invoice No', 'Date', 'Party', 'Taxable', 'CGST', 'SGST', 'IGST', 'Grand Total', 'Paid', 'Balance', 'Status', 'Source'],
+        rows: all.map((i) => [
+          i.invoiceNo, dateStr(i.date), i.party?.name ?? '', i.taxable, i.cgst, i.sgst, i.igst,
+          i.grandTotal, i.paidAmount, r2(i.grandTotal - i.paidAmount), i.status, isSales ? (i as SalesInvoice).source : '',
+        ]),
+      },
+    ]
+  }
+
   return (
     <div className="space-y-4">
       <SectionHeading
@@ -198,6 +225,12 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
             <Button variant="outline" onClick={() => void exportCsv()} disabled={invoices.length === 0} className="h-11 gap-2">
               <FileDown className="size-4" aria-hidden /> CSV
             </Button>
+            <ExportButton
+              listenGlobal
+              disabled={invoices.length === 0}
+              filename={`${isSales ? 'sales' : 'purchase'}-invoices-${todayISO()}.xls`}
+              sheets={exportExcelSheets}
+            />
             <Button onClick={() => { setPrefill(null); setCreateOpen(true) }} className="h-11 gap-2">
               <Plus className="size-4" aria-hidden />
               New {isSales ? 'Invoice' : 'Purchase'}
@@ -320,6 +353,17 @@ export function InvoiceModule({ kind }: { kind: InvoiceKind }) {
                             title="View detail"
                           >
                             <Eye className="size-4" aria-hidden />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="hidden size-11 text-muted-foreground hover:text-foreground md:inline-flex md:size-8"
+                            onClick={() => viewAndPrint(inv)}
+                            disabled={inv.status === 'CANCELLED'}
+                            aria-label={`Print ${inv.invoiceNo}`}
+                            title="View & print"
+                          >
+                            <Printer className="size-4" aria-hidden />
                           </Button>
                           <Button
                             variant="ghost"
@@ -1034,6 +1078,17 @@ export function InvoiceDetail({ kind, id }: { kind: InvoiceKind; id: string }) {
   const [cancelling, setCancelling] = useState(false)
   const [prefill, setPrefill] = useState<AnyInvoice | null>(null)
   const [dupOpen, setDupOpen] = useState(false)
+  // List rows navigate here with print=1 (printer icon): print once rendered,
+  // then clear the flag so reloads do not re-print.
+  const printParam = useErpUi((s) => s.params.print === '1')
+  useEffect(() => {
+    if (!printParam || !inv.data) return
+    const t = setTimeout(() => {
+      window.print()
+      setView(isSales ? 'sales-detail' : 'purchase-detail', { id })
+    }, 600)
+    return () => clearTimeout(t)
+  }, [printParam, inv.data, id, isSales, setView])
 
   if (inv.loading) {
     return (

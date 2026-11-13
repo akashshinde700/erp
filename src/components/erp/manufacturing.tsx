@@ -86,6 +86,7 @@ import {
   type WorkOrder,
 } from './api'
 import { EmptyState, ErrorState, KpiCard, Money, ProgressBar, SectionHeading, StatusBadge, TableSkeleton } from './bits'
+import { ExportButton } from './actions'
 import { useErpUi } from './store'
 import { OverheadAdvisorTab } from './overhead-advisor'
 import { dateStr, money, qty as qtyFmt, r2 } from '@/lib/erp'
@@ -3758,6 +3759,29 @@ function WorkOrdersTab({ onViewTasks, onChanged }: { onViewTasks: (woId?: string
         <Button variant="outline" onClick={() => onViewTasks()} className="h-11 gap-2">
           <Wrench className="size-4" aria-hidden /> Manage Tasks
         </Button>
+        <ExportButton
+          listenGlobal
+          disabled={rows.length === 0}
+          filename={`work-orders-${new Date().toISOString().slice(0, 10)}.xls`}
+          sheets={() => [
+            {
+              name: 'Work Orders',
+              header: ['WO No', 'Project', 'Output Item', 'Qty', 'Priority', 'Start', 'End', 'Tasks Done', 'Progress %', 'Status'],
+              rows: rows.map((w) => [
+                w.woNo,
+                w.project ? `${w.project.projectNo} — ${w.project.name}` : 'Stock production',
+                w.outputItem ? `${w.outputItem.code} ${w.outputItem.name}` : '',
+                w.outputQty ?? '',
+                w.priority,
+                w.startDate ? w.startDate.slice(0, 10) : '',
+                w.endDate ? w.endDate.slice(0, 10) : '',
+                `${w.stats.taskDone}/${w.stats.taskTotal}`,
+                w.stats.progressPct,
+                w.status,
+              ]),
+            },
+          ]}
+        />
       </div>
 
       <Card className="p-0">

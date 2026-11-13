@@ -95,7 +95,7 @@ export function AttachmentsPanel({ entityType, entityId }: { entityType: string;
         </div>
         {rows.length === 0 ? (
           <p className="px-4 py-6 text-center text-sm text-muted-foreground">
-            No files attached. PDF, images, Office documents, CSV, ZIP — up to 10 MB each.
+            No files attached. PDF, images, Office documents, CSV, ZIP — up to 2 MB each.
           </p>
         ) : (
           <ul className="divide-y">

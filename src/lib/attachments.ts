@@ -18,7 +18,7 @@ import { db } from './db'
 
 const ROOT = join(process.cwd(), 'upload', 'attachments')
 
-export const MAX_FILE_BYTES = 10 * 1024 * 1024 // 10 MB
+export const MAX_FILE_BYTES = 2 * 1024 * 1024 // 2 MB
 export const MAX_FILES_PER_DOC = 20
 const MAX_NOTE = 300
 
@@ -95,7 +95,7 @@ function extOf(fileName: string): string {
 
 function validateUpload(file: File): { ext: string } {
   if (!file.size) throw new BusinessError('The selected file is empty', 400)
-  if (file.size > MAX_FILE_BYTES) throw new BusinessError(`"${file.name}" is larger than 10 MB`, 400)
+  if (file.size > MAX_FILE_BYTES) throw new BusinessError(`"${file.name}" is larger than 2 MB`, 400)
   const name = file.name.slice(0, 255)
   const ext = extOf(name)
   const okMime = ALLOWED_MIME.has(file.type)

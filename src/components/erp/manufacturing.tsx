@@ -90,6 +90,7 @@ import { useErpUi } from './store'
 import { OverheadAdvisorTab } from './overhead-advisor'
 import { dateStr, money, qty as qtyFmt, r2 } from '@/lib/erp'
 import { cn } from '@/lib/utils'
+import { MFG_SECTION_GROUPS } from './mfg-sections'
 import { QualityWorkspace } from './quality-workspace'
 import { ProductionReceiptsWorkspace } from './production-receipts'
 
@@ -156,6 +157,38 @@ export function ManufacturingView() {
           onClick={() => setView('projects')}
         />
       </div>
+
+      {/* In-page section switcher — same state the sidebar tree drives, so the
+          module is fully navigable even with the sidebar collapsed / on mobile. */}
+      <nav aria-label="Manufacturing sections" className="print-hide flex flex-wrap items-center gap-1.5">
+        {MFG_SECTION_GROUPS.map((group, gi) => (
+          <span key={group.label} className="flex items-center gap-1.5">
+            {gi > 0 ? <span className="mx-1 h-5 w-px bg-border" aria-hidden /> : null}
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{group.label}</span>
+            {group.items.map((item) => {
+              const active = tab === item.value
+              const Icon = item.icon
+              return (
+                <button
+                  key={item.value}
+                  type="button"
+                  onClick={() => setTab(item.value)}
+                  aria-current={active ? 'true' : undefined}
+                  className={cn(
+                    'inline-flex h-9 items-center gap-1.5 rounded-md border px-3 text-sm font-medium transition-colors',
+                    active
+                      ? 'border-primary bg-primary text-primary-foreground'
+                      : 'border-border bg-background text-foreground hover:bg-accent',
+                  )}
+                >
+                  <Icon className="size-4" aria-hidden />
+                  {item.label}
+                </button>
+              )
+            })}
+          </span>
+        ))}
+      </nav>
 
       <div className="min-w-0">
           {tab === 'boms' && <BomsTab onChanged={() => stats.reload()} />}

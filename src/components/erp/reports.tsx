@@ -14,7 +14,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { cn } from '@/lib/utils'
 import {
   currentMonth,
   useApi,
@@ -38,83 +38,132 @@ import { money } from '@/lib/erp'
 import { useErpUi } from './store'
 import { AgingTab, BackOrdersTab, BalanceSheetTab, PnlLedgerTab, ProjectProfitabilityTab, PurchaseBySupplierTab, SalesAnalysisTab } from './reports-extra'
 
+// ---------- grouped report navigation (category → report, 2 levels) ----------
+
+type RepTab =
+  | 'action-center' | 'gstr1' | 'gstr3b' | 'hsn' | 'trial' | 'pnl' | 'pnl-ledger'
+  | 'balance-sheet' | 'cashbook' | 'outstanding' | 'aging' | 'customers' | 'suppliers'
+  | 'sales-analysis' | 'purchase-supplier' | 'back-orders'
+  | 'production-cost' | 'efficiency' | 'inventory' | 'projects'
+
+/** Reports grouped the way they are used, instead of one flat 20-tab wall. */
+const REPORT_GROUPS: { label: string; items: { value: RepTab; label: string }[] }[] = [
+  {
+    label: 'Overview',
+    items: [{ value: 'action-center', label: 'Action Center' }],
+  },
+  {
+    label: 'GST & Compliance',
+    items: [
+      { value: 'gstr1', label: 'GSTR-1' },
+      { value: 'gstr3b', label: 'GSTR-3B' },
+      { value: 'hsn', label: 'HSN Summary' },
+    ],
+  },
+  {
+    label: 'Financial',
+    items: [
+      { value: 'trial', label: 'Trial Balance' },
+      { value: 'pnl', label: 'P&L' },
+      { value: 'pnl-ledger', label: 'P&L by Ledger' },
+      { value: 'balance-sheet', label: 'Balance Sheet' },
+      { value: 'cashbook', label: 'Cash & Bank' },
+    ],
+  },
+  {
+    label: 'Parties & Outstanding',
+    items: [
+      { value: 'outstanding', label: 'Outstanding' },
+      { value: 'aging', label: 'Aging' },
+      { value: 'customers', label: 'Customers' },
+      { value: 'suppliers', label: 'Suppliers' },
+    ],
+  },
+  {
+    label: 'Sales & Purchase',
+    items: [
+      { value: 'sales-analysis', label: 'Sales Analysis' },
+      { value: 'purchase-supplier', label: 'Purchase by Supplier' },
+      { value: 'back-orders', label: 'Back Orders' },
+    ],
+  },
+  {
+    label: 'Manufacturing & Stock',
+    items: [
+      { value: 'production-cost', label: 'Production Cost' },
+      { value: 'efficiency', label: 'Efficiency' },
+      { value: 'inventory', label: 'Inventory Planning' },
+      { value: 'projects', label: 'Project Profitability' },
+    ],
+  },
+]
+
+function chipClass(active: boolean): string {
+  return cn(
+    'inline-flex h-9 items-center rounded-md border px-3 text-sm font-medium transition-colors',
+    active
+      ? 'border-primary bg-primary text-primary-foreground'
+      : 'border-border bg-background text-foreground hover:bg-accent',
+  )
+}
+
 export function ReportsView() {
+  const [tab, setTab] = useState<RepTab>('action-center')
+  const group = REPORT_GROUPS.find((g) => g.items.some((i) => i.value === tab)) ?? REPORT_GROUPS[0]
+
   return (
     <div className="space-y-4">
       <SectionHeading
         title="Reports"
         description="GST, financial and integrity reports — all derived from the append-only ledgers."
       />
-      <Tabs defaultValue="action-center">
-        <TabsList className="h-auto w-full flex-wrap justify-start">
-          <TabsTrigger value="action-center" className="h-11 sm:h-9">Action Center</TabsTrigger>
-          <TabsTrigger value="gstr1" className="h-11 sm:h-9">GSTR-1</TabsTrigger>
-          <TabsTrigger value="gstr3b" className="h-11 sm:h-9">GSTR-3B</TabsTrigger>
-          <TabsTrigger value="hsn" className="h-11 sm:h-9">HSN Summary</TabsTrigger>
-          <TabsTrigger value="trial" className="h-11 sm:h-9">Trial Balance</TabsTrigger>
-          <TabsTrigger value="outstanding" className="h-11 sm:h-9">Outstanding</TabsTrigger>
-          <TabsTrigger value="cashbook" className="h-11 sm:h-9">Cash &amp; Bank</TabsTrigger>
-          <TabsTrigger value="customers" className="h-11 sm:h-9">Customers</TabsTrigger>
-          <TabsTrigger value="suppliers" className="h-11 sm:h-9">Suppliers</TabsTrigger>
-          <TabsTrigger value="production-cost" className="h-11 sm:h-9">Production Cost</TabsTrigger>
-          <TabsTrigger value="efficiency" className="h-11 sm:h-9">Efficiency</TabsTrigger>
-          <TabsTrigger value="inventory" className="h-11 sm:h-9">Inventory Planning</TabsTrigger>
-          <TabsTrigger value="pnl" className="h-11 sm:h-9">P&amp;L</TabsTrigger>
-          <TabsTrigger value="pnl-ledger" className="h-11 sm:h-9">P&amp;L by Ledger</TabsTrigger>
-          <TabsTrigger value="balance-sheet" className="h-11 sm:h-9">Balance Sheet</TabsTrigger>
-          <TabsTrigger value="aging" className="h-11 sm:h-9">Aging</TabsTrigger>
-          <TabsTrigger value="back-orders" className="h-11 sm:h-9">Back Orders</TabsTrigger>
-          <TabsTrigger value="sales-analysis" className="h-11 sm:h-9">Sales Analysis</TabsTrigger>
-          <TabsTrigger value="purchase-supplier" className="h-11 sm:h-9">Purchase by Supplier</TabsTrigger>
-          <TabsTrigger value="projects" className="h-11 sm:h-9">Project Profitability</TabsTrigger>
-        </TabsList>
-        <TabsContent value="action-center" className="mt-4">
-          <ActionCenterTab />
-        </TabsContent>
-        <TabsContent value="gstr1" className="mt-4">
-          <Gstr1Tab />
-        </TabsContent>
-        <TabsContent value="gstr3b" className="mt-4">
-          <Gstr3bTab />
-        </TabsContent>
-        <TabsContent value="hsn" className="mt-4">
-          <HsnSummaryTab />
-        </TabsContent>
-        <TabsContent value="trial" className="mt-4">
-          <TrialBalanceTab />
-        </TabsContent>
-        <TabsContent value="outstanding" className="mt-4">
-          <OutstandingTab />
-        </TabsContent>
-        <TabsContent value="cashbook" className="mt-4">
-          <CashBankBookTab />
-        </TabsContent>
-        <TabsContent value="customers" className="mt-4">
-          <CustomerPerformanceTab />
-        </TabsContent>
-        <TabsContent value="suppliers" className="mt-4">
-          <SupplierPerformanceTab />
-        </TabsContent>
-        <TabsContent value="production-cost" className="mt-4">
-          <ProductionCostTab />
-        </TabsContent>
-        <TabsContent value="efficiency" className="mt-4">
-          <ProductionEfficiencyTab />
-        </TabsContent>
-        <TabsContent value="inventory" className="mt-4">
-          <InventoryPlanningTab />
-        </TabsContent>
-        <TabsContent value="pnl" className="mt-4">
-          <PnlTab />
-        </TabsContent>
-        <TabsContent value="pnl-ledger" className="mt-4"><PnlLedgerTab /></TabsContent>
-        <TabsContent value="balance-sheet" className="mt-4"><BalanceSheetTab /></TabsContent>
-        <TabsContent value="aging" className="mt-4"><AgingTab /></TabsContent>
-        <TabsContent value="back-orders" className="mt-4"><BackOrdersTab /></TabsContent>
-        <TabsContent value="sales-analysis" className="mt-4"><SalesAnalysisTab /></TabsContent>
-        <TabsContent value="purchase-supplier" className="mt-4"><PurchaseBySupplierTab /></TabsContent>
-        <TabsContent value="projects" className="mt-4"><ProjectProfitabilityTab /></TabsContent>
-      </Tabs>
+
+      {/* Level 1 — pick a category */}
+      <nav aria-label="Report categories" className="flex flex-wrap gap-1.5">
+        {REPORT_GROUPS.map((g) => {
+          const active = g.label === group.label
+          return (
+            <button key={g.label} type="button" onClick={() => setTab(g.items[0].value)} className={chipClass(active)} aria-current={active ? 'true' : undefined}>
+              {g.label}
+            </button>
+          )
+        })}
+      </nav>
+
+      {/* Level 2 — pick a report inside the category */}
+      <nav aria-label={`Reports — ${group.label}`} className="flex flex-wrap gap-1.5 border-b pb-3">
+        {group.items.map((item) => {
+          const active = item.value === tab
+          return (
+            <button key={item.value} type="button" onClick={() => setTab(item.value)} className={chipClass(active)} aria-current={active ? 'true' : undefined}>
+              {item.label}
+            </button>
+          )
+        })}
+      </nav>
+
+      <div role="tabpanel" aria-label={group.items.find((i) => i.value === tab)?.label ?? 'Report'} className="min-w-0">
+        {tab === 'action-center' && <ActionCenterTab />}
+        {tab === 'gstr1' && <Gstr1Tab />}
+        {tab === 'gstr3b' && <Gstr3bTab />}
+        {tab === 'hsn' && <HsnSummaryTab />}
+        {tab === 'trial' && <TrialBalanceTab />}
+        {tab === 'outstanding' && <OutstandingTab />}
+        {tab === 'cashbook' && <CashBankBookTab />}
+        {tab === 'customers' && <CustomerPerformanceTab />}
+        {tab === 'suppliers' && <SupplierPerformanceTab />}
+        {tab === 'production-cost' && <ProductionCostTab />}
+        {tab === 'efficiency' && <ProductionEfficiencyTab />}
+        {tab === 'inventory' && <InventoryPlanningTab />}
+        {tab === 'pnl' && <PnlTab />}
+        {tab === 'pnl-ledger' && <PnlLedgerTab />}
+        {tab === 'balance-sheet' && <BalanceSheetTab />}
+        {tab === 'aging' && <AgingTab />}
+        {tab === 'back-orders' && <BackOrdersTab />}
+        {tab === 'sales-analysis' && <SalesAnalysisTab />}
+        {tab === 'purchase-supplier' && <PurchaseBySupplierTab />}
+        {tab === 'projects' && <ProjectProfitabilityTab />}
+      </div>
     </div>
   )
 }

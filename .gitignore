@@ -55,6 +55,8 @@ server.log
 /skills/
 # local secrets & runtime key material (per-install, never commit)
 db/*.key
+# runtime attachment storage (per-install user files; metadata is in MySQL)
+/upload/attachments/
 .env
 .env.local
 .env.*.local

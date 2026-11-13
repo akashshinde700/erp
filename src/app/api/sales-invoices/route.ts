@@ -83,5 +83,5 @@ async function handlePost(req: Request) {
 }
 
 export async function POST(req: Request) {
-  return withIdempotency(req, 'sales-invoices', () => handlePost(req))
+  return withIdempotency(req, 'sales-invoices', (r) => handlePost(r))
 }

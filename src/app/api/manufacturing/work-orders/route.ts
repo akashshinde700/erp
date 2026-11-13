@@ -24,7 +24,8 @@ const woLineSchema = z.object({
 })
 
 const woSchema = z.object({
-  projectId: z.string().min(1, 'Project is required'),
+  /** Optional: omit (or null) for make-to-stock production. */
+  projectId: z.string().min(1).optional().nullable(),
   bomId: z.string().optional().nullable(),
   date: optionalDate,
   startDate: nullableDate,

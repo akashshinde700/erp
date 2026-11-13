@@ -32,7 +32,8 @@ const bomLineSchema = z.object({
 })
 
 const bomSchema = z.object({
-  projectId: z.string().min(1, 'Project is required'),
+  /** Optional: omit (or null) for a standard BOM used by stock production. */
+  projectId: z.string().min(1).optional().nullable(),
   /** Output item — the link MRP explodes demand through. */
   itemId: z.string({ error: 'Output item is required' }).min(1, 'Output item is required'),
   productName: z.string().max(160).optional(),

@@ -1000,7 +1000,6 @@ async function phaseMrp() {
   const savedMake = (detail.data?.lines ?? []).find((l) => l.itemId === isoFg && l.suggestion === 'MAKE' && l.netQty > 0)
   const savedBuy = (detail.data?.lines ?? []).find((l) => l.itemId === isoRm && l.suggestion === 'BUY' && l.netQty > 0)
   if (savedMake && savedBuy) {
-    expectReject('MRP: MAKE lines need an executing project', await post(`${M}/mrp/${runId}/actions`, { action: 'create-documents', lineIds: [savedMake.id] }), /project/i)
     const conv = await post(`${M}/mrp/${runId}/actions`, { action: 'create-documents', lineIds: [savedMake.id, savedBuy.id], projectId: pid })
     expectOk('MRP: approve suggestions into documents', conv)
     const pr = await q1('SELECT status, purpose FROM PurchaseRequisition WHERE reqNo=?', [conv.data?.requisition?.reqNo])
@@ -1484,11 +1483,87 @@ async function phaseSalesDocs() {
   await reconcile('after balance sheet + proforma')
 }
 
+// ---------------------------------------------------------------- Phase 14: make-to-stock (no project)
+async function phaseStockMfg() {
+  phase = 'P14-stock-mfg'
+  const M = '/api/manufacturing', R = `${M}/receipts`
+  const T = (id) => `${M}/tasks/${id}/actions`
+  const emp = (await q1('SELECT id FROM Employee LIMIT 1')).id
+  const fg = (await post('/api/masters/items', { code: 'AUD-STK-FG', name: 'Audit stock bracket', uom: 'PCS', costRate: 300, saleRate: 700, gstRate: 18, hsn: '732690' })).data.id
+
+  // standard BOM: no project
+  const bom = await post(`${M}/boms`, { itemId: fg, productName: 'Audit stock bracket', lineBasis: 'UNIT', lines: [{ itemId: F.rm, qty: 2, uom: 'KG', rate: 100 }] })
+  expectOk('stock: create a standard BOM without a project', bom)
+  check('stock: the BOM belongs to no project', bom.data?.projectId === null, JSON.stringify(bom.data?.projectId))
+  expectOk('stock: approve the standard BOM', await post(`${M}/boms/${bom.data.id}/actions`, { action: 'approve' }))
+
+  // a project BOM cannot silently become stock production
+  expectReject('stock: a project BOM needs its project (no silent stock order)', await post(`${M}/work-orders`, { bomId: F.bom, outputQty: 1 }), /belongs to a project/i)
+
+  const wo = await post(`${M}/work-orders`, { bomId: bom.data.id, outputQty: 5 })
+  expectOk('stock: create a work order without a project', wo)
+  check('stock: the work order is make-to-stock (no project)', wo.data?.projectId === null, JSON.stringify(wo.data?.projectId))
+  const req = num((await q1('SELECT SUM(plannedQty) q FROM WorkOrderLine WHERE workOrderId=?', [wo.data.id])).q)
+  check('stock: material requirement = BOM × quantity (2 × 5 = 10 KG)', near(req, 10), `planned=${req}`)
+  const list = await get(`${M}/work-orders`)
+  check('stock: the work-order list returns it with no project', (list.data ?? []).some((w) => w.id === wo.data.id && w.project === null), '')
+
+  // the same standard BOM can also run under a project
+  const prj = (await q1("SELECT id FROM Project WHERE status IN ('PENDING','RUNNING') LIMIT 1"))?.id
+  if (prj) {
+    const wo2 = await post(`${M}/work-orders`, { projectId: prj, bomId: bom.data.id, outputQty: 2 })
+    expectOk('stock: a standard BOM can also run under a project', wo2)
+    check('stock: that order belongs to the project', wo2.data?.projectId === prj, '')
+    await post(`${M}/work-orders/${wo2.data.id}/actions`, { action: 'cancel', reason: 'audit: only proving the link' })
+  }
+
+  // shop floor → finished goods → closed, all without a project
+  const t = await post(`${M}/tasks`, { workOrderId: wo.data.id, operation: 'ASSEMBLY', seq: 1, plannedQty: 5 })
+  expectOk('stock: operation task on the stock work order', t)
+  await post(T(t.data.id), { action: 'assign', employeeId: emp }); await post(T(t.data.id), { action: 'start' })
+  expectOk('stock: complete the operation with material', await post(T(t.data.id), { action: 'complete', actualQty: 5, hours: 2, labourRate: 150, materialItemId: F.rm, materialQty: 10 }))
+  const pend = await get(`${M}/tasks?workOrderId=${wo.data.id}`)
+  check('stock: task lists work for a stock order', pend.status === 200, `status=${pend.status}`)
+  const eff = await get('/api/reports?type=production-efficiency')
+  check('stock: production reports handle orders without a project', eff.status === 200, `status=${eff.status} ${eff.error ?? ''}`)
+  const mat = await get(`${M}/material-plan`)
+  check('stock: the material plan handles orders without a project', mat.status === 200, `status=${mat.status} ${mat.error ?? ''}`)
+  const sched = await get(`${M}/schedule?horizonDays=30`)
+  check('stock: the finite schedule handles orders without a project', sched.status === 200, `status=${sched.status} ${sched.error ?? ''}`)
+  const rc = await post(R, { workOrderId: wo.data.id, outputItemId: fg, warehouseId: F.main, producedQty: 5, acceptedQty: 5 })
+  expectOk('stock: receive the finished goods into stock', rc)
+  check('stock: finished goods are in stock', near(num((await q1("SELECT COALESCE(SUM(qtyIn-qtyOut),0) q FROM StockLedger WHERE itemId=? AND isCancelled=0", [fg])).q), 5), '')
+  expectOk('stock: close the stock work order', await post(`${M}/work-orders/${wo.data.id}/actions`, { action: 'complete' }))
+  const cv = await get(`${M}/costing/${wo.data.id}`)
+  check('stock: costing works for a stock order', cv.status === 200 && near(cv.data?.standard?.material, 200), `status=${cv.status} material=${cv.data?.standard?.material}`)
+
+  // MRP: planned order for a standard BOM with no project picked
+  const O = '/api/order-to-cash'
+  const cust = F.cust
+  const quote = await post(O, { action: 'create-quotation', partyId: cust, validUntil: daysFromNow(20), lines: [{ itemId: fg, qty: 7, rate: 700 }] })
+  await post(O, { action: 'transition-quotation', id: quote.data.id, transition: 'SUBMIT' })
+  await post(O, { action: 'transition-quotation', id: quote.data.id, transition: 'APPROVE' })
+  const order = await post(O, { action: 'quotation-to-order', id: quote.data.id, deliveryDate: daysFromNow(10) })
+  await post(O, { action: 'approve-order', id: order.data.id })
+  const run = await post(`${M}/mrp`, { asOf: today, horizonDays: 30 })
+  expectOk('stock: MRP run with demand for the stock item', run)
+  const detail = await get(`${M}/mrp/${run.data.id}`)
+  const make = (detail.data?.lines ?? []).find((l) => l.itemId === fg && l.suggestion === 'MAKE' && l.netQty > 0)
+  if (make) {
+    const conv = await post(`${M}/mrp/${run.data.id}/actions`, { action: 'create-documents', lineIds: [make.id] })
+    expectOk('stock: approve a MAKE suggestion without picking a project', conv)
+    const w = await q1('SELECT projectId, outputQty FROM WorkOrder WHERE woNo=?', [conv.data?.workOrders?.[0]?.woNo])
+    check('stock: MRP planned order is make-to-stock for a standard BOM', w && w.projectId === null && near(w.outputQty, make.netQty), JSON.stringify(w))
+  } else check('stock: MRP suggests making the stock item', false, JSON.stringify((detail.data?.lines ?? []).filter((l) => l.itemId === fg)))
+  await post(`${M}/mrp/${run.data.id}/actions`, { action: 'close' })
+  await reconcile('after stock manufacturing')
+}
+
 // ---------------------------------------------------------------- main
 async function main() {
   const t0 = Date.now()
   await setup()
-  const phases = [phaseAuth, phaseP2P, phaseRfq, phaseQ2C, phaseMfg, phaseQuality, phaseLots, phaseFinance, phaseGst, phaseMrp, phaseOps, phaseCosting, phaseBomBasis, phaseOverhead, phaseSalesDocs, phaseFuzz]
+  const phases = [phaseAuth, phaseP2P, phaseRfq, phaseQ2C, phaseMfg, phaseQuality, phaseLots, phaseFinance, phaseGst, phaseMrp, phaseOps, phaseCosting, phaseBomBasis, phaseOverhead, phaseSalesDocs, phaseStockMfg, phaseFuzz]
   for (const fn of phases) {
     try { await fn() } catch (e) { check(`${fn.name} completed without a harness exception`, false, e?.stack?.split('\n').slice(0, 3).join(' ') ?? String(e)) }
   }

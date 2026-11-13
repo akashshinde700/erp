@@ -137,7 +137,7 @@ type ProjectRow = { id: string; projectNo: string; name: string; customer: strin
 export function ProjectProfitabilityTab() {
   const { data, loading } = useApi<ProjectRow[]>('/api/reports?type=project-profitability')
   if (loading) return <TableSkeleton rows={5} cols={6} />
-  if (!data?.length) return <EmptyState icon={BarChart3} title="No projects" hint="Create a project under Own Projects & Mfg to track budget against actual cost." />
+  if (!data?.length) return <EmptyState icon={BarChart3} title="No projects" hint="Create a project under Projects to track budget against actual cost." />
   return <div className="space-y-3">
     <Csv name="project-profitability.csv" rows={[['Project', 'Name', 'Customer', 'Status', 'Contract', 'Est. cost', 'Material', 'Labour', 'Hours', 'Actual', 'Variance', 'Margin to date'], ...data.map((r) => [r.projectNo, r.name, r.customer, r.status, r.contractValue, r.estCost, r.material, r.labour, r.hours, r.actualCost, r.costVariance, r.marginToDate])]} />
     <Card className="p-0"><CardContent className="p-0"><div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Project</TableHead><TableHead className="text-right">Contract</TableHead><TableHead className="text-right">Estimated cost</TableHead><TableHead className="text-right">Actual cost</TableHead><TableHead className="text-right">Margin to date</TableHead></TableRow></TableHeader><TableBody>

@@ -16,12 +16,17 @@ const KEEP_DAYS = 7
  * different body gets 422. Failed requests (status >= 400) release the key so a
  * corrected retry can run. Without the header the handler simply runs.
  */
-export async function withIdempotency(req: Request, scope: string, run: () => Promise<Response>): Promise<Response> {
+export async function withIdempotency(req: Request, scope: string, run: (req: Request) => Promise<Response>): Promise<Response> {
   const key = req.headers.get('idempotency-key')?.trim()
-  if (!key) return run()
+  if (!key) return run(req)
   if (key.length > 120) return fail('Idempotency-Key is too long (max 120 characters)', 400)
   const id = `${scope}:${key}`
-  const requestHash = createHash('sha256').update(await req.clone().text()).digest('hex')
+  // Read the body ONCE and hand the handler a fresh Request built from it.
+  // req.clone() + a second read raced under concurrent requests (the proxy
+  // buffers the body) and failed with "Body has already been read" → 500.
+  const raw = await req.text()
+  const fresh = () => new Request(req.url, { method: req.method, headers: req.headers, body: raw })
+  const requestHash = createHash('sha256').update(raw).digest('hex')
   try {
     await db.idempotencyKey.create({ data: { id, scope, requestHash } })
   } catch (error) {
@@ -40,7 +45,7 @@ export async function withIdempotency(req: Request, scope: string, run: () => Pr
   }
   let response: Response
   try {
-    response = await run()
+    response = await run(fresh())
   } catch (error) {
     await db.idempotencyKey.delete({ where: { id } }).catch(() => {})
     throw error

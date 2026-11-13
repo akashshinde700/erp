@@ -429,8 +429,9 @@ export interface BomRevisionRef {
 export interface Bom {
   id: string
   bomNo: string
-  projectId: string
-  project: { id: string; projectNo: string; name: string; status: string }
+  /** null = standard (stock) BOM, not tied to a project. */
+  projectId: string | null
+  project: { id: string; projectNo: string; name: string; status: string } | null
   /** Output item — what this BOM makes. MRP explodes demand through it. */
   itemId: string | null
   item: { id: string; code: string; name: string; uom: string } | null
@@ -468,7 +469,7 @@ export interface BomWhereUsedRow {
   /** Work orders already generated from this revision (impact review). */
   workOrders: number
   outputItem: { id: string; code: string; name: string } | null
-  project: { projectNo: string; name: string }
+  project: { projectNo: string; name: string } | null
 }
 
 export interface BomWhereUsed {
@@ -519,8 +520,9 @@ export interface ProductionTask {
 export interface WorkOrder {
   id: string
   woNo: string
-  projectId: string
-  project: { id: string; projectNo: string; name: string; status: string }
+  /** null = make-to-stock production. */
+  projectId: string | null
+  project: { id: string; projectNo: string; name: string; status: string } | null
   bomId: string | null
   bom?: { id: string; bomNo: string; productName: string; revision?: number; itemId?: string | null } | null
   /** What this order produces; defaulted from the BOM's output item. */
@@ -559,7 +561,7 @@ export interface PendingTaskRow extends ProductionTask {
     priority: string
     status: string
     endDate: string | null
-    project: { id: string; projectNo: string; name: string; status: string }
+    project: { id: string; projectNo: string; name: string; status: string } | null
   }
   overdue: boolean
   woOverdue: boolean

@@ -22,5 +22,5 @@ async function handlePost(req: Request) {
 }
 
 export async function POST(req: Request) {
-  return withIdempotency(req, 'traceability', () => handlePost(req))
+  return withIdempotency(req, 'traceability', (r) => handlePost(r))
 }

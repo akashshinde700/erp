@@ -508,7 +508,7 @@ export interface ScheduledTask {
   taskNo: string
   woId: string
   woNo: string
-  projectNo: string
+  projectNo: string | null
   operation: string
   seq: number
   workCenterId: string
@@ -572,7 +572,7 @@ export async function finiteSchedule(fromInput?: string | Date, horizonDays = SC
       taskNo: t.taskNo,
       woId: t.workOrderId,
       woNo: t.workOrder.woNo,
-      projectNo: t.workOrder.project.projectNo,
+      projectNo: t.workOrder.project?.projectNo ?? null,
       notBefore: new Date(Math.max(
         from.getTime(),
         (t.workOrder.startDate ?? t.workOrder.date).getTime()
@@ -641,7 +641,7 @@ export async function finiteSchedule(fromInput?: string | Date, horizonDays = SC
   }
 
   // Lateness per work order: latest planned finish for the order vs its promise.
-  const perWo = new Map<string, { woNo: string; projectNo: string; due: Date | null; finish: Date; minutes: number }>()
+  const perWo = new Map<string, { woNo: string; projectNo: string | null; due: Date | null; finish: Date; minutes: number }>()
   for (const p of placements) {
     const row = rows.find((r) => r.id === p.taskId)!
     const existing = perWo.get(row.woId)

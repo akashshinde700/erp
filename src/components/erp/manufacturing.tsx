@@ -101,6 +101,7 @@ import { ProductionReceiptsWorkspace } from './production-receipts'
 export function ManufacturingView() {
   // Sub-section lives in the global store so the main sidebar tree can drive it.
   const { mfgTab: tab, setMfgTab: setTab } = useErpUi()
+  const setView = useErpUi((st) => st.setView)
   const [taskWoFilter, setTaskWoFilter] = useState<string>('all')
   const stats = useApi<ManufacturingStats | null>('/api/manufacturing/stats')
   const s = stats.data
@@ -113,8 +114,8 @@ export function ManufacturingView() {
   return (
     <div className="space-y-4">
       <SectionHeading
-        title="Own Projects & Manufacturing"
-        description="Make-to-order fabrication using company-owned material: project → BOM → work order → operation tasks. Customer-owned conversion work stays in Customer Jobwork and is never used as own stock."
+        title="Manufacturing"
+        description="BOM → work order → operation tasks → finished-goods receipt, for project jobs and for stock (make-to-stock) production. Customer-owned conversion work stays in Customer Jobwork and is never used as own stock."
       />
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
@@ -123,7 +124,7 @@ export function ManufacturingView() {
           value={s ? String(s.projects.running) : '—'}
           icon={FolderKanban}
           hint={s ? `${s.projects.pending} pending · ${s.projects.completed} done` : undefined}
-          onClick={() => setTab('projects')}
+          onClick={() => setView('projects')}
         />
         <KpiCard
           title="Open Work Orders"
@@ -152,12 +153,11 @@ export function ManufacturingView() {
           value={s ? String(s.projects.completed) : '—'}
           icon={CheckCircle2}
           tone="positive"
-          onClick={() => setTab('projects')}
+          onClick={() => setView('projects')}
         />
       </div>
 
       <div className="min-w-0">
-          {tab === 'projects' && <ProjectsTab onChanged={() => stats.reload()} />}
           {tab === 'boms' && <BomsTab onChanged={() => stats.reload()} />}
           {tab === 'work-orders' && <WorkOrdersTab onViewTasks={gotoTasks} onChanged={() => stats.reload()} />}
           {tab === 'mrp' && <MrpTab onChanged={() => stats.reload()} />}
@@ -173,6 +173,19 @@ export function ManufacturingView() {
           {tab === 'overhead' && <OverheadAdvisorTab />}
           {tab === 'quality' && <QualityWorkspace />}
         </div>
+    </div>
+  )
+}
+
+/** Projects as their own module: customer jobs (make-to-order) with budget, BOMs and work orders. */
+export function ProjectsView() {
+  return (
+    <div className="space-y-4">
+      <SectionHeading
+        title="Projects"
+        description="Customer jobs (make-to-order): contract value, BOMs, work orders and profitability per project. Stock production without a customer lives in Manufacturing."
+      />
+      <ProjectsTab />
     </div>
   )
 }
@@ -1110,7 +1123,6 @@ function MrpTab({ onChanged }: { onChanged?: () => void }) {
   const openDocuments = async () => {
     if (!run) return
     if (selectedLines.length === 0) return toast.error('Select at least one suggestion')
-    if (selectedMake.length > 0 && !projectId) return toast.error('Pick the project that will execute the planned work orders')
     setBusy(true)
     try {
       const res = await apiPost<MrpDocumentResult>(`/api/manufacturing/mrp/${run.id}/actions`, {
@@ -1336,11 +1348,12 @@ function MrpTab({ onChanged }: { onChanged?: () => void }) {
                   <div className="flex flex-wrap items-end gap-2">
                     <div className="space-y-1.5">
                       <Label className="text-xs text-muted-foreground">Project for planned work orders</Label>
-                      <Select value={projectId || undefined} onValueChange={setProjectId}>
+                      <Select value={projectId || '__none__'} onValueChange={(v) => setProjectId(v === '__none__' ? '' : v)}>
                         <SelectTrigger className="h-11 data-[size=default]:h-11 w-64">
-                          <SelectValue placeholder={selectedMake.length ? 'Select project…' : 'Not needed for buy lines'} />
+                          <SelectValue />
                         </SelectTrigger>
                         <SelectContent className="max-h-72">
+                          <SelectItem value="__none__">No project — stock production</SelectItem>
                           {activeProjectList.map((p) => (
                             <SelectItem key={p.id} value={p.id}>
                               {p.projectNo} — {p.name}
@@ -1806,7 +1819,7 @@ export function ProjectDetailView({ id }: { id: string }) {
         title="Could not load project"
         hint={detail.error}
         icon={XCircle}
-        action={<Button variant="outline" className="mt-2 h-11" onClick={() => setView('manufacturing')}>Back to Projects</Button>}
+        action={<Button variant="outline" className="mt-2 h-11" onClick={() => setView('projects')}>Back to Projects</Button>}
       />
     )
   }
@@ -1821,7 +1834,7 @@ export function ProjectDetailView({ id }: { id: string }) {
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <Button variant="ghost" size="sm" onClick={() => setView('manufacturing')} className="mb-1 h-9 gap-1.5 px-2 text-muted-foreground">
+          <Button variant="ghost" size="sm" onClick={() => setView('projects')} className="mb-1 h-9 gap-1.5 px-2 text-muted-foreground">
             <ArrowLeft className="size-4" aria-hidden /> Projects
           </Button>
           <h2 className="flex flex-wrap items-center gap-2 text-lg font-semibold">
@@ -2377,8 +2390,8 @@ function BomsTab({ onChanged }: { onChanged?: () => void }) {
                           )}
                         </TableCell>
                         <TableCell>
-                          <span className="block max-w-36 truncate tabular-nums">{b.project?.projectNo}</span>
-                          <span className="block max-w-36 truncate text-xs text-muted-foreground">{b.project?.name}</span>
+                          <span className="block max-w-36 truncate tabular-nums">{b.project?.projectNo ?? 'Standard BOM'}</span>
+                          <span className="block max-w-36 truncate text-xs text-muted-foreground">{b.project?.name ?? 'no project'}</span>
                         </TableCell>
                         <TableCell className="text-right tabular-nums">{b.items.length}</TableCell>
                         <TableCell className="text-right hidden sm:table-cell"><Money value={b.totalEstCost} plain /></TableCell>
@@ -2616,7 +2629,6 @@ function NewBomDialog({
   }, 0)
 
   const save = async () => {
-    if (!pid) return toast.error('Pick the project')
     if (!outputItemId) return toast.error('Pick the output item this BOM makes')
     if (validRows.some((r) => r.itemId === outputItemId)) return toast.error('The output item cannot also be a component of its own BOM')
     if (!productName.trim()) return toast.error('Product / assembly name is required')
@@ -2625,7 +2637,7 @@ function NewBomDialog({
     setSaving(true)
     try {
       const res = await apiPost<Bom>('/api/manufacturing/boms', {
-        projectId: pid,
+        projectId: pid || null,
         itemId: outputItemId,
         lineBasis,
         batchQty: lineBasis === 'BATCH' ? num(batchQty) : 1,
@@ -2669,7 +2681,7 @@ function NewBomDialog({
         <DialogHeader>
           <DialogTitle>New Bill of Materials</DialogTitle>
           <DialogDescription>
-            {projectLabel ? `Project ${projectLabel}` : 'Pick the project, then list every material with grade, size and wastage.'}
+            {projectLabel ? `Project ${projectLabel}` : 'Pick a project — or leave it as a standard BOM for stock production — then list every material with grade, size and wastage.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -2678,11 +2690,12 @@ function NewBomDialog({
             {!projectId ? (
               <div className="space-y-1.5">
                 <Label>Project</Label>
-                <Select value={pid || undefined} onValueChange={setPid}>
+                <Select value={pid || '__none__'} onValueChange={(v) => setPid(v === '__none__' ? '' : v)}>
                   <SelectTrigger className="h-11 data-[size=default]:h-11 w-full">
-                    <SelectValue placeholder="Select project…" />
+                    <SelectValue />
                   </SelectTrigger>
                   <SelectContent className="max-h-64">
+                    <SelectItem value="__none__">Standard BOM — no project (stock)</SelectItem>
                     {activeProjects.map((p) => (
                       <SelectItem key={p.id} value={p.id}>
                         {p.projectNo} — {p.name}
@@ -2930,7 +2943,7 @@ function BomLinesDialog({ bom, open, onOpenChange }: { bom: Bom; open: boolean; 
             {bom.bomNo} rev {bom.revision} — {bom.productName}
           </DialogTitle>
           <DialogDescription>
-            {bom.project?.projectNo} · makes {bom.item ? `${bom.item.code} (${bom.item.name})` : 'an unlinked item'} ·{' '}
+            {bom.project?.projectNo ?? 'Standard BOM'} · makes {bom.item ? `${bom.item.code} (${bom.item.name})` : 'an unlinked item'} ·{' '}
             {bom.items.length} line(s) · quantities {bom.lineBasis === 'UNIT' ? 'per output unit' : `per batch of ${qtyFmt(bom.batchQty ?? 1)} output unit(s)`} · gross = qty + wastage. Stock check against current inventory.
             {bom.effectiveFrom ? ` Effective ${dateStr(bom.effectiveFrom)}${bom.effectiveTo ? ` → ${dateStr(bom.effectiveTo)}` : ' → open'}.` : ''}
             {bom.supersedes ? ` Supersedes ${bom.supersedes.bomNo} rev ${bom.supersedes.revision}.` : ''}
@@ -3517,7 +3530,7 @@ function WhereUsedDialog({ itemId, label, open, onOpenChange }: { itemId: string
                   <TableRow key={r.bomId}>
                     <TableCell>
                       <span className="block font-medium tabular-nums">{r.bomNo}</span>
-                      <span className="block text-xs text-muted-foreground">rev {r.revision} · {r.project?.projectNo}</span>
+                      <span className="block text-xs text-muted-foreground">rev {r.revision} · {r.project?.projectNo ?? 'standard'}</span>
                     </TableCell>
                     <TableCell className="max-w-40 truncate">{r.outputItem ? `${r.outputItem.code}` : '—'}</TableCell>
                     <TableCell className="text-right tabular-nums">{qtyFmt(r.qtyPer)} <span className="text-xs text-muted-foreground">{r.uom}</span></TableCell>
@@ -3540,6 +3553,10 @@ function WhereUsedDialog({ itemId, label, open, onOpenChange }: { itemId: string
 // ---------- generate work order from BOM ----------
 
 function GenerateWoDialog({ bom, open, onOpenChange, onCreated }: { bom: Bom; open: boolean; onOpenChange: (o: boolean) => void; onCreated: () => void }) {
+  const projects = useApi<Project[]>(open && !bom.projectId ? '/api/manufacturing/projects' : null)
+  // A project BOM always runs under its project; a standard BOM runs as stock
+  // production unless a project is picked.
+  const [woProjectId, setWoProjectId] = useState('')
   const [priority, setPriority] = useState<string>('NORMAL')
   const [startDate, setStartDate] = useState(todayISO())
   const [endDate, setEndDate] = useState('')
@@ -3553,7 +3570,7 @@ function GenerateWoDialog({ bom, open, onOpenChange, onCreated }: { bom: Bom; op
     setSaving(true)
     try {
       const res = await apiPost<WorkOrder>('/api/manufacturing/work-orders', {
-        projectId: bom.projectId,
+        projectId: bom.projectId ?? (woProjectId || null),
         bomId: bom.id,
         outputQty: batch,
         priority,
@@ -3610,6 +3627,20 @@ function GenerateWoDialog({ bom, open, onOpenChange, onCreated }: { bom: Bom; op
               </TableBody>
             </Table>
           </div>
+          {!bom.projectId ? (
+            <div className="space-y-1.5">
+              <Label>Run for</Label>
+              <Select value={woProjectId || '__none__'} onValueChange={(v) => setWoProjectId(v === '__none__' ? '' : v)}>
+                <SelectTrigger className="h-11 data-[size=default]:h-11 w-full sm:w-80"><SelectValue /></SelectTrigger>
+                <SelectContent className="max-h-64">
+                  <SelectItem value="__none__">Stock production (no project)</SelectItem>
+                  {(projects.data ?? []).filter((p) => p.status === 'PENDING' || p.status === 'RUNNING').map((p) => (
+                    <SelectItem key={p.id} value={p.id}>{p.projectNo} — {p.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          ) : null}
           <div className="grid gap-4 sm:grid-cols-4">
             <div className="space-y-1.5">
               <Label htmlFor="wo-qty">Output Qty ({bom.item?.uom ?? 'units'})</Label>
@@ -3732,8 +3763,8 @@ function WorkOrdersTab({ onViewTasks, onChanged }: { onViewTasks: (woId?: string
                         {w.bom ? <span className="block text-xs text-muted-foreground">{w.bom.bomNo}</span> : null}
                       </TableCell>
                       <TableCell>
-                        <span className="block max-w-36 truncate tabular-nums">{w.project?.projectNo}</span>
-                        <span className="block max-w-36 truncate text-xs text-muted-foreground">{w.project?.name}</span>
+                        <span className="block max-w-36 truncate tabular-nums">{w.project?.projectNo ?? 'STOCK'}</span>
+                        <span className="block max-w-36 truncate text-xs text-muted-foreground">{w.project?.name ?? 'Stock production'}</span>
                       </TableCell>
                       <TableCell><PriorityBadge priority={w.priority} /></TableCell>
                       <TableCell className="hidden lg:table-cell">
@@ -3758,7 +3789,7 @@ function WorkOrdersTab({ onViewTasks, onChanged }: { onViewTasks: (woId?: string
                       <TableCell><StatusBadge status={w.status} /></TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">
-                          <Button variant="outline" size="sm" className="h-9 gap-1" onClick={() => onViewTasks(w.id)}>
+                          <Button variant="outline" size="sm" className="h-11 gap-1 md:h-9" onClick={() => onViewTasks(w.id)}>
                             <Wrench className="size-3.5" aria-hidden /> Tasks
                           </Button>
                           {w.status === 'OPEN' || w.status === 'IN_PROGRESS' ? (
@@ -3766,7 +3797,7 @@ function WorkOrdersTab({ onViewTasks, onChanged }: { onViewTasks: (woId?: string
                               <Button
                                 variant="outline"
                                 size="sm"
-                                className="h-9 gap-1"
+                                className="h-11 gap-1 md:h-9"
                                 disabled={busy || w.stats.taskTotal === 0 || w.stats.taskDone < w.stats.taskTotal}
                                 title={w.stats.taskDone < w.stats.taskTotal ? 'Complete pending tasks first' : 'All tasks done'}
                                 onClick={() => woAction(w, 'complete')}
@@ -3778,7 +3809,7 @@ function WorkOrdersTab({ onViewTasks, onChanged }: { onViewTasks: (woId?: string
                                   <Button
                                     variant="ghost"
                                     size="sm"
-                                    className="h-9 gap-1 text-destructive hover:text-destructive"
+                                    className="h-11 min-w-11 gap-1 text-destructive hover:text-destructive md:h-9 md:min-w-0"
                                     disabled={busy || w.stats.taskDone > 0}
                                     aria-label={`Cancel ${w.woNo}`}
                                   >
@@ -3886,7 +3917,7 @@ function TasksTab({ woFilter, onWoFilterChange, onChanged }: { woFilter: string;
               <SelectItem value="all">All work orders</SelectItem>
               {(wos.data ?? []).map((w) => (
                 <SelectItem key={w.id} value={w.id}>
-                  {w.woNo} — {w.project?.projectNo}
+                  {w.woNo} — {w.project?.projectNo ?? 'stock'}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -4133,7 +4164,7 @@ function NewTaskDialog({
                   <SelectContent className="max-h-64">
                     {activeWos.map((w) => (
                       <SelectItem key={w.id} value={w.id}>
-                        {w.woNo} — {w.project?.projectNo} {w.bom ? `(${w.bom.productName})` : ''}
+                        {w.woNo} — {w.project?.projectNo ?? 'stock'} {w.bom ? `(${w.bom.productName})` : ''}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -4142,7 +4173,7 @@ function NewTaskDialog({
             ) : (
               <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm sm:col-span-2">
                 <span className="font-medium tabular-nums">{fixedWo.woNo}</span>
-                <span className="text-muted-foreground"> · {fixedWo.project?.projectNo}</span>
+                <span className="text-muted-foreground"> · {fixedWo.project?.projectNo ?? 'stock'}</span>
               </div>
             )}
             <div className="space-y-1.5">
@@ -4439,11 +4470,14 @@ function PendingTab({ onGoTasks, onChanged }: { onGoTasks: (woId?: string) => vo
 
   const byProject = useMemo(() => {
     if (!r) return []
-    const groups = new Map<string, { project: PendingTaskRow['workOrder']['project']; rows: PendingTaskRow[] }>()
+    // Stock-production work orders have no project: they group under one heading.
+    const STOCK = { id: '__stock__', projectNo: 'STOCK', name: 'Stock production (no project)', status: 'RUNNING' }
+    const groups = new Map<string, { project: NonNullable<PendingTaskRow['workOrder']['project']>; rows: PendingTaskRow[] }>()
     for (const t of r.rows) {
-      const g = groups.get(t.workOrder.project.id) ?? { project: t.workOrder.project, rows: [] }
+      const project = t.workOrder.project ?? STOCK
+      const g = groups.get(project.id) ?? { project, rows: [] }
       g.rows.push(t)
-      groups.set(t.workOrder.project.id, g)
+      groups.set(project.id, g)
     }
     return [...groups.values()]
   }, [r])

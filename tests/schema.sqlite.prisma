@@ -710,8 +710,10 @@ model Bom {
   companyId   String    @default("") // filled by the tenant extension; "" fails the FK
   company     Company   @relation(fields: [companyId], references: [id])
   bomNo       String // BOM-2526-001 (FY-aware)
-  projectId   String
-  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  /// Optional: a standard (stock) BOM belongs to no project; a project BOM
+  /// is deleted with its project.
+  projectId   String?
+  project     Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   productName String // product / assembly name
   drawingRef  String?
   // Output (made) item. Required on every new BOM; null only on legacy rows
@@ -948,8 +950,9 @@ model WorkOrder {
   companyId   String    @default("") // filled by the tenant extension; "" fails the FK
   company     Company   @relation(fields: [companyId], references: [id])
   woNo        String // WO-2526-001 (FY-aware)
-  projectId   String
-  project     Project   @relation(fields: [projectId], references: [id])
+  /// Optional: null = make-to-stock production (no customer project).
+  projectId   String?
+  project     Project?  @relation(fields: [projectId], references: [id], onDelete: Restrict)
   bomId       String?
   bom         Bom?      @relation(fields: [bomId], references: [id])
   // What this order produces and how much. bomId supplies the recipe; these

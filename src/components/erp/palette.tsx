@@ -49,7 +49,8 @@ const MODULES: { view: ErpView; label: string; icon: typeof LayoutDashboard; key
   { view: 'sales', label: 'Sales Invoices', icon: ReceiptText, keywords: 'invoice gst customer billing tax' },
   { view: 'purchase', label: 'Purchase Invoices', icon: ShoppingCart, keywords: 'supplier bill input gst' },
   { view: 'jobwork', label: 'Jobwork', icon: Factory, keywords: 'inward job card certificate process lot' },
-  { view: 'manufacturing', label: 'Projects & Manufacturing', icon: FolderKanban, keywords: 'project bom work order production task fabrication cutting welding assembly employee assign pending completion' },
+  { view: 'projects', label: 'Projects', icon: FolderKanban, keywords: 'project customer contract budget make to order fabrication site' },
+  { view: 'manufacturing', label: 'Manufacturing', icon: FolderKanban, keywords: 'bom work order production stock make to stock task fabrication cutting welding assembly employee assign pending completion mrp capacity oee costing' },
   { view: 'inventory', label: 'Inventory', icon: Boxes, keywords: 'stock ledger warehouse balance adjustment write-off damage count' },
   { view: 'accounting', label: 'Accounting', icon: Calculator, keywords: 'payment receipt ledger allocation party journal voucher tds chart of accounts period close lock financial year' },
   { view: 'reports', label: 'Reports', icon: FileText, keywords: 'gstr1 trial balance pnl outstanding' },
@@ -67,7 +68,8 @@ const RECENT_LABELS: Record<string, string> = {
   'purchase-detail': 'Purchase invoice detail',
   jobwork: 'Jobwork',
   'jobwork-detail': 'Jobwork inward detail',
-  manufacturing: 'Projects & Manufacturing',
+  projects: 'Projects',
+  manufacturing: 'Manufacturing',
   'project-detail': 'Project detail',
   inventory: 'Inventory',
   accounting: 'Accounting',
@@ -259,9 +261,13 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
             <Factory className="size-4 shrink-0" aria-hidden />
             New Jobwork Inward
           </CommandItem>
-          <CommandItem onSelect={() => go('manufacturing')} value="new project bom work order task fabrication">
+          <CommandItem onSelect={() => go('projects')} value="new project customer contract">
             <FolderKanban className="size-4 shrink-0" aria-hidden />
-            New Project / BOM / Task
+            New Project
+          </CommandItem>
+          <CommandItem onSelect={() => go('manufacturing')} value="new bom work order task stock production">
+            <FolderKanban className="size-4 shrink-0" aria-hidden />
+            New BOM / Work Order / Task
           </CommandItem>
         </CommandGroup>
 

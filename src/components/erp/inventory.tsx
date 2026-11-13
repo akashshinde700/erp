@@ -6,7 +6,7 @@
  * balance), Opening Stock (bulk voucher).
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { Boxes, Loader2, Plus, RefreshCw, Search, Trash2, TrendingDown } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
@@ -93,23 +93,58 @@ function TraceabilityTab() {
 
 // ---------- stock summary ----------
 
+type StockFilter = 'ALL' | 'LOW' | 'IN_STOCK' | 'ZERO'
+const STOCK_FILTERS: { value: StockFilter; label: string }[] = [
+  { value: 'ALL', label: 'All' },
+  { value: 'LOW', label: 'Low stock' },
+  { value: 'IN_STOCK', label: 'In stock' },
+  { value: 'ZERO', label: 'Zero stock' },
+]
+
 function StockSummaryTab() {
   const { data, loading } = useApi<StockSummaryRow[]>('/api/reports?type=stock-summary')
-  const rows = data ?? []
+  const all = useMemo(() => data ?? [], [data])
+  const [search, setSearch] = useState('')
+  const [filter, setFilter] = useState<StockFilter>('ALL')
+  // Client-side: the summary is one row per stock item, already loaded whole.
+  const rows = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return all.filter((r) => {
+      if (filter === 'LOW' && !r.lowStock) return false
+      if (filter === 'IN_STOCK' && !(r.closing > 0)) return false
+      if (filter === 'ZERO' && Math.abs(r.closing) > 0.0001) return false
+      if (!q) return true
+      return [r.item.code, r.item.name, r.item.hsn ?? ''].some((v) => v.toLowerCase().includes(q))
+    })
+  }, [all, search, filter])
   const totalValue = rows.reduce((s, r) => s + r.closingValue, 0)
-  const lowCount = rows.filter((r) => r.lowStock).length
+  const lowCount = all.filter((r) => r.lowStock).length
 
   if (loading) return <Card className="p-0"><CardContent className="p-0"><TableSkeleton rows={8} cols={6} /></CardContent></Card>
 
-  if (rows.length === 0) {
+  if (all.length === 0) {
     return <EmptyState title="No stock items" hint="Create stock items in Masters, then post opening stock." icon={Boxes} />
   }
 
   return (
     <Card className="p-0">
       <CardContent className="p-0">
+        <div className="flex flex-col gap-2 border-b px-4 py-3 sm:flex-row sm:items-center">
+          <div className="relative w-full sm:max-w-xs">
+            <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden />
+            <Input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search item, code or HSN…" className="h-11 pl-8" aria-label="Search stock items" />
+          </div>
+          <div className="flex flex-wrap gap-1.5" role="group" aria-label="Stock filter">
+            {STOCK_FILTERS.map((f) => (
+              <Button key={f.value} type="button" size="sm" variant={filter === f.value ? 'default' : 'outline'} className="h-10" aria-pressed={filter === f.value} onClick={() => setFilter(f.value)}>
+                {f.label}
+                {f.value === 'LOW' && lowCount > 0 ? <span className="ml-1 tabular-nums">({lowCount})</span> : null}
+              </Button>
+            ))}
+          </div>
+        </div>
         <div className="flex flex-wrap items-center gap-2 border-b px-4 py-3 text-xs text-muted-foreground">
-          <span className="font-medium text-foreground">{rows.length} items</span>
+          <span className="font-medium text-foreground">{rows.length === all.length ? `${all.length} items` : `${rows.length} of ${all.length} items`}</span>
           {lowCount > 0 ? (
             <span className="inline-flex items-center gap-1 rounded-md bg-amber-100 px-2 py-0.5 font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-400">
               <TrendingDown className="size-3" aria-hidden /> {lowCount} below reorder level
@@ -117,6 +152,9 @@ function StockSummaryTab() {
           ) : null}
           <span className="ml-auto tabular-nums">Closing value ₹ {money(totalValue)}</span>
         </div>
+        {rows.length === 0 ? (
+          <div className="p-6 text-center text-sm text-muted-foreground">No item matches “{search.trim() || STOCK_FILTERS.find((f) => f.value === filter)?.label}”.</div>
+        ) : null}
         <div className="max-h-[62dvh] overflow-auto erp-scroll [&_[data-slot=table-container]]:overflow-visible">
           <Table>
             <TableHeader className="sticky top-0 z-10 bg-card">

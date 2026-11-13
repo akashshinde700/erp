@@ -21,7 +21,7 @@ import {
   partyLedgerReport,
   jobworkPendingReport,
 } from '@/lib/reports'
-import { agingReport, backOrderReport, pnlByLedgerReport, projectProfitabilityReport, purchaseBySupplierReport, salesAnalysisReport } from '@/lib/reports-extra'
+import { agingReport, backOrderReport, balanceSheetReport, pnlByLedgerReport, projectProfitabilityReport, purchaseBySupplierReport, salesAnalysisReport } from '@/lib/reports-extra'
 
 /** from/to query range; defaults to the current financial year up to today. */
 function range(sp: URLSearchParams): { from: Date; to: Date } | string {
@@ -145,6 +145,13 @@ export async function GET(req: Request) {
         const r = range(sp)
         if (typeof r === 'string') return fail(r)
         return ok(await pnlByLedgerReport(r.from, r.to))
+      }
+      case 'balance-sheet': {
+        const asOf = sp.get('asOf')
+        if (asOf && !/^\d{4}-\d{2}-\d{2}$/.test(asOf)) return fail('asOf must be YYYY-MM-DD')
+        const d = asOf ? new Date(`${asOf}T00:00:00.000Z`) : new Date()
+        if (Number.isNaN(d.getTime())) return fail('asOf is not a valid date')
+        return ok(await balanceSheetReport(d))
       }
       case 'project-profitability':
         return ok(await projectProfitabilityReport())

@@ -15,6 +15,7 @@ import {
   Calculator,
   Database,
   Factory,
+  Cog,
   FolderKanban,
   Headset,
   LayoutDashboard,
@@ -78,7 +79,8 @@ const NAV_GROUPS: { group: string; entries: NavEntry[] }[] = [
     group: 'Manufacturing',
     entries: [
       { view: 'jobwork', label: 'Customer Jobwork', icon: Factory },
-      { view: 'manufacturing', label: 'Own Projects & Mfg', icon: FolderKanban },
+      { view: 'projects', label: 'Projects', icon: FolderKanban },
+      { view: 'manufacturing', label: 'Manufacturing', icon: Cog },
     ],
   },
   {
@@ -108,7 +110,7 @@ function NavList({ onNavigate }: { onNavigate?: () => void }) {
   // collapses the tree so the rest of the sidebar stays compact. A manual
   // toggle while inside the module sticks (view doesn't change). Adjusted
   // during render when `view` changes (no effect → no cascading render).
-  const inMfg = view === 'manufacturing' || view === 'project-detail'
+  const inMfg = view === 'manufacturing'
   const [mfgOpen, setMfgOpen] = useState(inMfg)
   const [prevView, setPrevView] = useState(view)
   if (view !== prevView) {
@@ -116,7 +118,7 @@ function NavList({ onNavigate }: { onNavigate?: () => void }) {
     setMfgOpen(inMfg)
   }
   const isActive = (entryView: ErpView) =>
-    view === entryView || view === `${entryView}-detail` || (entryView === 'manufacturing' && view === 'project-detail')
+    view === entryView || view === `${entryView}-detail` || (entryView === 'projects' && view === 'project-detail')
   return (
     <nav aria-label="ERP modules" className="flex flex-col gap-0.5 p-2">
       {NAV_GROUPS.map((g) => (
@@ -202,8 +204,6 @@ function NavList({ onNavigate }: { onNavigate?: () => void }) {
 function mfgBadgeFor(value: MfgTab, s: ManufacturingStats | null): { count: number; attention?: boolean } | null {
   if (!s) return null
   switch (value) {
-    case 'projects':
-      return s.projects.running > 0 ? { count: s.projects.running } : null
     case 'work-orders': {
       const n = s.workOrders.open + s.workOrders.inProgress
       return n > 0 ? { count: n } : null
@@ -220,7 +220,7 @@ function mfgBadgeFor(value: MfgTab, s: ManufacturingStats | null): { count: numb
 }
 
 /**
- * Grouped sub-section tree shown under the "Own Projects & Mfg" sidebar entry
+ * Grouped sub-section tree shown under the "Manufacturing" sidebar entry
  * (and inside the mobile drawer). Lazy-mounted only while expanded, so the
  * stats fetch happens on demand.
  */
@@ -330,6 +330,7 @@ const JobworkView = lazy(() => import('./jobwork').then((m) => ({ default: m.Job
 const JobworkDetailView = lazy(() => import('./jobwork').then((m) => ({ default: m.JobworkDetailView })))
 const ManufacturingView = lazy(() => import('./manufacturing').then((m) => ({ default: m.ManufacturingView })))
 const ProjectDetailView = lazy(() => import('./manufacturing').then((m) => ({ default: m.ProjectDetailView })))
+const ProjectsView = lazy(() => import('./manufacturing').then((m) => ({ default: m.ProjectsView })))
 const AccountingView = lazy(() => import('./accounting').then((m) => ({ default: m.AccountingView })))
 const ReportsView = lazy(() => import('./reports').then((m) => ({ default: m.ReportsView })))
 const CrmView = lazy(() => import('./crm').then((m) => ({ default: m.CrmView })))
@@ -625,6 +626,9 @@ export function ErpApp() {
       break
     case 'jobwork-detail':
       content = <JobworkDetailView id={params.id ?? ''} />
+      break
+    case 'projects':
+      content = <ProjectsView />
       break
     case 'manufacturing':
       content = <ManufacturingView />

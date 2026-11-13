@@ -36,7 +36,7 @@ import {
 import { EmptyState, Money, SectionHeading, TableSkeleton } from './bits'
 import { money } from '@/lib/erp'
 import { useErpUi } from './store'
-import { AgingTab, BackOrdersTab, PnlLedgerTab, ProjectProfitabilityTab, PurchaseBySupplierTab, SalesAnalysisTab } from './reports-extra'
+import { AgingTab, BackOrdersTab, BalanceSheetTab, PnlLedgerTab, ProjectProfitabilityTab, PurchaseBySupplierTab, SalesAnalysisTab } from './reports-extra'
 
 export function ReportsView() {
   return (
@@ -61,6 +61,7 @@ export function ReportsView() {
           <TabsTrigger value="inventory" className="h-11 sm:h-9">Inventory Planning</TabsTrigger>
           <TabsTrigger value="pnl" className="h-11 sm:h-9">P&amp;L</TabsTrigger>
           <TabsTrigger value="pnl-ledger" className="h-11 sm:h-9">P&amp;L by Ledger</TabsTrigger>
+          <TabsTrigger value="balance-sheet" className="h-11 sm:h-9">Balance Sheet</TabsTrigger>
           <TabsTrigger value="aging" className="h-11 sm:h-9">Aging</TabsTrigger>
           <TabsTrigger value="back-orders" className="h-11 sm:h-9">Back Orders</TabsTrigger>
           <TabsTrigger value="sales-analysis" className="h-11 sm:h-9">Sales Analysis</TabsTrigger>
@@ -107,6 +108,7 @@ export function ReportsView() {
           <PnlTab />
         </TabsContent>
         <TabsContent value="pnl-ledger" className="mt-4"><PnlLedgerTab /></TabsContent>
+        <TabsContent value="balance-sheet" className="mt-4"><BalanceSheetTab /></TabsContent>
         <TabsContent value="aging" className="mt-4"><AgingTab /></TabsContent>
         <TabsContent value="back-orders" className="mt-4"><BackOrdersTab /></TabsContent>
         <TabsContent value="sales-analysis" className="mt-4"><SalesAnalysisTab /></TabsContent>

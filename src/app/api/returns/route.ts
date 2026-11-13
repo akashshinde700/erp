@@ -28,5 +28,5 @@ async function handlePost(req: Request) {
 }
 
 export async function POST(req: Request) {
-  return withIdempotency(req, 'returns', () => handlePost(req))
+  return withIdempotency(req, 'returns', (r) => handlePost(r))
 }

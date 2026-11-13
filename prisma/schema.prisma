@@ -134,6 +134,8 @@ model Company {
   tallyConnector            TallyConnector?
   tallyConnectorJobs        TallyConnectorJob[]
   emailLogs                 EmailLog[]
+  proformaInvoices          ProformaInvoice[]
+  attachments               Attachment[]
 }
 
 // ---------- Organization logins (SaaS) ----------
@@ -273,6 +275,7 @@ model Party {
 
   @@unique([companyId, code])
   @@index([types])
+  proformaInvoices ProformaInvoice[]
 }
 
 model Item {
@@ -322,6 +325,7 @@ model Item {
   mrpLines           MrpLine[]
 
   @@unique([companyId, code])
+  proformaLines ProformaInvoiceLine[]
 }
 
 model Warehouse {
@@ -711,8 +715,10 @@ model Bom {
   companyId   String    @default("") // filled by the tenant extension; "" fails the FK
   company     Company   @relation(fields: [companyId], references: [id])
   bomNo       String // BOM-2526-001 (FY-aware)
-  projectId   String
-  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  /// Optional: a standard (stock) BOM belongs to no project; a project BOM
+  /// is deleted with its project.
+  projectId   String?
+  project     Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   productName String // product / assembly name
   drawingRef  String?
   // Output (made) item. Required on every new BOM; null only on legacy rows
@@ -952,8 +958,9 @@ model WorkOrder {
   companyId   String    @default("") // filled by the tenant extension; "" fails the FK
   company     Company   @relation(fields: [companyId], references: [id])
   woNo        String // WO-2526-001 (FY-aware)
-  projectId   String
-  project     Project   @relation(fields: [projectId], references: [id])
+  /// Optional: null = make-to-stock production (no customer project).
+  projectId   String?
+  project     Project?  @relation(fields: [projectId], references: [id], onDelete: Restrict)
   bomId       String?
   bom         Bom?      @relation(fields: [bomId], references: [id])
   // What this order produces and how much. bomId supplies the recipe; these
@@ -1503,6 +1510,7 @@ model SalesOrder {
   @@unique([companyId, orderNo])
   @@index([companyId, status, date])
   @@index([partyId])
+  proformaInvoices ProformaInvoice[]
 }
 
 model SalesOrderLine {
@@ -2142,4 +2150,86 @@ model EmailLog {
 
   @@index([companyId, createdAt])
   @@index([companyId, kind, entityId, createdAt])
+}
+
+/// Proforma invoice (PI): a priced, GST-computed offer sent before the sale —
+/// for advance payment, customer approval or import/LC paperwork. It posts
+/// nothing (no stock, no GL, no GST liability). Converting it creates the real
+/// tax invoice once; a PI raised against a sales order is invoiced through the
+/// order's delivery challan instead, so it cannot be billed twice.
+model ProformaInvoice {
+  id                 String                @id @default(cuid())
+  companyId          String
+  company            Company               @relation(fields: [companyId], references: [id])
+  piNo               String
+  date               DateTime
+  validUntil         DateTime
+  partyId            String
+  party              Party                 @relation(fields: [partyId], references: [id])
+  salesOrderId       String?
+  salesOrder         SalesOrder?           @relation(fields: [salesOrderId], references: [id])
+  placeOfSupply      String
+  interState         Boolean               @default(false)
+  taxable            Float                 @default(0)
+  discount           Float                 @default(0)
+  cgst               Float                 @default(0)
+  sgst               Float                 @default(0)
+  igst               Float                 @default(0)
+  roundOff           Float                 @default(0)
+  grandTotal         Float                 @default(0)
+  status             String                @default("ISSUED") // ISSUED | CONVERTED | CANCELLED
+  convertedInvoiceId String?
+  terms              String?   @db.Text
+  cancelReason       String?
+  cancelledAt        DateTime?
+  createdBy          String?
+  createdAt          DateTime              @default(now())
+  lines              ProformaInvoiceLine[]
+
+  @@unique([companyId, piNo])
+  @@index([companyId, status, date])
+  @@index([partyId])
+}
+
+/// Generic document attachment (PO, GRN, invoice PDF, QC report, photo, ...).
+/// Files live on disk under upload/attachments/<companyId>/; only metadata is
+/// in the DB. entityType is a whitelisted document type (see src/lib/attachments.ts),
+/// entityId the related row's id — a loose link so any document can carry files.
+model Attachment {
+  id         String   @id @default(cuid())
+  companyId  String
+  company    Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  entityType String
+  entityId   String
+  fileName   String   @db.VarChar(255)
+  mimeType   String   @db.VarChar(120)
+  size       Int // bytes
+  storageKey String   @db.VarChar(400) // file name inside upload/attachments/<companyId>/
+  note       String?  @db.VarChar(300)
+  uploadedBy String?
+  createdAt  DateTime @default(now())
+
+  @@index([companyId, entityType, entityId])
+  @@index([companyId, createdAt])
+}
+
+model ProformaInvoiceLine {
+  id         String          @id @default(cuid())
+  proformaId String
+  proforma   ProformaInvoice @relation(fields: [proformaId], references: [id], onDelete: Cascade)
+  itemId     String
+  item       Item            @relation(fields: [itemId], references: [id])
+  hsn        String?
+  uom        String
+  qty        Float
+  rate       Float
+  discPct    Float           @default(0)
+  gstRate    Float
+  taxable    Float
+  cgst       Float           @default(0)
+  sgst       Float           @default(0)
+  igst       Float           @default(0)
+  total      Float
+
+  @@index([proformaId])
 }

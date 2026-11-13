@@ -477,8 +477,8 @@ export async function productionEfficiencyReport() {
       machineNo: task.machineNo,
       employee: task.employee,
       woNo: task.workOrder.woNo,
-      projectNo: task.workOrder.project.projectNo,
-      projectName: task.workOrder.project.name,
+      projectNo: task.workOrder.project?.projectNo ?? null,
+      projectName: task.workOrder.project?.name ?? 'Stock production',
       dueDate: task.dueDate,
     })),
     note: 'OEE availability and downtime losses require work-center calendars and loss-reason capture; this report does not fabricate them.',
@@ -528,8 +528,8 @@ export async function workflowActionCenterReport() {
       dueDate: task.dueDate,
       employee: task.employee,
       woNo: task.workOrder.woNo,
-      projectNo: task.workOrder.project.projectNo,
-      projectName: task.workOrder.project.name,
+      projectNo: task.workOrder.project?.projectNo ?? null,
+      projectName: task.workOrder.project?.name ?? 'Stock production',
     }
   })
   const jobworkActions = jobwork.map((inward) => {

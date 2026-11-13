@@ -475,7 +475,8 @@ export interface BomLineInput {
 }
 
 export interface BomInput {
-  projectId: string
+  /** Optional: omit for a standard (make-to-stock) BOM that belongs to no project. */
+  projectId?: string | null
   /** Output (made) item. Required: this is the link MRP explodes demand through. */
   itemId: string
   /** Display name; defaults to the output item's name. */
@@ -510,7 +511,8 @@ function computeBomLine(l: BomLineInput, costRate: number): Omit<Prisma.BomItemC
 }
 
 /** Recompute project.estCost = Σ approved BOM estCost (call inside a tx after mutation). */
-async function refreshProjectEstCost(tx: Tx, projectId: string) {
+async function refreshProjectEstCost(tx: Tx, projectId: string | null) {
+  if (!projectId) return 0
   const boms = await tx.bom.findMany({
     where: { projectId, status: 'APPROVED' },
     select: { items: { select: { estCost: true } } },
@@ -592,9 +594,10 @@ export async function listBoms(filters?: { projectId?: string; itemId?: string; 
 
 export async function createBom(input: BomInput) {
   return db.$transaction(async (tx) => {
-    const project = await tx.project.findUnique({ where: { id: input.projectId } })
-    if (!project) throw new BusinessError('Project not found', 404)
-    if (project.status === 'COMPLETED' || project.status === 'CANCELLED') {
+    // A project BOM needs an active project; a standard (stock) BOM has none.
+    const project = input.projectId ? await tx.project.findUnique({ where: { id: input.projectId } }) : null
+    if (input.projectId && !project) throw new BusinessError('Project not found', 404)
+    if (project && (project.status === 'COMPLETED' || project.status === 'CANCELLED')) {
       throw new BusinessError(`Project is ${project.status} — BOMs can only be added to active projects`)
     }
     if (!input.itemId) throw new BusinessError('Pick the output item this BOM makes')
@@ -628,7 +631,7 @@ export async function createBom(input: BomInput) {
     return tx.bom.create({
       data: {
         bomNo,
-        projectId: project.id,
+        projectId: project?.id ?? null,
         itemId: output!.id,
         revision: (cancelled?.revision ?? 0) + 1,
         lineBasis: basis.lineBasis,
@@ -701,7 +704,7 @@ export async function reviseBom(id: string, input?: { notes?: string | null; eff
     if (!source.itemId) {
       throw new BusinessError('This legacy BOM has no output item yet — link it before revising', 409)
     }
-    if (source.project.status === 'COMPLETED' || source.project.status === 'CANCELLED') {
+    if (source.project && (source.project.status === 'COMPLETED' || source.project.status === 'CANCELLED')) {
       throw new BusinessError(`Project is ${source.project.status} — its BOMs can no longer change`)
     }
     const pending = await tx.bom.findFirst({
@@ -766,7 +769,7 @@ export async function approveBom(id: string) {
     if (bom.status !== 'DRAFT') throw new BusinessError(`Only DRAFT BOMs can be approved (current: ${bom.status})`)
     if (bom.items.length === 0) throw new BusinessError('Cannot approve an empty BOM')
     if (!bom.itemId) throw new BusinessError('Link the output item before approving this BOM')
-    if (bom.project.status === 'COMPLETED' || bom.project.status === 'CANCELLED') {
+    if (bom.project && (bom.project.status === 'COMPLETED' || bom.project.status === 'CANCELLED')) {
       throw new BusinessError(`Project is ${bom.project.status} — its BOMs can no longer be approved`)
     }
     const effectiveFrom = bom.effectiveFrom ?? dayStart(new Date())
@@ -861,7 +864,7 @@ export interface EffectiveBom {
   bomNo: string
   revision: number
   itemId: string
-  projectId: string
+  projectId: string | null
   effectiveFrom: Date | null
   lines: EffectiveBomLine[]
 }
@@ -917,7 +920,8 @@ export interface WoLineInput {
 }
 
 export interface WorkOrderInput {
-  projectId: string
+  /** Optional: omit for make-to-stock production (no customer project). */
+  projectId?: string | null
   bomId?: string | null
   /** What this order makes. Defaults to the BOM's output item. */
   outputItemId?: string | null
@@ -969,9 +973,10 @@ export async function listWorkOrders(projectId?: string) {
  * suggestion approval (which must create documents inside ONE transaction).
  */
 export async function createWorkOrderTx(tx: Tx, input: WorkOrderInput) {
-  const project = await tx.project.findUnique({ where: { id: input.projectId } })
-  if (!project) throw new BusinessError('Project not found', 404)
-  if (project.status === 'COMPLETED' || project.status === 'CANCELLED') {
+  // A project work order needs an active project; a stock work order has none.
+  const project = input.projectId ? await tx.project.findUnique({ where: { id: input.projectId } }) : null
+  if (input.projectId && !project) throw new BusinessError('Project not found', 404)
+  if (project && (project.status === 'COMPLETED' || project.status === 'CANCELLED')) {
     throw new BusinessError(`Project is ${project.status} — work orders need an active project`)
   }
 
@@ -984,7 +989,10 @@ export async function createWorkOrderTx(tx: Tx, input: WorkOrderInput) {
   if (input.bomId) {
     const bom = await tx.bom.findUnique({ where: { id: input.bomId }, include: { items: true } })
     if (!bom) throw new BusinessError('BOM not found', 404)
-    if (bom.projectId !== project.id) throw new BusinessError('BOM belongs to a different project', 400)
+    // A project BOM is executed by its own project; a standard BOM by any
+    // project or by stock production.
+    if (bom.projectId && project && bom.projectId !== project.id) throw new BusinessError('BOM belongs to a different project', 400)
+    if (bom.projectId && !project) throw new BusinessError('This BOM belongs to a project — pick that project, or use a standard (no-project) BOM for stock production', 400)
     if (bom.status === 'SUPERSEDED') {
       throw new BusinessError(`${bom.bomNo} has been superseded — use the current approved revision`)
     }
@@ -1048,7 +1056,7 @@ export async function createWorkOrderTx(tx: Tx, input: WorkOrderInput) {
   const wo = await tx.workOrder.create({
     data: {
       woNo,
-      projectId: project.id,
+      projectId: project?.id ?? null,
       bomId,
       outputItemId,
       outputQty,
@@ -1072,7 +1080,7 @@ export async function createWorkOrderTx(tx: Tx, input: WorkOrderInput) {
   })
 
   // First work order kicks a PENDING project into RUNNING (the plan started).
-  if (project.status === 'PENDING') {
+  if (project && project.status === 'PENDING') {
     await tx.project.update({ where: { id: project.id }, data: { status: 'RUNNING' } })
   }
   return wo
@@ -1611,7 +1619,7 @@ export async function materialPlanReport() {
     item: { id: string; code: string; name: string; uom: string; reorderLevel: number }
     requiredQty: number
     issuedQty: number
-    workOrders: { id: string; woNo: string; projectNo: string; projectName: string; dueDate: Date | null; requiredQty: number }[]
+    workOrders: { id: string; woNo: string; projectNo: string | null; projectName: string; dueDate: Date | null; requiredQty: number }[]
   }>()
 
   for (const wo of workOrders) {
@@ -1633,15 +1641,15 @@ export async function materialPlanReport() {
         item: { id: string; code: string; name: string; uom: string; reorderLevel: number }
         requiredQty: number
         issuedQty: number
-        workOrders: { id: string; woNo: string; projectNo: string; projectName: string; dueDate: Date | null; requiredQty: number }[]
+        workOrders: { id: string; woNo: string; projectNo: string | null; projectName: string; dueDate: Date | null; requiredQty: number }[]
       } = demand.get(itemId) ?? { item: planned.item, requiredQty: 0, issuedQty: 0, workOrders: [] }
       row.requiredQty = r2(row.requiredQty + planned.qty)
       row.issuedQty = r2(row.issuedQty + (issuedByItem.get(itemId) ?? 0))
       row.workOrders.push({
         id: wo.id,
         woNo: wo.woNo,
-        projectNo: wo.project.projectNo,
-        projectName: wo.project.name,
+        projectNo: wo.project?.projectNo ?? null,
+        projectName: wo.project?.name ?? 'Stock production',
         dueDate: wo.endDate,
         requiredQty: planned.qty,
       })

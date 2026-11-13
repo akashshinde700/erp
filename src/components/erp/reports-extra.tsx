@@ -137,7 +137,7 @@ type ProjectRow = { id: string; projectNo: string; name: string; customer: strin
 export function ProjectProfitabilityTab() {
   const { data, loading } = useApi<ProjectRow[]>('/api/reports?type=project-profitability')
   if (loading) return <TableSkeleton rows={5} cols={6} />
-  if (!data?.length) return <EmptyState icon={BarChart3} title="No projects" hint="Create a project under Own Projects & Mfg to track budget against actual cost." />
+  if (!data?.length) return <EmptyState icon={BarChart3} title="No projects" hint="Create a project under Projects to track budget against actual cost." />
   return <div className="space-y-3">
     <Csv name="project-profitability.csv" rows={[['Project', 'Name', 'Customer', 'Status', 'Contract', 'Est. cost', 'Material', 'Labour', 'Hours', 'Actual', 'Variance', 'Margin to date'], ...data.map((r) => [r.projectNo, r.name, r.customer, r.status, r.contractValue, r.estCost, r.material, r.labour, r.hours, r.actualCost, r.costVariance, r.marginToDate])]} />
     <Card className="p-0"><CardContent className="p-0"><div className="overflow-x-auto"><Table><TableHeader><TableRow><TableHead>Project</TableHead><TableHead className="text-right">Contract</TableHead><TableHead className="text-right">Estimated cost</TableHead><TableHead className="text-right">Actual cost</TableHead><TableHead className="text-right">Margin to date</TableHead></TableRow></TableHeader><TableBody>
@@ -145,5 +145,54 @@ export function ProjectProfitabilityTab() {
         <TableCell className="text-right"><Money value={r.actualCost} /><p className={`text-xs ${r.costVariance > 0 ? 'text-destructive' : 'text-muted-foreground'}`}>{r.costUsedPct === null ? 'no estimate' : `${r.costUsedPct}% of estimate`} · material ₹ {money(r.material)}, labour ₹ {money(r.labour)} ({r.hours} h)</p></TableCell>
         <TableCell className={`text-right font-medium ${r.marginToDate < 0 ? 'text-destructive' : ''}`}><Money value={r.marginToDate} /></TableCell></TableRow>)}
     </TableBody></Table></div></CardContent></Card>
+  </div>
+}
+
+// ---------------------------------------------------------------- balance sheet
+
+type BsLine = { account: string; name: string; group: string; amount: number }
+type BsGroup = { group: string; total: number; lines: BsLine[] }
+type BalanceSheet = {
+  asOf: string; fyStart: string
+  assets: BsGroup[]; liabilities: BsGroup[]; equity: BsGroup[]
+  totalAssets: number; totalLiabilities: number; totalEquity: number; totalLiabilitiesAndEquity: number
+  profit: { thisYear: number; earlierYears: number }
+  difference: number; balanced: boolean
+}
+
+function BsSide({ title, groups, total }: { title: string; groups: BsGroup[]; total: number }) {
+  return <Card className="min-w-0 p-0"><CardContent className="p-0"><div className="overflow-x-auto"><Table>
+    <TableHeader><TableRow><TableHead>{title}</TableHead><TableHead className="text-right">₹</TableHead></TableRow></TableHeader>
+    <TableBody>
+      {groups.length === 0 ? <TableRow><TableCell colSpan={2} className="text-sm text-muted-foreground">Nothing posted</TableCell></TableRow> : null}
+      {groups.flatMap((g) => [
+        <TableRow key={`g-${g.group}`} className="bg-muted/40"><TableCell className="font-semibold">{g.group}</TableCell><TableCell className="text-right font-semibold tabular-nums">{money(g.total)}</TableCell></TableRow>,
+        ...g.lines.map((l) => <TableRow key={`${g.group}-${l.account}`}><TableCell className="pl-6">{l.name}<span className="ml-2 text-xs text-muted-foreground">{l.account.startsWith('P&L') ? '' : l.account}</span></TableCell><TableCell className={`text-right tabular-nums ${l.amount < 0 ? 'text-destructive' : ''}`}>{money(l.amount)}</TableCell></TableRow>),
+      ])}
+    </TableBody>
+    <TableFooter><TableRow><TableCell>Total</TableCell><TableCell className="text-right tabular-nums">{money(total)}</TableCell></TableRow></TableFooter>
+  </Table></div></CardContent></Card>
+}
+
+export function BalanceSheetTab() {
+  const [asOf, setAsOf] = useState(todayIso())
+  const { data, loading } = useApi<BalanceSheet>(`/api/reports?type=balance-sheet&asOf=${asOf}`)
+  const liabEquity = data ? [...data.liabilities, ...data.equity] : []
+  return <div className="space-y-3">
+    <div className="flex flex-wrap items-end gap-2">
+      <div className="space-y-1.5"><Label htmlFor="bs-asof">As of</Label><Input id="bs-asof" type="date" className="h-11" value={asOf} max={todayIso()} onChange={(e) => setAsOf(e.target.value || todayIso())} /></div>
+      {data ? <Csv name={`balance-sheet-${data.asOf}.csv`} rows={[['Side', 'Group', 'Account', 'Name', 'Amount'], ...data.assets.flatMap((g) => g.lines.map((l) => ['Assets', g.group, l.account, l.name, l.amount])), ...liabEquity.flatMap((g) => g.lines.map((l) => ['Liabilities & Equity', g.group, l.account, l.name, l.amount]))]} /> : null}
+    </div>
+    <p className="text-sm text-muted-foreground">Straight from the general ledger. Profit is not transferred by a closing journal, so it is shown under Reserves &amp; Surplus — split into this financial year and earlier years.</p>
+    {loading || !data ? <TableSkeleton rows={8} cols={2} /> : <>
+      <p className="text-sm">
+        Assets <strong>₹ {money(data.totalAssets)}</strong> · Liabilities + Equity <strong>₹ {money(data.totalLiabilitiesAndEquity)}</strong>{' '}
+        {data.balanced ? <Badge variant="secondary">Balanced</Badge> : <Badge variant="destructive">Difference ₹ {money(data.difference)}</Badge>}
+      </p>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <BsSide title="Liabilities & Equity" groups={liabEquity} total={data.totalLiabilitiesAndEquity} />
+        <BsSide title="Assets" groups={data.assets} total={data.totalAssets} />
+      </div>
+    </>}
   </div>
 }

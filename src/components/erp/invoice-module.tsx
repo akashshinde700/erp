@@ -64,6 +64,7 @@ import { useErpUi, useOpenNewParam } from './store'
 import { onPreset, setCreatePreset, takeCreatePreset } from './nav'
 import { computeInvoiceTotals, dateStr, INDIAN_STATES, money, r2, stateName } from '@/lib/erp'
 import { InvoicePrint } from './invoice-print'
+import { AttachmentsPanel } from './attachments'
 import { exportEInvoiceJson, exportEWayBillJson, exportTallyVoucher, markTallySent, queueForConnector } from './tally'
 import { useResetOnChange } from '@/hooks/use-reset-on-change'
 
@@ -1210,6 +1211,9 @@ export function InvoiceDetail({ kind, id }: { kind: InvoiceKind; id: string }) {
       ) : null}
 
       <InvoicePrint kind={kind} invoice={invoice} items={items} />
+
+      {/* Files on this document: supplier PDF, signed copy, e-way bill, photos */}
+      <AttachmentsPanel entityType={isSales ? 'SALES_INVOICE' : 'PURCHASE_INVOICE'} entityId={invoice.id} />
 
       {/* Duplicate dialog — prefilled from this invoice */}
       <CreateInvoiceDialog

@@ -11,6 +11,9 @@
  * with P2003 — and a backup will silently drop its rows.
  */
 export const WORKFLOW_MODELS_CHILDREN_FIRST = [
+  // proforma invoices (reference sales orders, parties and items — go first)
+  'proformaInvoiceLine',
+  'proformaInvoice',
   // Tally connector (per organisation; only code/token HASHES are stored, so a
   // backup cannot be used to impersonate the connector — restore keeps it paired)
   // outgoing email log (no SMTP secrets — those live only in the server env)

@@ -16,7 +16,6 @@ import {
   CheckCircle2,
   ClipboardList,
   Coins,
-  FolderKanban,
   Gauge,
   ListTodo,
   ListTree,
@@ -29,7 +28,6 @@ import {
 } from 'lucide-react'
 
 export type MfgTab =
-  | 'projects'
   | 'boms'
   | 'work-orders'
   | 'mrp'
@@ -60,7 +58,6 @@ export const MFG_SECTION_GROUPS: MfgSectionGroup[] = [
   {
     label: 'Plan',
     items: [
-      { value: 'projects', label: 'Projects', icon: FolderKanban },
       { value: 'boms', label: 'BOMs', icon: ListTree },
       { value: 'mrp', label: 'MRP', icon: CalendarClock },
       { value: 'material-plan', label: 'Material Plan', icon: PackageSearch },

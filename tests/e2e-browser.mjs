@@ -26,7 +26,7 @@ const db = process.env.AUDIT_DB_URL ? openAuditDb({ url: process.env.AUDIT_DB_UR
 const EMAIL = process.env.E2E_EMAIL ?? 'owner@shreeforge.example.com'
 const PASSWORD = process.env.E2E_PASSWORD ?? 'forge123'
 const VIEWPORTS = [{ name: 'mobile-390', width: 390, height: 844, mobile: true }, { name: 'tablet-768', width: 768, height: 1024, mobile: false }, { name: 'desktop-1440', width: 1440, height: 900, mobile: false }]
-const MODULES = ['Dashboard', 'CRM & Service', 'Sales', 'Purchase', 'Jobwork', 'Projects & Mfg', 'Inventory', 'Accounting', 'Reports', 'Masters', 'Tally Export', 'Audit Trail']
+const MODULES = ['Dashboard', 'CRM & Service', 'Sales', 'Purchase', 'Jobwork', 'Projects', 'Manufacturing', 'Inventory', 'Accounting', 'Reports', 'Masters', 'Tally Export', 'Audit Trail']
 
 const results = []
 let failures = 0
@@ -51,7 +51,7 @@ async function goModule(page, label) {
 }
 /** Manufacturing sections live in the sidebar tree (not tabs): open the module, then pick the section. */
 async function goMfgSection(page, label) {
-  await goModule(page, 'Projects & Mfg')
+  await goModule(page, 'Manufacturing')
   const menu = page.getByRole('button', { name: 'Open navigation' })
   const mobile = await menu.isVisible().catch(() => false)
   if (mobile) await menu.click()
@@ -132,13 +132,13 @@ async function runViewport(browser, vp) {
     if (vp.mobile) for (const t of await smallTargets(page)) small.add(`${m}: ${t}`)
     await shot(page, `module-${m}`)
   }
-  check('all 11 modules render a heading with no page-level horizontal overflow', overflowing.length === 0, overflowing.join('; '))
+  check('all modules render a heading with no page-level horizontal overflow', overflowing.length === 0, overflowing.join('; '))
   if (vp.mobile) check('touch targets in main content are at least 40x40 px', small.size === 0, `${small.size} small: ${[...small].join(' | ')}`)
 
   // workflow workspaces
-  const ws = [['Sales', 'Quote to Cash', /quote/i], ['Purchase', 'Procurement & Returns', /procurement/i], ['Inventory', 'Lots & Serials', /lot|serial|batch/i], ['Projects & Mfg', 'Quality', /quality|inspection/i], ['Projects & Mfg', 'FG Receipts', /work order|receipt/i], ['Projects & Mfg', 'BOMs', /BOM|bill of material/i], ['Projects & Mfg', 'MRP', /MRP|plan|demand/i], ['Projects & Mfg', 'Capacity', /capacity|load|work cent/i], ['Projects & Mfg', 'Work Centers', /work cent|shift|calendar/i], ['Projects & Mfg', 'OEE', /OEE|availability/i], ['Projects & Mfg', 'Costing', /cost|overhead/i], ['Projects & Mfg', 'Overhead', /overhead advisor|absorb/i], ['Accounting', 'Advances & Refunds', /advance|refund|schedule/i], ['Purchase', 'RFQ & Comparison', /RFQ|quotation/i, 'Procurement & Returns'], ['CRM & Service', 'Leads', /lead|follow-up/i], ['CRM & Service', 'Service Calls', /service call|complaint/i], ['CRM & Service', 'Performance', /salesperson|month/i], ['Inventory', 'Adjustments', /adjust/i], ['Accounting', 'Journals', /journal/i], ['Accounting', 'Chart of Accounts', /ledger|asset/i], ['Accounting', 'TDS', /TDS/], ['Accounting', 'Period Close', /period|financial year|lock/i], ['Reports', 'Aging', /due|outstanding|receivable/i], ['Reports', 'Back Orders', /back order|pending/i], ['Reports', 'P&L by Ledger', /income|expense/i]]
+  const ws = [['Sales', 'Quote to Cash', /quote/i], ['Purchase', 'Procurement & Returns', /procurement/i], ['Inventory', 'Lots & Serials', /lot|serial|batch/i], ['Manufacturing', 'Quality', /quality|inspection/i], ['Manufacturing', 'FG Receipts', /work order|receipt/i], ['Manufacturing', 'BOMs', /BOM|bill of material/i], ['Manufacturing', 'MRP', /MRP|plan|demand/i], ['Manufacturing', 'Capacity', /capacity|load|work cent/i], ['Manufacturing', 'Work Centers', /work cent|shift|calendar/i], ['Manufacturing', 'OEE', /OEE|availability/i], ['Manufacturing', 'Costing', /cost|overhead/i], ['Manufacturing', 'Overhead', /overhead advisor|absorb/i], ['Accounting', 'Advances & Refunds', /advance|refund|schedule/i], ['Purchase', 'RFQ & Comparison', /RFQ|quotation/i, 'Procurement & Returns'], ['CRM & Service', 'Leads', /lead|follow-up/i], ['CRM & Service', 'Service Calls', /service call|complaint/i], ['CRM & Service', 'Performance', /salesperson|month/i], ['Inventory', 'Adjustments', /adjust/i], ['Accounting', 'Journals', /journal/i], ['Accounting', 'Chart of Accounts', /ledger|asset/i], ['Accounting', 'TDS', /TDS/], ['Accounting', 'Period Close', /period|financial year|lock/i], ['Reports', 'Aging', /due|outstanding|receivable/i], ['Reports', 'Back Orders', /back order|pending/i], ['Reports', 'P&L by Ledger', /income|expense/i], ['Sales', 'Proforma', /proforma/i], ['Reports', 'Balance Sheet', /assets|liabilities/i]]
   for (const [mod, tab, re, parent] of ws) {
-    if (mod === 'Projects & Mfg') {
+    if (mod === 'Manufacturing') {
       if (!(await goMfgSection(page, tab))) { check(`${mod} → ${tab} workspace section exists`, false, 'section not found in sidebar'); continue }
       const text = (await page.locator('main').innerText().catch(() => '')).slice(0, 4000)
       const errorToast = await page.locator('[data-sonner-toast][data-type=error]').count()
@@ -166,6 +166,18 @@ async function runViewport(browser, vp) {
   const mainText = await page.locator('main').innerText().catch(() => '')
   check('Masters → Company shows the Email (SMTP) card with its status', /Email \(SMTP\)/.test(mainText) && /Configured|Not configured/.test(mainText), mainText.match(/Email \(SMTP\)[\s\S]{0,120}/)?.[0]?.replace(/\s+/g, ' '))
   check('Email card never shows an SMTP password', !/SMTP_PASS=|password:/i.test(mainText))
+
+  // stock summary search narrows the table and says so
+  await goModule(page, 'Inventory')
+  await page.getByRole('tab', { name: /stock summary/i }).first().click().catch(() => {}); await settle(page, 700)
+  const stockSearch = page.getByRole('textbox', { name: /search stock items/i })
+  if (await stockSearch.count()) {
+    const before = await page.locator('main tbody tr').count()
+    await stockSearch.fill('zz-no-such-item-zz'); await settle(page, 400)
+    const noneText = await page.locator('main').innerText().catch(() => '')
+    await stockSearch.fill(''); await settle(page, 300)
+    check('Inventory → stock summary search filters the items', /No item matches/i.test(noneText) && /0 of \d+ items/.test(noneText), `rows before=${before}`)
+  } else check('Inventory → stock summary has a search box', false, 'not found')
 
   // dialog prefill (render-phase reset hook): party edit
   await goModule(page, 'Masters')

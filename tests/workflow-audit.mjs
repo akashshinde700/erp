@@ -1000,7 +1000,6 @@ async function phaseMrp() {
   const savedMake = (detail.data?.lines ?? []).find((l) => l.itemId === isoFg && l.suggestion === 'MAKE' && l.netQty > 0)
   const savedBuy = (detail.data?.lines ?? []).find((l) => l.itemId === isoRm && l.suggestion === 'BUY' && l.netQty > 0)
   if (savedMake && savedBuy) {
-    expectReject('MRP: MAKE lines need an executing project', await post(`${M}/mrp/${runId}/actions`, { action: 'create-documents', lineIds: [savedMake.id] }), /project/i)
     const conv = await post(`${M}/mrp/${runId}/actions`, { action: 'create-documents', lineIds: [savedMake.id, savedBuy.id], projectId: pid })
     expectOk('MRP: approve suggestions into documents', conv)
     const pr = await q1('SELECT status, purpose FROM PurchaseRequisition WHERE reqNo=?', [conv.data?.requisition?.reqNo])
@@ -1419,11 +1418,152 @@ async function phaseOverhead() {
   await reconcile('after overhead advisor')
 }
 
+// ---------------------------------------------------------------- Phase 13: balance sheet + proforma invoices
+async function phaseSalesDocs() {
+  phase = 'P13-docs'
+  // ---- balance sheet
+  const bs = await get(`/api/reports?type=balance-sheet&asOf=${today}`)
+  expectOk('balance sheet: responds', bs)
+  check('balance sheet: assets = liabilities + equity (incl. profit)', bs.data?.balanced === true && near(bs.data.totalAssets, bs.data.totalLiabilitiesAndEquity, 0.011), `A=${bs.data?.totalAssets} L+E=${bs.data?.totalLiabilitiesAndEquity} diff=${bs.data?.difference}`)
+  const chart = (await get('/api/books')).data?.accounts ?? []
+  const nature = new Map(chart.map((a) => [a.code, a.nature]))
+  const gl = await qa('SELECT account, ROUND(SUM(debit)-SUM(credit),2) bal FROM AccountLedger WHERE isCancelled=0 AND date <= ? GROUP BY account', [`${today} 23:59:59.999`])
+  const assetsDb = gl.filter((r) => (nature.get(r.account) ?? 'ASSET') === 'ASSET').reduce((s, r) => s + num(r.bal), 0)
+  const profitDb = gl.filter((r) => ['INCOME', 'EXPENSE'].includes(nature.get(r.account))).reduce((s, r) => s - num(r.bal), 0)
+  check('balance sheet: total assets = Dr balances of asset accounts in the GL', near(bs.data?.totalAssets, assetsDb, 0.05), `api=${bs.data?.totalAssets} db=${assetsDb.toFixed(2)}`)
+  check('balance sheet: profit shown = income − expenses in the GL', near(num(bs.data?.profit?.thisYear) + num(bs.data?.profit?.earlierYears), profitDb, 0.05), `api=${num(bs.data?.profit?.thisYear) + num(bs.data?.profit?.earlierYears)} db=${profitDb.toFixed(2)}`)
+  check('balance sheet: income and expense accounts are not listed as balance-sheet lines', ![...(bs.data?.assets ?? []), ...(bs.data?.liabilities ?? [])].some((g) => g.lines.some((l) => ['SALS', 'PURC', 'JWIN'].includes(l.account))), '')
+  const early = await get('/api/reports?type=balance-sheet&asOf=2000-01-01')
+  check('balance sheet: before any posting everything is zero and balanced', early.status === 200 && near(early.data?.totalAssets, 0) && early.data?.balanced === true, JSON.stringify({ a: early.data?.totalAssets, b: early.data?.balanced }))
+  expectReject('balance sheet: a malformed date is refused', await get('/api/reports?type=balance-sheet&asOf=12-12-2026'), /YYYY-MM-DD/)
+
+  // ---- proforma invoices
+  const PI = '/api/proforma'
+  const glBefore = num((await q1('SELECT COUNT(*) n FROM AccountLedger')).n), stockBefore = num((await q1('SELECT COUNT(*) n FROM StockLedger')).n)
+  expectReject('proforma: validity before the date is refused', await post(PI, { action: 'create', partyId: F.cust, date: today, validUntil: '2020-01-01', lines: [{ itemId: F.fg, qty: 1, rate: 500 }] }), /validity/i)
+  expectReject('proforma: a supplier cannot get a proforma', await post(PI, { action: 'create', partyId: F.sup1, validUntil: daysFromNow(10), lines: [{ itemId: F.fg, qty: 1, rate: 500 }] }), /customer/i)
+  const a = await post(PI, { action: 'create', partyId: F.cust, validUntil: daysFromNow(10), terms: '100% advance', lines: [{ itemId: F.fg, qty: 2, rate: 500 }, { itemId: F.fg, qty: 1, rate: 1000, discPct: 10 }] })
+  expectOk('proforma: issue a standalone proforma', a)
+  const gstRate = num((await q1('SELECT gstRate g FROM Item WHERE id=?', [F.fg])).g)
+  const taxable = 2 * 500 + 900
+  check('proforma: GST computed like a tax invoice (taxable, tax, whole-rupee total)', near(a.data?.taxable, taxable) && near(a.data?.grandTotal, Math.round(taxable * (1 + gstRate / 100))), `taxable=${a.data?.taxable} total=${a.data?.grandTotal} gst=${gstRate}%`)
+  check('proforma: numbered PI-<FY>-nnn and ISSUED', /^PI-\d{4}-\d{3}$/.test(a.data?.piNo ?? '') && a.data?.status === 'ISSUED', a.data?.piNo)
+  check('proforma: posts nothing — no ledger rows, no stock rows', num((await q1('SELECT COUNT(*) n FROM AccountLedger')).n) === glBefore && num((await q1('SELECT COUNT(*) n FROM StockLedger')).n) === stockBefore, '')
+  expectReject('proforma: converting needs a warehouse', await post(PI, { action: 'convert', id: a.data.id }), /warehouse/i)
+  const conv = await post(PI, { action: 'convert', id: a.data.id, warehouseId: F.main })
+  expectOk('proforma: convert into the tax invoice', conv)
+  check('proforma: the invoice total equals the proforma total', near(conv.data?.grandTotal, a.data?.grandTotal), `invoice=${conv.data?.grandTotal} pi=${a.data?.grandTotal}`)
+  const row = await q1('SELECT status, convertedInvoiceId FROM ProformaInvoice WHERE id=?', [a.data.id])
+  check('proforma: marked CONVERTED and linked to the invoice', row.status === 'CONVERTED' && row.convertedInvoiceId === conv.data?.invoiceId, JSON.stringify(row))
+  expectReject('proforma: a converted proforma cannot be converted again', await post(PI, { action: 'convert', id: a.data.id, warehouseId: F.main }), /CONVERTED/)
+  expectReject('proforma: a converted proforma cannot be cancelled', await post(PI, { action: 'cancel', id: a.data.id, reason: 'audit' }), /CONVERTED/)
+  const b = await post(PI, { action: 'create', partyId: F.cust, validUntil: daysFromNow(5), lines: [{ itemId: F.fg, qty: 1, rate: 500 }] })
+  const invBefore = num((await q1('SELECT COUNT(*) n FROM SalesInvoice')).n)
+  const [c1, c2] = await Promise.all([1, 2].map(() => post(PI, { action: 'convert', id: b.data.id, warehouseId: F.main })))
+  check('proforma: a double click converts exactly once', [c1, c2].filter((r) => r.status === 200).length === 1 && num((await q1('SELECT COUNT(*) n FROM SalesInvoice')).n) === invBefore + 1, `statuses=${c1.status}/${c2.status}`)
+  const c = await post(PI, { action: 'create', partyId: F.cust, validUntil: daysFromNow(5), lines: [{ itemId: F.fg, qty: 1, rate: 500 }] })
+  expectReject('proforma: cancelling needs a reason', await post(PI, { action: 'cancel', id: c.data.id, reason: '' }), /reason/i)
+  expectOk('proforma: cancel with a reason', await post(PI, { action: 'cancel', id: c.data.id, reason: 'customer dropped the enquiry' }))
+  expectReject('proforma: a cancelled proforma cannot be invoiced', await post(PI, { action: 'convert', id: c.data.id, warehouseId: F.main }), /CANCELLED/)
+  const d = await post(PI, { action: 'create', partyId: F.cust, validUntil: daysFromNow(5), lines: [{ itemId: F.fg, qty: 1, rate: 500 }] })
+  await db.run('UPDATE ProformaInvoice SET validUntil=? WHERE id=?', ['2020-01-01 00:00:00', d.data.id])
+  expectReject('proforma: an expired proforma is not invoiced at old prices', await post(PI, { action: 'convert', id: d.data.id, warehouseId: F.main }), /expired/i)
+  const so = await q1("SELECT id, orderNo, partyId FROM SalesOrder WHERE status IN ('APPROVED','PART_DISPATCHED') ORDER BY createdAt LIMIT 1")
+  if (so) {
+    const e = await post(PI, { action: 'create', partyId: so.partyId, validUntil: daysFromNow(10), salesOrderId: so.id })
+    expectOk('proforma: issue a proforma from an open sales order', e)
+    const open = num((await q1('SELECT COALESCE(SUM(qty-dispatchedQty),0) q FROM SalesOrderLine WHERE salesOrderId=? AND qty-dispatchedQty>0', [so.id])).q)
+    check('proforma: from an order it bills the undispatched quantity', near((e.data?.lines ?? []).reduce((s, l) => s + num(l.qty), 0), open), `pi=${(e.data?.lines ?? []).reduce((s, l) => s + num(l.qty), 0)} open=${open}`)
+    expectReject('proforma: an order proforma is invoiced through the challan, not converted', await post(PI, { action: 'convert', id: e.data.id, warehouseId: F.main }), /delivery challan/i)
+    const other = await q1("SELECT id FROM Party WHERE types LIKE '%CUSTOMER%' AND id<>? LIMIT 1", [so.partyId])
+    if (other) expectReject('proforma: an order of another customer is refused', await post(PI, { action: 'create', partyId: other.id, validUntil: daysFromNow(10), salesOrderId: so.id }), /different customer/i)
+  } else check('proforma: an open sales order exists to quote from', false, 'none')
+  const list = await get(PI)
+  check('proforma: list shows status and the invoice it became', list.status === 200 && list.data.find((r) => r.id === a.data.id)?.convertedInvoiceNo === (await q1('SELECT invoiceNo FROM SalesInvoice WHERE id=?', [conv.data.invoiceId])).invoiceNo, '')
+  await reconcile('after balance sheet + proforma')
+}
+
+// ---------------------------------------------------------------- Phase 14: make-to-stock (no project)
+async function phaseStockMfg() {
+  phase = 'P14-stock-mfg'
+  const M = '/api/manufacturing', R = `${M}/receipts`
+  const T = (id) => `${M}/tasks/${id}/actions`
+  const emp = (await q1('SELECT id FROM Employee LIMIT 1')).id
+  const fg = (await post('/api/masters/items', { code: 'AUD-STK-FG', name: 'Audit stock bracket', uom: 'PCS', costRate: 300, saleRate: 700, gstRate: 18, hsn: '732690' })).data.id
+
+  // standard BOM: no project
+  const bom = await post(`${M}/boms`, { itemId: fg, productName: 'Audit stock bracket', lineBasis: 'UNIT', lines: [{ itemId: F.rm, qty: 2, uom: 'KG', rate: 100 }] })
+  expectOk('stock: create a standard BOM without a project', bom)
+  check('stock: the BOM belongs to no project', bom.data?.projectId === null, JSON.stringify(bom.data?.projectId))
+  expectOk('stock: approve the standard BOM', await post(`${M}/boms/${bom.data.id}/actions`, { action: 'approve' }))
+
+  // a project BOM cannot silently become stock production
+  expectReject('stock: a project BOM needs its project (no silent stock order)', await post(`${M}/work-orders`, { bomId: F.bom, outputQty: 1 }), /belongs to a project/i)
+
+  const wo = await post(`${M}/work-orders`, { bomId: bom.data.id, outputQty: 5 })
+  expectOk('stock: create a work order without a project', wo)
+  check('stock: the work order is make-to-stock (no project)', wo.data?.projectId === null, JSON.stringify(wo.data?.projectId))
+  const req = num((await q1('SELECT SUM(plannedQty) q FROM WorkOrderLine WHERE workOrderId=?', [wo.data.id])).q)
+  check('stock: material requirement = BOM × quantity (2 × 5 = 10 KG)', near(req, 10), `planned=${req}`)
+  const list = await get(`${M}/work-orders`)
+  check('stock: the work-order list returns it with no project', (list.data ?? []).some((w) => w.id === wo.data.id && w.project === null), '')
+
+  // the same standard BOM can also run under a project
+  const prj = (await q1("SELECT id FROM Project WHERE status IN ('PENDING','RUNNING') LIMIT 1"))?.id
+  if (prj) {
+    const wo2 = await post(`${M}/work-orders`, { projectId: prj, bomId: bom.data.id, outputQty: 2 })
+    expectOk('stock: a standard BOM can also run under a project', wo2)
+    check('stock: that order belongs to the project', wo2.data?.projectId === prj, '')
+    await post(`${M}/work-orders/${wo2.data.id}/actions`, { action: 'cancel', reason: 'audit: only proving the link' })
+  }
+
+  // shop floor → finished goods → closed, all without a project
+  const t = await post(`${M}/tasks`, { workOrderId: wo.data.id, operation: 'ASSEMBLY', seq: 1, plannedQty: 5 })
+  expectOk('stock: operation task on the stock work order', t)
+  await post(T(t.data.id), { action: 'assign', employeeId: emp }); await post(T(t.data.id), { action: 'start' })
+  expectOk('stock: complete the operation with material', await post(T(t.data.id), { action: 'complete', actualQty: 5, hours: 2, labourRate: 150, materialItemId: F.rm, materialQty: 10 }))
+  const pend = await get(`${M}/tasks?workOrderId=${wo.data.id}`)
+  check('stock: task lists work for a stock order', pend.status === 200, `status=${pend.status}`)
+  const eff = await get('/api/reports?type=production-efficiency')
+  check('stock: production reports handle orders without a project', eff.status === 200, `status=${eff.status} ${eff.error ?? ''}`)
+  const mat = await get(`${M}/material-plan`)
+  check('stock: the material plan handles orders without a project', mat.status === 200, `status=${mat.status} ${mat.error ?? ''}`)
+  const sched = await get(`${M}/schedule?horizonDays=30`)
+  check('stock: the finite schedule handles orders without a project', sched.status === 200, `status=${sched.status} ${sched.error ?? ''}`)
+  const rc = await post(R, { workOrderId: wo.data.id, outputItemId: fg, warehouseId: F.main, producedQty: 5, acceptedQty: 5 })
+  expectOk('stock: receive the finished goods into stock', rc)
+  check('stock: finished goods are in stock', near(num((await q1("SELECT COALESCE(SUM(qtyIn-qtyOut),0) q FROM StockLedger WHERE itemId=? AND isCancelled=0", [fg])).q), 5), '')
+  expectOk('stock: close the stock work order', await post(`${M}/work-orders/${wo.data.id}/actions`, { action: 'complete' }))
+  const cv = await get(`${M}/costing/${wo.data.id}`)
+  check('stock: costing works for a stock order', cv.status === 200 && near(cv.data?.standard?.material, 200), `status=${cv.status} material=${cv.data?.standard?.material}`)
+
+  // MRP: planned order for a standard BOM with no project picked
+  const O = '/api/order-to-cash'
+  const cust = F.cust
+  const quote = await post(O, { action: 'create-quotation', partyId: cust, validUntil: daysFromNow(20), lines: [{ itemId: fg, qty: 7, rate: 700 }] })
+  await post(O, { action: 'transition-quotation', id: quote.data.id, transition: 'SUBMIT' })
+  await post(O, { action: 'transition-quotation', id: quote.data.id, transition: 'APPROVE' })
+  const order = await post(O, { action: 'quotation-to-order', id: quote.data.id, deliveryDate: daysFromNow(10) })
+  await post(O, { action: 'approve-order', id: order.data.id })
+  const run = await post(`${M}/mrp`, { asOf: today, horizonDays: 30 })
+  expectOk('stock: MRP run with demand for the stock item', run)
+  const detail = await get(`${M}/mrp/${run.data.id}`)
+  const make = (detail.data?.lines ?? []).find((l) => l.itemId === fg && l.suggestion === 'MAKE' && l.netQty > 0)
+  if (make) {
+    const conv = await post(`${M}/mrp/${run.data.id}/actions`, { action: 'create-documents', lineIds: [make.id] })
+    expectOk('stock: approve a MAKE suggestion without picking a project', conv)
+    const w = await q1('SELECT projectId, outputQty FROM WorkOrder WHERE woNo=?', [conv.data?.workOrders?.[0]?.woNo])
+    check('stock: MRP planned order is make-to-stock for a standard BOM', w && w.projectId === null && near(w.outputQty, make.netQty), JSON.stringify(w))
+  } else check('stock: MRP suggests making the stock item', false, JSON.stringify((detail.data?.lines ?? []).filter((l) => l.itemId === fg)))
+  await post(`${M}/mrp/${run.data.id}/actions`, { action: 'close' })
+  await reconcile('after stock manufacturing')
+}
+
 // ---------------------------------------------------------------- main
 async function main() {
   const t0 = Date.now()
   await setup()
-  const phases = [phaseAuth, phaseP2P, phaseRfq, phaseQ2C, phaseMfg, phaseQuality, phaseLots, phaseFinance, phaseGst, phaseMrp, phaseOps, phaseCosting, phaseBomBasis, phaseOverhead, phaseFuzz]
+  const phases = [phaseAuth, phaseP2P, phaseRfq, phaseQ2C, phaseMfg, phaseQuality, phaseLots, phaseFinance, phaseGst, phaseMrp, phaseOps, phaseCosting, phaseBomBasis, phaseOverhead, phaseSalesDocs, phaseStockMfg, phaseFuzz]
   for (const fn of phases) {
     try { await fn() } catch (e) { check(`${fn.name} completed without a harness exception`, false, e?.stack?.split('\n').slice(0, 3).join(' ') ?? String(e)) }
   }

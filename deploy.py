@@ -108,7 +108,7 @@ DB_BACKUPS = f"{SITE_HOME}/backups/predeploy"
 NVM_INIT = f'export NVM_DIR="{SITE_HOME}/.nvm"; [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"'
 
 # Written by the app at runtime, relative to .next/standalone.
-RUNTIME_DIRS = ["db"]  # persisted secret key files (src/lib/secrets.ts); data lives in MySQL
+RUNTIME_DIRS = ["db", "upload"]  # db: secret key files (src/lib/secrets.ts); upload: document attachments (src/lib/attachments.ts). Data lives in MySQL
 
 # Copied into the standalone dir on every deploy, so a key missing here is a key
 # missing in production. Checked by name only; values are never read back.

@@ -91,5 +91,5 @@ async function handlePost(req: Request) {
 }
 
 export async function POST(req: Request) {
-  return withIdempotency(req, 'crm', () => handlePost(req))
+  return withIdempotency(req, 'crm', (r) => handlePost(r))
 }

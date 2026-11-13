@@ -245,6 +245,18 @@ async function main() {
   check('tally: connector poll without a token is refused', anon.status === 401, `status=${anon.status}`)
   await call('DELETE', TC, undefined, c1)
 
+  // ---- proforma invoices are per organisation
+  const pi1 = await call('POST', '/api/proforma', { action: 'create', partyId: org1Party.id, validUntil: plus(10), lines: [{ itemId: org1Item.id, qty: 1, rate: 100 }] }, c1)
+  check('proforma: org 1 issues a proforma', pi1.status === 200 && !!pi1.data?.id, `${pi1.status} ${pi1.error ?? ''}`)
+  const peek = await call('GET', `/api/proforma?id=${pi1.data?.id}`, undefined, c2)
+  check("proforma: org 2 cannot open org 1's proforma", refused(peek), `status=${peek.status}`)
+  const list2 = await call('GET', '/api/proforma', undefined, c2)
+  check("proforma: org 2's list never shows org 1's proforma", list2.status === 200 && !(list2.data ?? []).some((r) => r.id === pi1.data?.id), '')
+  const piSteal = await call('POST', '/api/proforma', { action: 'convert', id: pi1.data?.id, warehouseId: wh.data?.id }, c2)
+  check("proforma: org 2 cannot invoice org 1's proforma", refused(piSteal) && (await db.get('SELECT status FROM ProformaInvoice WHERE id=?', [pi1.data?.id]))?.status === 'ISSUED', `status=${piSteal.status}`)
+  const piCross = await call('POST', '/api/proforma', { action: 'create', partyId: org1Party.id, validUntil: plus(10), lines: [{ itemId: item.data?.id, qty: 1, rate: 1 }] }, c2)
+  check("proforma: org 2 cannot issue a proforma to org 1's customer", refused(piCross), `status=${piCross.status}`)
+
   // ---- access state is per organisation
   await db.run("UPDATE Company SET saasStatus='SUSPENDED' WHERE id=?", [org2Id])
   const susp2 = await call('GET', '/api/sales-invoices', undefined, c2)

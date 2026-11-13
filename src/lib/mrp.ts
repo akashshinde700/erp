@@ -626,10 +626,11 @@ export async function createDocumentsFromMrp(
     // ---- work orders (one per MAKE line, quantity from the plan) ----------
     const workOrders: { lineId: string; wo: Awaited<ReturnType<typeof createWorkOrderTx>> }[] = []
     if (makes.length) {
-      if (!input.projectId) throw new BusinessError('Pick the project that will execute the planned work orders', 400)
-      const project = await tx.project.findUnique({ where: { id: input.projectId }, select: { id: true, status: true } })
-      if (!project) throw new BusinessError('Project not found', 404)
-      if (project.status === 'COMPLETED' || project.status === 'CANCELLED') {
+      // No project = stock production. A project BOM still runs under its own
+      // project (createWorkOrderTx refuses a project BOM without one).
+      const project = input.projectId ? await tx.project.findUnique({ where: { id: input.projectId }, select: { id: true, status: true } }) : null
+      if (input.projectId && !project) throw new BusinessError('Project not found', 404)
+      if (project && (project.status === 'COMPLETED' || project.status === 'CANCELLED')) {
         throw new BusinessError(`Project is ${project.status} — planned work orders need an active project`, 409)
       }
       const boms = await effectiveBomMap(tx, run.asOf)
@@ -637,7 +638,7 @@ export async function createDocumentsFromMrp(
         const bom = boms.get(line.itemId)
         if (!bom) throw new BusinessError(`No effective BOM for ${line.item.name} — recompute the MRP run`, 409)
         const wo = await createWorkOrderTx(tx, {
-          projectId: project.id,
+          projectId: project?.id ?? bom.projectId ?? null,
           bomId: bom.id,
           outputItemId: line.itemId,
           outputQty: line.netQty,

@@ -15,6 +15,8 @@ export interface InvoicePrintProps {
   kind: 'SALES' | 'PURCHASE'
   invoice: (SalesInvoice | PurchaseInvoice) & { party?: PartyMini; items?: InvoiceItem[] }
   items: Item[]
+  /** Override the document title (e.g. 'PROFORMA INVOICE'); also hides the paid / balance block. */
+  title?: string
 }
 
 interface RateGroup {
@@ -66,7 +68,7 @@ function groupByHsn(lines: InvoiceItem[], nameOf: (id: string) => Item | undefin
 const td = 'border px-1.5 py-1 tabular-nums'
 const th = 'border bg-muted/60 px-1.5 py-1 text-left font-semibold'
 
-export function InvoicePrint({ kind, invoice, items }: InvoicePrintProps) {
+export function InvoicePrint({ kind, invoice, items, title: titleOverride }: InvoicePrintProps) {
   const company: Company | null = useCompany()
   const itemMap = new Map(items.map((i) => [i.id, i]))
   const nameOf = (id: string): Item | undefined => itemMap.get(id)
@@ -74,7 +76,7 @@ export function InvoicePrint({ kind, invoice, items }: InvoicePrintProps) {
   const rateGroups = groupByRate(lines)
   const hsnGroups = groupByHsn(lines, nameOf)
   const isSales = kind === 'SALES'
-  const title = isSales ? 'TAX INVOICE' : 'PURCHASE INVOICE'
+  const title = titleOverride ?? (isSales ? 'TAX INVOICE' : 'PURCHASE INVOICE')
   const inv = invoice as SalesInvoice
 
   return (
@@ -309,7 +311,7 @@ export function InvoicePrint({ kind, invoice, items }: InvoicePrintProps) {
               </tr>
             </tbody>
           </table>
-          <div className="text-xs">
+          <div className={`text-xs ${titleOverride ? 'hidden' : ''}`}>
             <p>
               <span className="font-medium">Paid:</span> ₹ {money(invoice.paidAmount)}
             </p>

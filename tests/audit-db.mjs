@@ -34,7 +34,17 @@ function mysqlAdapter(url) {
 }
 
 function sqliteAdapter(path) {
-  const Database = createRequire(import.meta.url)('better-sqlite3')
+  let Database
+  try {
+    Database = createRequire(import.meta.url)('better-sqlite3')
+  } catch {
+    throw new Error(
+      "better-sqlite3 is not installed, so the offline SQLite audit adapter is unavailable. " +
+        'Either install it (npm i -D better-sqlite3) or point the suite at MySQL via AUDIT_DB_URL ' +
+        '(e.g. AUDIT_DB_URL=mysql://user:pass@host:3306/dbforge). ' +
+        'See tests/audit-db.mjs header for details.',
+    )
+  }
   const norm = (args) => args.map((a) => (a instanceof Date ? a.toISOString() : typeof a === 'boolean' ? (a ? 1 : 0) : a))
   const open = (readonly) => new Database(path, { readonly })
   return {

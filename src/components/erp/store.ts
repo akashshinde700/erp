@@ -17,6 +17,7 @@ export type ErpView =
   | 'purchase-detail'
   | 'jobwork'
   | 'jobwork-detail'
+  | 'projects'
   | 'manufacturing'
   | 'project-detail'
   | 'inventory'
@@ -41,7 +42,7 @@ export interface ErpUiState {
 export const useErpUi = create<ErpUiState>((set) => ({
   view: 'dashboard',
   params: {},
-  mfgTab: 'projects',
+  mfgTab: 'work-orders',
   setView: (view, params = {}) => set({ view, params }),
   setMfgTab: (tab) => set({ mfgTab: tab }),
 }))

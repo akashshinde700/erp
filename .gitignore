@@ -79,6 +79,7 @@ AGENTS.md
 tests/*-results.json
 tests/audit-results.json
 tests/e2e-artifacts/
+perf-results.json
 
 # local-only Prisma generate workaround (this sandbox has no engine download);
 # production always runs `prisma generate` from prisma/schema.prisma

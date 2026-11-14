@@ -42,10 +42,14 @@ const SNAPSHOT_TABLES = {
   platformInquiries: 'PlatformInquiry', platformBlogPosts: 'PlatformBlogPost', counters: 'Counter', auditLogs: 'AuditLog',
 }
 const nestedChildren = { salesInvoices: ['items', 'SalesInvoiceItem'], purchaseInvoices: ['items', 'PurchaseInvoiceItem'], payments: ['allocations', 'PaymentAllocation'], jobworkInwards: ['items', 'JobworkInwardItem'], boms: ['items', 'BomItem'], workOrders: ['lines', 'WorkOrderLine'], platformInquiries: ['followUps', 'PlatformInquiryFollowUp'] }
-const model2table = (m) => m[0].toUpperCase() + m.slice(1)
+// Physical table names are compared lowercase: Windows MySQL ships with
+// lower_case_table_names=1 (every stored name is lowercase) while Linux keeps
+// the Prisma model casing. Normalising both sides keeps the checks identical
+// on either platform instead of failing on the OS the drill happens to run on.
+const model2table = (m) => m.toLowerCase()
 
 async function tableCounts() {
-  const tables = (await db.all("SELECT table_name t FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name NOT IN ('_prisma_migrations', 'IdempotencyKey')")).map((r) => r.t)
+  const tables = (await db.all("SELECT table_name t FROM information_schema.tables WHERE table_schema = DATABASE() AND LOWER(table_name) NOT IN ('_prisma_migrations', 'idempotencykey')")).map((r) => r.t.toLowerCase())
   const out = {}
   for (const t of tables) out[t] = Number((await db.get(`SELECT COUNT(*) c FROM \`${t}\``)).c)
   return out
@@ -54,9 +58,9 @@ function snapshotCounts(snap) {
   const out = {}
   for (const [key, table] of Object.entries(SNAPSHOT_TABLES)) {
     const rows = snap.data[key] ?? []
-    out[table] = rows.length
+    out[table.toLowerCase()] = rows.length
     const nested = nestedChildren[key]
-    if (nested) out[nested[1]] = rows.reduce((s, r) => s + ((r[nested[0]] ?? []).length), 0)
+    if (nested) out[nested[1].toLowerCase()] = rows.reduce((s, r) => s + ((r[nested[0]] ?? []).length), 0)
   }
   for (const [model, rows] of Object.entries(snap.data.workflow ?? {})) out[model2table(model)] = rows.length
   return out
@@ -73,7 +77,7 @@ async function main() {
   const expected = seed.json?.data?.counts ?? {}
   const live = await tableCounts()
   const recon = { parties: 'Party', items: 'Item', processes: 'Process', warehouses: 'Warehouse', purchaseInvoices: 'PurchaseInvoice', salesInvoices: 'SalesInvoice', payments: 'Payment', jobworkInwards: 'JobworkInward', jobCards: 'JobCard', certificates: 'JobworkCertificate', employees: 'Employee', projects: 'Project', boms: 'Bom', workOrders: 'WorkOrder', productionTasks: 'ProductionTask', inquiries: 'PlatformInquiry', blogPosts: 'PlatformBlogPost' }
-  const mism = Object.entries(recon).filter(([k, t]) => expected[k] !== undefined && expected[k] !== live[t]).map(([k, t]) => `${k}: seed says ${expected[k]}, table ${t} has ${live[t]}`)
+  const mism = Object.entries(recon).filter(([k, t]) => expected[k] !== undefined && expected[k] !== live[t.toLowerCase()]).map(([k, t]) => `${k}: seed says ${expected[k]}, table ${t} has ${live[t.toLowerCase()]}`)
   check('seeded row counts reconcile with seedDatabase() summary', mism.length === 0, mism.join('; ') || `${Object.keys(recon).length} tables checked`)
   const tb = await db.get('SELECT ROUND(COALESCE(SUM(debit),0),2) dr, ROUND(COALESCE(SUM(credit),0),2) cr FROM AccountLedger WHERE isCancelled=0')
   check('account ledger balances after seed (Dr == Cr)', Math.abs(Number(tb.dr) - Number(tb.cr)) < 0.005, `Dr=${tb.dr} Cr=${tb.cr}`)
@@ -96,6 +100,17 @@ async function main() {
       (SELECT ROUND(COALESCE(SUM(overheadCost),0),2) FROM ProductionTask) overhead`)
   check('seed builds a routed shop floor (centres, calendars, routings, routed tasks)', Number(ops.centers) >= 6 && Number(ops.calendars) >= 6 && Number(ops.routings) >= 3 && Number(ops.routedTasks) >= 5, JSON.stringify(ops))
   check('seeded operations absorbed factory overhead', Number(ops.overhead) > 0, `absorbed=${ops.overhead}`)
+  // Attachment once dropped out of the backup model list (added after v5
+  // shipped) — a probe row proves the metadata survives backup → reseed →
+  // restore instead of every table-count check passing vacuously on zeros.
+  // The file bytes live on disk; this row is the surviving reference.
+  const probe = await db.get('SELECT c.id companyId, p.id partyId FROM Company c JOIN Party p ON p.companyId = c.id LIMIT 1')
+  await db.run(
+    'INSERT INTO Attachment (id, companyId, entityType, entityId, fileName, mimeType, size, storageKey, note, uploadedBy, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(3))',
+    ['drill-attachment-probe', probe.companyId, 'PARTY', probe.partyId, 'probe.pdf', 'application/pdf', 11, 'probe.pdf', 'drill round-trip probe', null],
+  )
+  const attProbe = await db.get("SELECT COUNT(*) c FROM Attachment WHERE id='drill-attachment-probe'")
+  check('attachment probe row inserted', Number(attProbe.c) === 1, `rows=${attProbe.c}`)
 
   // 2. backup covers every table
   const bk = await api('GET', '/api/backup')
@@ -104,7 +119,7 @@ async function main() {
   const snapCounts = snapshotCounts(snap)
   const liveNow = await tableCounts()
   // the backup itself appends one AuditLog row after reading — tolerate exactly that
-  const d1 = diffCounts(snapCounts, liveNow).filter((x) => !x.startsWith('AuditLog: '))
+  const d1 = diffCounts(snapCounts, liveNow).filter((x) => !x.startsWith('auditlog: '))
   const missingTables = Object.keys(liveNow).filter((t) => !(t in snapCounts))
   check('snapshot covers every physical table', missingTables.length === 0, missingTables.length ? `missing: ${missingTables.join(', ')}` : `${Object.keys(liveNow).length} tables`)
   check('snapshot row counts equal live table counts', d1.length === 0, d1.join('; ') || 'all equal')
@@ -121,7 +136,7 @@ async function main() {
   const rs = await api('POST', '/api/backup/restore', { confirm: 'RESTORE', snapshot: snap })
   check('restore of v5 snapshot succeeds (200)', rs.status === 200, `status=${rs.status} ${JSON.stringify(rs.json).slice(0, 160)}`)
   const liveAfter = await tableCounts()
-  const d2 = diffCounts(snapCounts, liveAfter).filter((x) => !x.startsWith('AuditLog: '))
+  const d2 = diffCounts(snapCounts, liveAfter).filter((x) => !x.startsWith('auditlog: '))
   check('after restore every table count equals the snapshot', d2.length === 0, d2.join('; ') || 'all equal')
   // The FK that broke restore: a task's work centre must still resolve after a
   // round trip, otherwise the rows were dropped or inserted in the wrong order.
@@ -133,6 +148,8 @@ async function main() {
   check('restore keeps absorbed overhead on the operations', Number(routedAfter.overhead) > 0, `absorbed=${routedAfter.overhead}`)
   const backId = await db.get('SELECT COUNT(*) c FROM SalesInvoice WHERE id=?', [firstId])
   check('restored rows carry the original ids', Number(backId.c) === 1, `snapshot invoice id present=${backId.c}`)
+  const attBack = await db.get("SELECT COUNT(*) c FROM Attachment WHERE id='drill-attachment-probe'")
+  check('attachment metadata survives backup → reseed → restore', Number(attBack.c) === 1, `rows=${attBack.c}`)
   const sampleAfter = await db.all('SELECT invoiceNo, grandTotal FROM SalesInvoice ORDER BY invoiceNo')
   check('invoice numbers and totals identical after restore', JSON.stringify(sampleInv) === JSON.stringify(sampleAfter), `${sampleAfter.length} invoices`)
   const tb2 = await db.get('SELECT ROUND(COALESCE(SUM(debit),0),2) dr, ROUND(COALESCE(SUM(credit),0),2) cr FROM AccountLedger WHERE isCancelled=0')

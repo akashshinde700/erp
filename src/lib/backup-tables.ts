@@ -11,6 +11,11 @@
  * with P2003 — and a backup will silently drop its rows.
  */
 export const WORKFLOW_MODELS_CHILDREN_FIRST = [
+  // document attachments (metadata only; files live on disk under
+  // upload/attachments/<companyId>/). FKs Company alone — insert order is free,
+  // but the model MUST be here or a backup silently drops every attachment
+  // link and a restore/reseed wipes the rows (drill: attachment probe row).
+  'attachment',
   // proforma invoices (reference sales orders, parties and items — go first)
   'proformaInvoiceLine',
   'proformaInvoice',
